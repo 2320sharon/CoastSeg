@@ -21,6 +21,10 @@ from pyproj import Proj, transform
 import matplotlib
 matplotlib.use("Qt5Agg")
 
+# New imports for parallel processing
+from joblib import Parallel, delayed
+import time
+
 # Internal dependencies imports
 from .exceptions import DownloadError
 

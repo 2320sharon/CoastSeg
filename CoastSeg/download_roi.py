@@ -8,6 +8,11 @@ import geojson
 import os
 import warnings
 from .file_functions import generate_datestring
+
+# New imports for parallel processing
+from joblib import Parallel, delayed
+import time
+
 warnings.filterwarnings("ignore")
 
 
