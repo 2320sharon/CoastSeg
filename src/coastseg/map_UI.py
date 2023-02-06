@@ -7,6 +7,7 @@ from collections import defaultdict
 
 # internal python imports
 from coastseg import exception_handler
+from coastseg import common
 
 # external python imports
 import ipywidgets
@@ -29,6 +30,8 @@ from ipywidgets import Output
 from ipywidgets import Select
 from ipywidgets import BoundedIntText
 from ipywidgets import Checkbox
+from ipywidgets import IntText
+from ipywidgets import IntSlider
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +246,94 @@ class UI:
         # when units radio button is clicked updated units for area textboxes
         self.units_radio.observe(units_radio_changed)
 
+    def extract_shorelines_controls(self):
+        try:
+            self.min_date = DatePicker(
+                description="Start Date",
+                value=datetime.date(2018, 12, 1),
+                disabled=True,
+            )
+            self.max_date = DatePicker(
+                description="Start Date",
+                value=datetime.date(2019, 12, 1),
+                disabled=True,
+            )
+            num_shorelines_slider= IntSlider(
+                value=0,
+                min=0,
+                max=1,
+                step=1,
+                description="Number:",
+                disabled=True
+            )
+            roi_id_textbox=IntText(
+                value=0,
+                description='ROI ID:',
+                disabled=False
+            )
+            self.enter_shoreline_button = Button(description='Load on Map',disabled=True)
+
+            def roi_enter_clicked(btn:Button):
+                try:
+                    # check if ROI id exists on map and if it doesn't print message
+                    roi_id = str(roi_id_textbox.value)
+                    # Get the ROI's extracted shoreline 
+                    extracted_shoreline = self.coastseg_map.get_extracted_shorelines_by_id(roi_id)
+                    shorelines_gdf = extracted_shoreline.gdf
+                    import pandas as pd
+                    # Convert the dates column to datetime
+                    shorelines_gdf['date'] = pd.to_datetime(shorelines_gdf['date'])
+                    # Get the minimum & maximum date values and number of shorelines available
+                    self.max_date.value= shorelines_gdf['date'].min()
+                    self.min_date.value= shorelines_gdf['date'].max()
+                    num_shorelines_slider.max = len(extracted_shoreline.gdf)
+                    # enable shoreline filtering widgets
+                    self.max_date.disabled = False
+                    self.min_date.disabled = False
+                    num_shorelines_slider.disabled = False
+                    self.enter_shoreline_button.disabled = False
+                except Exception as error:
+                    # renders error message as a box on map
+                    exception_handler.handle_exception(error, self.coastseg_map.warning_box)  
+
+            
+            def enter_shorelines_clicked(btn:Button):
+                try:
+                    roi_id = str(roi_id_textbox.value)
+                    extracted_shoreline = self.coastseg_map.get_extracted_shorelines_by_id(roi_id)
+
+                    filtered_gdf = common.filter_by_dates(extracted_shoreline.gdf,self.max_date.value,self.min_date.value)
+                    max_shorelines = num_shorelines_slider.value
+                    filtered_gdf.iloc[:max_shorelines]
+                    # if empty print error message
+                    if filtered_gdf.empty:
+                        raise Exception("No shorelines found between these dates")
+                    # make a new layer out these shorelines
+                    new_layers = extracted_shoreline.convert_to_styled_layers(filtered_gdf,roi_id)
+                    layer_names = [
+                        "ID" + roi_id + "_" + date_str for date_str in filtered_gdf["date"].to_list()
+                    ]
+                    # replace old layers with these new shorelines
+                    self.coastseg_map.remove_extracted_shoreline_layers()
+                    self.coastseg_map.load_layers_on_map(new_layers,layer_names)
+                except Exception as error:
+                    # renders error message as a box on map
+                    exception_handler.handle_exception(error, self.coastseg_map.warning_box)  
+
+            self.enter_id_button = Button(description='Enter')
+            self.enter_id_button.on_click(roi_enter_clicked)
+            self.enter_shoreline_button.on_click(enter_shorelines_clicked)
+            
+            roi_id_controls = HBox([roi_id_textbox,self.enter_id_button])
+            date_controls = HBox([self.min_date,self.max_date])
+            shoreline_controls = VBox([roi_id_controls,date_controls,num_shorelines_slider,self.enter_shoreline_button])
+        except Exception as error:
+            # renders error message as a box on map
+            exception_handler.handle_exception(error, self.coastseg_map.warning_box)  
+        return shoreline_controls
+        
+
+
     def get_view_settings_vbox(self) -> VBox:
         # update settings button
         update_settings_btn = Button(
@@ -253,6 +344,7 @@ class UI:
         self.settings_html.value = self.get_settings_html(self.coastseg_map.settings)
         view_settings_vbox = VBox([self.settings_html, update_settings_btn])
         return view_settings_vbox
+
 
     def get_settings_section(self):
         # declare settings widgets
@@ -338,7 +430,7 @@ class UI:
         instr = HTML(
             value="<b>Along-shore distance over which to consider shoreline points to compute median intersection with transects</b>"
         )
-        self.alongshore_distance_slider = ipywidgets.IntSlider(
+        self.alongshore_distance_slider = IntSlider(
             value=25,
             min=10,
             max=100,
@@ -525,7 +617,7 @@ class UI:
             value="<b>Minimum shoreline perimeter that model will detect</b>"
         )
 
-        self.min_length_sl_slider = ipywidgets.IntSlider(
+        self.min_length_sl_slider =IntSlider(
             value=500,
             min=200,
             max=1000,
@@ -822,6 +914,7 @@ class UI:
             self.error_row,
             self.file_chooser_row,
             map_row,
+            self.extract_shorelines_controls(),
             download_msgs_row,
         )
 

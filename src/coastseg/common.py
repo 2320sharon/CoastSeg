@@ -33,6 +33,31 @@ import ipyevents
 
 logger = logging.getLogger(__name__)
 
+def filter_by_dates(gdf:gpd.GeoDataFrame,start_date:str,end_date:str)->gpd.GeoDataFrame:
+    """
+    Filter a GeoDataFrame (gdf) based on a specified date range.
+    Ex:  new_gdf = filter_by_dates(gdf,start_date = '2018-01-01',end_date = '2018-12-31')
+
+    Parameters:
+
+    gdf (gpd.GeoDataFrame): The input GeoDataFrame to filter.
+    start_date (str): The start date in the format 'YYYY-MM-DD'.
+    end_date (str): The end date in the format 'YYYY-MM-DD'.
+    Returns:
+
+    gpd.GeoDataFrame: A filtered GeoDataFrame containing only the rows where the date is within the specified range (inclusive).
+    Notes:
+
+    The function assumes that the date column in the input GeoDataFrame is in the format 'YYYY-MM-DD'.
+    The date column will be converted to datetime format.
+    """
+    # Convert the dates column to datetime
+    gdf['date'] = pd.to_datetime(gdf['date'])
+
+    # Get the rows that are within the date range
+    mask = (gdf['date'] >= start_date) & (gdf['date'] <= end_date)
+    result = gdf.loc[mask]
+    return result
 
 def create_directory_in_google_drive(path: str, name: str) -> str:
     """

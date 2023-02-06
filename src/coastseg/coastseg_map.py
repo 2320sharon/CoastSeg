@@ -516,10 +516,18 @@ class CoastSeg_Map:
             values["CSU_ID"],
         )
 
+    def get_extracted_shorelines_by_id(self, roi_id:str):
+        roi_extract_shoreline = self.rois.extracted_shorelines[roi_id]
+        logger.info(roi_extract_shoreline)
+        return roi_extract_shoreline
+
     def load_extracted_shorelines_to_map(self, roi_ids: list) -> None:
         # for each ROI that has extracted shorelines load onto map
         for roi_id in roi_ids:
             roi_extract_shoreline = self.rois.extracted_shorelines[roi_id]
+            # get min and max date
+                # roi_extract_shoreline.gdf
+            # get number of shoreline
             logger.info(roi_extract_shoreline)
             if roi_extract_shoreline is not None:
                 self.load_extracted_shorelines_on_map(roi_extract_shoreline)
@@ -1075,6 +1083,12 @@ class CoastSeg_Map:
                 del self.rois.extracted_shorelines
             self.rois.extracted_shorelines = {}
         # remove extracted shoreline vectors from the map
+        self.remove_extracted_shoreline_layers()
+
+
+    def remove_extracted_shoreline_layers(self):
+        """Removes extracted shorelines from the map and removes extracted shorelines from ROIs"""
+        # remove extracted shoreline vectors from the map
         if self.extracted_shoreline_layers != []:
             for layername in self.extracted_shoreline_layers:
                 self.remove_layer_by_name(layername)
@@ -1210,6 +1224,16 @@ class CoastSeg_Map:
         ]
         logger.info(f"{layers}")
         for new_layer in layers:
+            new_layer.on_hover(self.update_extracted_shoreline_html)
+            self.map.add_layer(new_layer)
+
+    def load_layers_on_map(self, new_layers:list,layer_names:list)->None:
+        self.extracted_shoreline_layers = [
+            *self.extracted_shoreline_layers,
+            *layer_names,
+        ]
+        logger.info(f"{new_layers}")
+        for new_layer in new_layers:
             new_layer.on_hover(self.update_extracted_shoreline_html)
             self.map.add_layer(new_layer)
 

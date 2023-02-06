@@ -297,6 +297,25 @@ class Extracted_Shoreline:
             layers.append(geojson_layer)
         return layers
 
+    def convert_to_styled_layers(self,gdf,roi_id:str) -> list:
+        # load extracted shorelines onto map
+        map_crs = 4326
+        # convert to map crs and turn in json dict
+        gdf['date']=gdf['date'].astype(str)
+        features_json = json.loads(gdf.to_crs(map_crs).to_json())
+        layer_colors = get_colors(len(gdf))
+        layer_names = [
+            "ID" + roi_id + "_" + date_str for date_str in gdf["date"].to_list()
+        ]
+        layers = []
+        for idx, feature in enumerate(features_json["features"]):
+            geojson_layer = self.style_layer(
+                feature, layer_names[idx], layer_colors[idx]
+            )
+            layers.append(geojson_layer)
+        return layers
+
+
 
 def get_reference_shoreline(
     shoreline_gdf: gpd.geodataframe, output_crs: str
