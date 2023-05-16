@@ -9,7 +9,7 @@ from typing import List
 import shutil
 
 from coastseg import transects
-from coastsat import SDS_transects
+# from coastsat import SDS_transects
 from coastseg import common
 from coastseg import downloads
 from coastseg import sessions
@@ -42,7 +42,6 @@ from doodleverse_utils.model_imports import (
 )
 from doodleverse_utils.model_imports import dice_coef_loss, iou_multi, dice_multi
 import pytz
-from coastsat import SDS_transects
 from coastsat import SDS_tools
 
 import tensorflow as tf
@@ -812,12 +811,13 @@ class Zoo_Model:
 
         # get the epsg code for this region before we change it
         output_epsg = extract_shoreline_settings["output_epsg"]
+        # check if it will fail is crs != 4326
+        # output_epsg = 32618
         logger.info(f"output_epsg: {output_epsg}")
         # load transects and shorelines 
         #@todo pretty sure this will break if the file read in from geosjon crs!=4326
         transects_gdf = create_transects_geodataframe(transects_path,roi_gdf,output_epsg)
         shoreline_gdf = create_shoreline_geodataframe(shoreline_path,roi_gdf,output_epsg)
-
 
         # extract shorelines with most accurate crs
         new_espg = common.get_most_accurate_epsg(
@@ -827,7 +827,7 @@ class Zoo_Model:
         self.set_settings(output_epsg=new_espg)
 
         roi_gdf =  roi_gdf.to_crs(output_epsg)
-        # save the config files to the new session locaton
+        # save the config files to the new session location
         common.save_config_files(new_session_path,
                                  roi_ids=[roi_id],
                                  roi_settings = roi_settings,
@@ -848,11 +848,16 @@ class Zoo_Model:
                 new_session_path,
             )
         )
+        print(f"extracted_shorelines.gdf.crs: {extracted_shorelines.gdf.crs}")
 
         # save extracted shorelines, detection jpgs, configs, model settings files to the session directory
         common.save_extracted_shorelines(extracted_shorelines, new_session_path)
         # common.save_extracted_shoreline_figures(extracted_shorelines, new_session_path)
         print(f"Saved extracted shorelines to {new_session_path}")
+
+        # transects must be in the same CRS as the extracted shorelines otherwise intersections will all be NAN
+        if not transects_gdf.empty:
+            transects_gdf =  transects_gdf.to_crs(new_espg)
 
         # compute intersection between extracted shorelines and transects
         cross_distance_transects = extracted_shoreline.compute_transects_from_roi(extracted_shorelines.dictionary,
@@ -926,6 +931,7 @@ class Zoo_Model:
         weights_list = self.get_weights_list(model_implementation)
 
         # Load the model from the config files
+
         model, model_list, config_files, model_types = self.get_model(weights_list)
         logger.info(f"self.TARGET_SIZE: {self.TARGET_SIZE}")
         logger.info(f"self.N_DATA_BANDS: {self.N_DATA_BANDS}")
@@ -1127,109 +1133,22 @@ class Zoo_Model:
             AUG_COPIES = config.get("AUG_COPIES")
             REMAP_CLASSES = config.get("REMAP_CLASSES")
 
-            try:
-                model = tf.keras.models.load_model(weights)
-                #  nclasses=NCLASSES, may have to replace nclasses with NCLASSES
-            except BaseException:
-                if MODEL == "resunet":
-                    model = custom_resunet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        FILTERS,
-                        nclasses=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        kernel_size=(KERNEL, KERNEL),
-                        strides=STRIDE,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                    )
-                elif MODEL == "unet":
-                    model = custom_unet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        FILTERS,
-                        nclasses=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        kernel_size=(KERNEL, KERNEL),
-                        strides=STRIDE,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                    )
 
-                elif MODEL == "simple_resunet":
-                    # num_filters = 8 # initial filters
-                    model = simple_resunet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        kernel=(2, 2),
-                        num_classes=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        activation="relu",
-                        use_batch_norm=True,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                        filters=FILTERS,  # 8,
-                        num_layers=4,
-                        strides=(1, 1),
-                    )
-                # 346,564
-                elif MODEL == "simple_unet":
-                    model = simple_unet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        kernel=(2, 2),
-                        num_classes=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        activation="relu",
-                        use_batch_norm=True,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                        filters=FILTERS,  # 8,
-                        num_layers=4,
-                        strides=(1, 1),
-                    )
-                elif MODEL == "satunet":
-                    model = simple_satunet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        kernel=(2, 2),
-                        num_classes=self.NCLASSES,  # [NCLASSES+1 if NCLASSES==1 else NCLASSES][0],
-                        activation="relu",
-                        use_batch_norm=True,
-                        dropout=DROPOUT,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,
-                        dropout_type=DROPOUT_TYPE,
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,
-                        filters=FILTERS,
-                        num_layers=4,
-                        strides=(1, 1),
-                    )
-                elif MODEL == "segformer":
-                    id2label = {}
-                    for k in range(self.NCLASSES):
-                        id2label[k] = str(k)
-                    model = segformer(id2label, num_classes=self.NCLASSES)
-                    model.compile(optimizer="adam")
-                # 242,812
-                else:
-                    raise Exception(
-                        f"An unknown model type {MODEL} was received. Please select a valid model.\n \
-                        Model must be one of 'unet', 'resunet', 'segformer', or 'satunet'"
-                    )
+            # model = tf.keras.models.load_model(weights)
+            print(f"weights: {weights}")
+            stripped_filename = os.path.basename(weights).replace(".h5", "")
+            model_location = os.path.join(os.path.dirname(weights),stripped_filename)
+            # stripped_filename = filename.replace(".h5", "")
+            # filepath = r'C:\1_USGS\1_CoastSeg\1_official_CoastSeg_repo\CoastSeg\src\coastseg\test_new_model\sat2class_rgb_512_v6_fullmodel_model'
+            model = tf.keras.models.load_model(model_location, compile = True)
+            # model=None
+            
+        
+            # # Load in the custom loss function from doodleverse_utils
+            # model.compile(
+            #     optimizer="adam", loss=dice_coef_loss(self.NCLASSES)
+            # )  # , metrics = [iou_multi(self.NCLASSESNCLASSES), dice_multi(self.NCLASSESNCLASSES)])
 
-                # Load in the custom loss function from doodleverse_utils
-                model.compile(
-                    optimizer="adam", loss=dice_coef_loss(self.NCLASSES)
-                )  # , metrics = [iou_multi(self.NCLASSESNCLASSES), dice_multi(self.NCLASSESNCLASSES)])
-
-                model.load_weights(weights)
 
             self.model_types.append(MODEL)
             self.model_list.append(model)
@@ -1361,8 +1280,13 @@ class Zoo_Model:
         )
 
         # download best model files(.h5, .json) file
+        # download_filenames = [
+        #     best_json_filename,
+        #     best_model_filename,
+        #     best_modelcard_filename,
+        # ]
+        # don't download h5
         download_filenames = [
-            best_json_filename,
             best_model_filename,
             best_modelcard_filename,
         ]
@@ -1401,6 +1325,7 @@ class Zoo_Model:
         download_dict = {}
         # get json and models
         all_models_reponses = [f for f in available_files if f["key"].endswith(".h5")]
+
         all_model_names = [f["key"] for f in all_models_reponses]
         json_file_names = [
             model_name.replace("_fullmodel.h5", ".json")
@@ -1412,7 +1337,6 @@ class Zoo_Model:
         ]
         all_json_reponses = []
 
-        # for each filename online check if there a .json file
         for available_file in available_files:
             if available_file["key"] in json_file_names + modelcard_file_names:
                 all_json_reponses.append(available_file)
@@ -1425,7 +1349,14 @@ class Zoo_Model:
 
         logger.info(f"all_models_reponses : {all_models_reponses }")
         logger.info(f"all_json_reponses : {all_json_reponses }")
-        for response in all_models_reponses + all_json_reponses:
+        # for response in all_models_reponses + all_json_reponses:
+        #     # get the link of the best model
+        #     link = response["links"]["self"]
+        #     filename = response["key"]
+        #     filepath = os.path.join(model_path, filename)
+        #     download_dict[filepath] = link
+        # don't download h5 files
+        for response in  all_json_reponses:
             # get the link of the best model
             link = response["links"]["self"]
             filename = response["key"]
