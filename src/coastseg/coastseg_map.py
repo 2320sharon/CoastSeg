@@ -1,3 +1,4 @@
+from copy import copy
 from datetime import datetime
 import os
 import json
@@ -32,6 +33,20 @@ from ipyleaflet import GeoJSON
 
 
 logger = logging.getLogger(__name__)
+
+from time import perf_counter
+
+
+def time_func(func):
+    def wrapper(*args, **kwargs):
+        start = perf_counter()
+        result = func(*args, **kwargs)
+        end = perf_counter()
+        print(f"{func.__name__} took {end - start:.6f} seconds to run.")
+        logger.debug(f"{func.__name__} took {end - start:.6f} seconds to run.")
+        return result
+
+    return wrapper
 
 
 class CoastSeg_Map:
@@ -191,7 +206,7 @@ class CoastSeg_Map:
             # ensure coastseg\data location exists
             # load the config files if they exist
             data_path = common.create_directory(os.getcwd(), "data")
-            config_loaded = self.load_config_files(dir_path,data_path)
+            config_loaded = self.load_config_files(dir_path, data_path)
             # load in settings files
             for file_name in os.listdir(dir_path):
                 file_path = os.path.join(dir_path, file_name)
@@ -294,8 +309,7 @@ class CoastSeg_Map:
         # update the list of roi's ids who have extracted shorelines
         self.update_roi_ids_with_extracted_shorelines(self.rois)
 
-
-    def update_roi_ids_with_extracted_shorelines(self, rois:ROI):
+    def update_roi_ids_with_extracted_shorelines(self, rois: ROI):
         # Check if no ROIs are loaded return nothing
         if rois is None:
             logger.warning("No ROIs found. Please load ROIs.")
@@ -330,7 +344,7 @@ class CoastSeg_Map:
             "multiple_inter",
             "prc_multiple",
         ),
-        load_nested_settings:bool=True,
+        load_nested_settings: bool = True,
     ):
         """
         Loads settings from a JSON file and applies them to the object.
@@ -368,11 +382,14 @@ class CoastSeg_Map:
             keys = list(keys)
 
         new_settings = common.read_json_file(filepath, raise_error=False)
-        logger.info(f"all of new settings read from file : {filepath} \n {new_settings}")
-        
-        nested_settings = new_settings.get('settings',{})
-        logger.info(f"all of new nested settings read from file : {filepath} \n {nested_settings }")
-        
+        logger.info(
+            f"all of new settings read from file : {filepath} \n {new_settings}"
+        )
+
+        nested_settings = new_settings.get("settings", {})
+        logger.info(
+            f"all of new nested settings read from file : {filepath} \n {nested_settings }"
+        )
 
         if new_settings is None:
             new_settings = {}
@@ -381,7 +398,9 @@ class CoastSeg_Map:
         if keys:
             new_settings = {k: new_settings[k] for k in keys if k in new_settings}
             if nested_settings:
-                nested_settings  = {k: nested_settings[k] for k in keys if k in nested_settings}
+                nested_settings = {
+                    k: nested_settings[k] for k in keys if k in nested_settings
+                }
 
         if new_settings != {}:
             self.set_settings(**new_settings)
@@ -429,7 +448,9 @@ class CoastSeg_Map:
                     self.add_feature_on_map(self.rois, feature_name)
             else:
                 # load shorelines, transects, or bbox features onto the map
-                self.load_feature_on_map(feature_name, gdf=feature_gdf,zoom_to_bounds=True)
+                self.load_feature_on_map(
+                    feature_name, gdf=feature_gdf, zoom_to_bounds=True
+                )
         del gdf
 
     def _extract_feature_gdf(
@@ -450,15 +471,19 @@ class CoastSeg_Map:
             ValueError: Raised when feature_type or any of the columns specified do not exist in the GeoDataFrame.
         """
         # Check if feature_type exists in the GeoDataFrame
-        if 'type' not in gdf.columns:
-            raise ValueError(f"Column 'type' does not exist in the GeoDataFrame. Incorrect config_gdf.geojson loaded")
+        if "type" not in gdf.columns:
+            raise ValueError(
+                f"Column 'type' does not exist in the GeoDataFrame. Incorrect config_gdf.geojson loaded"
+            )
 
         # select only the columns that are in the gdf
         keep_columns = [col for col in columns if col in gdf.columns]
 
         # If no columns from columns list exist in the GeoDataFrame, raise an error
         if not keep_columns:
-            raise ValueError(f"None of the columns {columns} exist in the GeoDataFrame.")
+            raise ValueError(
+                f"None of the columns {columns} exist in the GeoDataFrame."
+            )
 
         # select only the features that are of the correct type and have the correct columns
         feature_gdf = gdf[gdf["type"] == feature_type][keep_columns]
@@ -582,7 +607,7 @@ class CoastSeg_Map:
         self.rois.roi_settings = roi_settings
         logger.info(f"roi_settings: {roi_settings}")
 
-    def load_config_files(self, dir_path: str,save_path:str) -> None:
+    def load_config_files(self, dir_path: str, save_path: str) -> None:
         """Loads the configuration files from the specified directory
             Loads config_gdf.geojson first, then config.json.
 
@@ -749,15 +774,15 @@ class CoastSeg_Map:
         self.settings.update(kwargs)
         if "dates" in kwargs.keys():
             updated_dates = []
-            self.settings["dates"] = kwargs['dates']
-            for date_str in kwargs['dates']:
+            self.settings["dates"] = kwargs["dates"]
+            for date_str in kwargs["dates"]:
                 try:
-                    dt = datetime.strptime(date_str, '%Y-%m-%dT%H:%M:%S')
+                    dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
                 except ValueError:
-                    dt = datetime.strptime(date_str, '%Y-%m-%d')
-                updated_dates.append(dt.strftime('%Y-%m-%d'))
+                    dt = datetime.strptime(date_str, "%Y-%m-%d")
+                updated_dates.append(dt.strftime("%Y-%m-%d"))
             self.settings["dates"] = updated_dates
-        
+
         for key, value in self.default_settings.items():
             self.settings.setdefault(key, value)
 
@@ -825,12 +850,13 @@ class CoastSeg_Map:
         geoaccuracy = properties.get("geoaccuracy", "unknown")
 
         self.feature_html.value = (
-        "<div style='max-width: 230px; max-height: 200px; overflow-x: auto; overflow-y: auto'>"
-        "<b>Extracted Shoreline</b>"
-        f"<p>Date: {date}</p>"
-        f"<p>Geoaccuracy: {geoaccuracy}</p>"
-        f"<p>Cloud Cover: {cloud_cover}</p>"
-        f"<p>Satellite Name: {satname}</p>")
+            "<div style='max-width: 230px; max-height: 200px; overflow-x: auto; overflow-y: auto'>"
+            "<b>Extracted Shoreline</b>"
+            f"<p>Date: {date}</p>"
+            f"<p>Geoaccuracy: {geoaccuracy}</p>"
+            f"<p>Cloud Cover: {cloud_cover}</p>"
+            f"<p>Satellite Name: {satname}</p>"
+        )
 
     def update_roi_html(self, feature, **kwargs):
         # Modifies html when roi is hovered over
@@ -868,18 +894,18 @@ class CoastSeg_Map:
         csu_id = properties.get("CSU_ID", "unknown")
 
         self.feature_html.value = (
-        "<div style='max-width: 230px; max-height: 200px; overflow-x: auto; overflow-y: auto'>"
-        "<b>Shoreline</b>"
-        f"<p>ID: {shoreline_id}</p>"
-        f"<p>Mean Sig Waveheight: {mean_sig_waveheight}</p>"
-        f"<p>Tidal Range: {tidal_range}</p>"
-        f"<p>Erodibility: {erodibility}</p>"
-        f"<p>River: {river_label}</p>"
-        f"<p>Sinuosity: {sinuosity_label}</p>"
-        f"<p>Slope: {slope_label}</p>"
-        f"<p>Turbid: {turbid_label}</p>"
-        f"<p>CSU_ID: {csu_id}</p>")
-
+            "<div style='max-width: 230px; max-height: 200px; overflow-x: auto; overflow-y: auto'>"
+            "<b>Shoreline</b>"
+            f"<p>ID: {shoreline_id}</p>"
+            f"<p>Mean Sig Waveheight: {mean_sig_waveheight}</p>"
+            f"<p>Tidal Range: {tidal_range}</p>"
+            f"<p>Erodibility: {erodibility}</p>"
+            f"<p>River: {river_label}</p>"
+            f"<p>Sinuosity: {sinuosity_label}</p>"
+            f"<p>Slope: {slope_label}</p>"
+            f"<p>Turbid: {turbid_label}</p>"
+            f"<p>CSU_ID: {csu_id}</p>"
+        )
 
     def get_all_roi_ids(self) -> List[str]:
         """
@@ -1164,70 +1190,6 @@ class CoastSeg_Map:
         selected_rois_gdf = self.rois.gdf[self.rois.gdf["id"].isin(roi_ids)]
         return selected_rois_gdf
 
-    def get_cross_distance(
-        self,
-        roi_id: str,
-        transects_in_roi_gdf: gpd.GeoDataFrame,
-        settings: dict,
-        output_epsg: int,
-    ) -> Tuple[float, Optional[str]]:
-        """
-        Compute the cross shore distance of transects and extracted shorelines for a given ROI.
-
-        Parameters:
-        -----------
-        roi_id : str
-            The ID of the ROI to compute the cross shore distance for.
-        transects_in_roi_gdf : gpd.GeoDataFrame
-            All the transects in the ROI. Must contain the columns ["id", "geometry"]
-        settings : dict
-            A dictionary of settings to be used in the computation.
-        output_epsg : int
-            The EPSG code of the output projection.
-
-        Returns:
-        --------
-        Tuple[float, Optional[str]]
-            The computed cross shore distance, or 0 if there was an issue in the computation.
-            The reason for failure, or '' if the computation was successful.
-        """
-        failure_reason = ""
-        cross_distance = 0
-
-        # Get extracted shorelines object for the currently selected ROI
-        roi_extracted_shoreline = self.rois.get_extracted_shoreline(roi_id)
-
-        transects_in_roi_gdf = transects_in_roi_gdf.loc[:, ["id", "geometry"]]
-
-        if roi_extracted_shoreline is None:
-            failure_reason = "No extracted shorelines were found"
-
-        elif transects_in_roi_gdf.empty:
-            failure_reason = "No transects intersect"
-
-        else:
-            extracted_shoreline_x_transect = transects_in_roi_gdf[
-                transects_in_roi_gdf.intersects(roi_extracted_shoreline.gdf.unary_union)
-            ]
-
-            if extracted_shoreline_x_transect.empty:
-                failure_reason = "No extracted shorelines intersected transects"
-            else:
-                # Convert transects_in_roi_gdf to output_crs from settings
-                transects_in_roi_gdf = transects_in_roi_gdf.to_crs(output_epsg)
-
-                # Compute cross shore distance of transects and extracted shorelines
-                extracted_shorelines_dict = roi_extracted_shoreline.dictionary
-                cross_distance = extracted_shoreline.compute_transects_from_roi(
-                    extracted_shorelines_dict,
-                    transects_in_roi_gdf,
-                    settings,
-                )
-                if cross_distance == 0:
-                    failure_reason = "Cross distance computation failed"
-
-        return cross_distance, failure_reason
-
     def save_timeseries_csv(self, session_path: str, roi_id: str, rois: ROI) -> None:
         """Saves cross distances of transects and
         extracted shorelines in ROI to csv file within each ROI's directory.
@@ -1266,10 +1228,28 @@ class CoastSeg_Map:
             f"ROI: {roi_id} Time-series of the shoreline change along the transects saved as:{filepath}"
         )
 
+    @time_func
+    def get_features_in_roi(self, roi_id: str, feature_gdf: gpd.GeoDataFrame):
+        new_feature_gdf = copy(feature_gdf)
+        # get transects that intersect with ROI
+        single_roi = common.extract_roi_by_id(self.rois.gdf, roi_id)
+        # save cross distances by ROI id
+        if new_feature_gdf.crs != single_roi.crs:
+            new_feature_gdf = new_feature_gdf.to_crs(single_roi.crs)
+
+        features_in_roi_gdf = new_feature_gdf[
+            new_feature_gdf.intersects(single_roi.unary_union)
+        ]
+        return features_in_roi_gdf
+
+# this function does not work
     def compute_transects(
         self, transects_gdf: gpd.GeoDataFrame, settings: dict, roi_ids: list[str]
     ) -> dict:
         """Returns a dict of cross distances for each roi's transects
+        The transect shoreline intersections CRS will the in extracted shorelines CRS.
+
+
         Args:
             selected_rois (dict): rois selected by the user. Must contain the following fields:
                 {'features': [
@@ -1298,22 +1278,68 @@ class CoastSeg_Map:
                 time-series of cross-shore distance along each of the transects. Not tidally corrected. }
         """
         self.validate_transect_inputs(settings)
-        # user selected output projection
+        # # User selected output projection
+        output_epsg = "EPSG:4327"
         output_epsg = "epsg:" + str(settings["output_epsg"])
+
+        # # Convert CRS once
+        transects_gdf = transects_gdf.to_crs(output_epsg)
+
+        failure_reasons = {
+            "no_transects": "No transects intersect",
+            "no_shorelines": "No extracted shorelines were found",
+            "default": "Unknown error",
+        }
+
         # for each ROI save cross distances for each transect that intersects each extracted shoreline
         for roi_id in tqdm(roi_ids, desc="Computing Cross Distance Transects"):
+            cross_distance = 0
             # get transects that intersect with ROI
-            single_roi = common.extract_roi_by_id(self.rois.gdf, roi_id)
-            # save cross distances by ROI id
-            transects_in_roi_gdf = transects_gdf[
-                transects_gdf.intersects(single_roi.unary_union)
-            ]
-            cross_distance, failure_reason = self.get_cross_distance(
-                str(roi_id), transects_in_roi_gdf, settings, output_epsg
-            )
-            if cross_distance == 0:
-                logger.warning(f"{failure_reason} for ROI {roi_id}")
-                print(f"{failure_reason} for ROI {roi_id}")
+            transects_in_roi_gdf = self.get_features_in_roi(roi_id, transects_gdf)
+
+            if transects_in_roi_gdf.empty:
+                failure_reason = failure_reasons["no_transects"]
+            else:
+                transects_in_roi_gdf = transects_in_roi_gdf.loc[:, ["id", "geometry"]]
+
+                roi_extracted_shoreline = self.rois.get_extracted_shoreline(roi_id)
+                if roi_extracted_shoreline is None:
+                    failure_reason = failure_reasons["no_shorelines"]
+
+                #
+                # both extract shorelines and transects need to have the same CRS
+                # if roi_extracted_shoreline.gdf.crs != output_epsg:
+                #     print(f"Changing CRS {roi_extracted_shoreline.gdf.crs}")
+                #     roi_extracted_shoreline.gdf.to_crs(output_epsg, inplace=True)
+                #     print(f"Changing CRS {roi_extracted_shoreline.gdf.crs}")
+                # this does not work because the extracted shoreline gdf is in crs epsg 4326
+                print(
+                    f"roi_extracted_shoreline.gdf.crs CRS {roi_extracted_shoreline.gdf.crs}"
+                )
+                print(f"OLD transects_in_roi_gdf.crs CRS {transects_in_roi_gdf.crs}")
+                # if transects_in_roi_gdf.crs != roi_extracted_shoreline.gdf.crs:
+                #     print(
+                #         f"roi_extracted_shoreline.gdf.crs CRS {roi_extracted_shoreline.gdf.crs}"
+                #     )
+                #     transects_in_roi_gdf.to_crs(
+                #         roi_extracted_shoreline.gdf.crs, inplace=True
+                #     )
+                #     print(
+                #         f"NEW transects_in_roi_gdf.crs CRS {transects_in_roi_gdf.crs}"
+                #     )
+
+                # Compute cross shore distance of transects and extracted shorelines
+                extracted_shorelines_dict = roi_extracted_shoreline.dictionary
+                cross_distance = extracted_shoreline.compute_transects_from_roi(
+                    extracted_shorelines_dict,
+                    transects_in_roi_gdf,
+                    settings,
+                )
+
+                if cross_distance == 0:
+                    logger.warning(f"{failure_reason} for ROI {roi_id}")
+                    print(f"{failure_reason} for ROI {roi_id}")
+
             self.rois.add_cross_shore_distances(cross_distance, roi_id)
 
         self.save_session(roi_ids)
@@ -1353,7 +1379,6 @@ class CoastSeg_Map:
                     session_path, "transects_settings.json"
                 )
                 common.to_file(transect_settings, transect_settings_path)
-
 
     def save_csv_per_transect_for_roi(
         self, session_path: str, roi_id: list, rois: ROI
@@ -1809,20 +1834,24 @@ class CoastSeg_Map:
         # if file is passed read gdf from file
         if file:
             # gdf = common.read_gpd_file(file)
-            gdf = common.load_geodataframe_from_file(file,feature_type= feature_name)
+            gdf = common.load_geodataframe_from_file(file, feature_type=feature_name)
         # ensure the file gdf is not empty
         if gdf is not None:
             if gdf.empty:
                 logger.info(f"No {feature_name} was loaded on map")
                 return
-        
+
         # create the feature
         new_feature = self.factory.make_feature(self, feature_name, gdf, **kwargs)
         if new_feature is None:
             return
         logger.info(f"new_feature: {new_feature} \ngdf: {gdf}")
         # load the features onto the map
-        self.add_feature_on_map(new_feature, feature_name, **kwargs,)
+        self.add_feature_on_map(
+            new_feature,
+            feature_name,
+            **kwargs,
+        )
 
     def add_feature_on_map(
         self,

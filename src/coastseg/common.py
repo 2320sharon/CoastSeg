@@ -36,7 +36,22 @@ from ipywidgets import HTML
 
 logger = logging.getLogger(__name__)
 
-def filter_metadata(metadata:dict,sitename:str,filepath_data:str)->dict[str]:
+from time import perf_counter
+
+
+def time_func(func):
+    def wrapper(*args, **kwargs):
+        start = perf_counter()
+        result = func(*args, **kwargs)
+        end = perf_counter()
+        print(f"{func.__name__} took {end - start:.6f} seconds to run.")
+        logger.debug(f"{func.__name__} took {end - start:.6f} seconds to run.")
+        return result
+
+    return wrapper
+
+
+def filter_metadata(metadata: dict, sitename: str, filepath_data: str) -> dict[str]:
     """
     This function filters metadata to include only those files that exist in the given directory.
 
@@ -44,10 +59,10 @@ def filter_metadata(metadata:dict,sitename:str,filepath_data:str)->dict[str]:
     -----------
     metadata : dict
         The metadata dictionary to be filtered.
-    
+
     sitename : str
         The site name used for filtering.
-    
+
     filepath_data : str
         The base filepath where the data is located.
 
@@ -57,18 +72,22 @@ def filter_metadata(metadata:dict,sitename:str,filepath_data:str)->dict[str]:
         The filtered metadata dictionary.
     """
     # Get the RGB directory
-    RGB_directory = os.path.join(filepath_data, sitename, 'jpg_files','preprocessed', 'RGB')
+    RGB_directory = os.path.join(
+        filepath_data, sitename, "jpg_files", "preprocessed", "RGB"
+    )
     if not os.path.exists(RGB_directory):
-        raise FileNotFoundError(f"Cannot extract shorelines from imagery. RGB directory did not exist. {RGB_directory}")
+        raise FileNotFoundError(
+            f"Cannot extract shorelines from imagery. RGB directory did not exist. {RGB_directory}"
+        )
     # filter out files that were removed from RGB directory
-    filtered_files = get_filtered_files_dict(RGB_directory,'jpg',sitename)
+    filtered_files = get_filtered_files_dict(RGB_directory, "jpg", sitename)
     for satname in filtered_files:
         if satname in metadata:
-            metadata[satname]['filenames'] = list(filtered_files[satname])
+            metadata[satname]["filenames"] = list(filtered_files[satname])
     return metadata
 
 
-def get_filtered_files_dict(directory:str, file_type:str, sitename:str)->dict:
+def get_filtered_files_dict(directory: str, file_type: str, sitename: str) -> dict:
     """
     This function generates a dictionary of new filenames for files in the given directory.
     The keys of the dictionary are satellite names, and the values are sets of new filenames.
@@ -77,11 +96,11 @@ def get_filtered_files_dict(directory:str, file_type:str, sitename:str)->dict:
     -----------
     directory : str
         The directory where the files are located.
-    
+
     file_type : str
         The filetype of the files to be included.
         Ex. 'jpg'
-    
+
     sitename : str
         The site name to be included in the new filename.
 
@@ -90,22 +109,26 @@ def get_filtered_files_dict(directory:str, file_type:str, sitename:str)->dict:
     dict
         A dictionary with satellite names as keys and sets of new filenames as values.
     """
-    filepaths = glob.iglob(os.path.join(directory, f'*.{file_type}'))
+    filepaths = glob.iglob(os.path.join(directory, f"*.{file_type}"))
 
     satellites = {"L5": set(), "L7": set(), "L8": set(), "L9": set(), "S2": set()}
     for filepath in filepaths:
         old_filename = os.path.basename(filepath)
-        parts = old_filename.split('_')
+        parts = old_filename.split("_")
 
         if len(parts) < 2:
-            logging.warning(f"Skipping file with unexpected name format: {old_filename}")
+            logging.warning(
+                f"Skipping file with unexpected name format: {old_filename}"
+            )
             continue
 
         date = parts[0]
-        satname_parts = parts[-1].split('.')
-        
+        satname_parts = parts[-1].split(".")
+
         if len(satname_parts) < 2:
-            logging.warning(f"Skipping file with unexpected name format: {old_filename}")
+            logging.warning(
+                f"Skipping file with unexpected name format: {old_filename}"
+            )
             continue
 
         satname = satname_parts[0]
@@ -117,17 +140,14 @@ def get_filtered_files_dict(directory:str, file_type:str, sitename:str)->dict:
     return satellites
 
 
-
-
-
-
-def get_all_subdirectories( directory: str) -> List[str]:
+def get_all_subdirectories(directory: str) -> List[str]:
     """Return a list of all subdirectories in the given directory, including the directory itself."""
     return [dirpath for dirpath, dirnames, filenames in os.walk(directory)]
 
 
-
-def load_geodataframe_from_file(feature_path: str, feature_type: str) -> gpd.GeoDataFrame:
+def load_geodataframe_from_file(
+    feature_path: str, feature_type: str
+) -> gpd.GeoDataFrame:
     """
     Load a geographic feature from a file. The file is read into a GeoDataFrame.
     Can read both geojson files and config_gdf.geojson files
@@ -146,7 +166,9 @@ def load_geodataframe_from_file(feature_path: str, feature_type: str) -> gpd.Geo
     feature_gdf = read_gpd_file(feature_path)
     try:
         # attempt to load features from a config file
-        feature_gdf = extract_feature_from_geodataframe(feature_gdf, feature_type=feature_type)
+        feature_gdf = extract_feature_from_geodataframe(
+            feature_gdf, feature_type=feature_type
+        )
     except ValueError as e:
         # if it isn't a config file then just ignore the error
         logger.info(f"This probably wasn't a config : {feature_path} \n {e}")
@@ -155,44 +177,48 @@ def load_geodataframe_from_file(feature_path: str, feature_type: str) -> gpd.Geo
     return feature_gdf
 
 
-def create_unique_ids(data,prefix_length:int=3):
+def create_unique_ids(data, prefix_length: int = 3):
     # if not all the ids in data are unique
     if not check_unique_ids(data):
         # generate unique IDs with a matching prefix with the given length
-        ids = generate_ids(num_ids =len(data),prefix_length= prefix_length)
-        data['id']= ids
+        ids = generate_ids(num_ids=len(data), prefix_length=prefix_length)
+        data["id"] = ids
     return data
 
+
 def extract_feature_from_geodataframe(
-     gdf: gpd.GeoDataFrame, feature_type: str, type_column: str = "type"
+    gdf: gpd.GeoDataFrame, feature_type: str, type_column: str = "type"
 ) -> gpd.GeoDataFrame:
     """
     Extracts a GeoDataFrame of features of a given type and specified columns from a larger GeoDataFrame.
-    
+
     Args:
         gdf (gpd.GeoDataFrame): The GeoDataFrame containing the features to extract.
         feature_type (str): The type of feature to extract. Typically one of the following 'shoreline','rois','transects','bbox'
         type_column (str, optional): The name of the column containing feature types. Defaults to 'type'.
-        
+
     Returns:
         gpd.GeoDataFrame: A new GeoDataFrame containing only the features of the specified type and columns.
-        
+
     Raises:
         ValueError: Raised when feature_type or any of the columns specified do not exist in the GeoDataFrame.
     """
     # Check if type_column exists in the GeoDataFrame
     if type_column not in gdf.columns:
-        raise ValueError(f"Column '{type_column}' does not exist in the GeoDataFrame. Incorrect config_gdf.geojson loaded")
-    
+        raise ValueError(
+            f"Column '{type_column}' does not exist in the GeoDataFrame. Incorrect config_gdf.geojson loaded"
+        )
+
     # select only the features that are of the correct type and have the correct columns
     feature_gdf = gdf[gdf[type_column] == feature_type]
-    
+
     return feature_gdf
 
 
 def random_prefix(length):
     """Generate a random string of the given length."""
-    return ''.join(random.choice(string.ascii_lowercase) for _ in range(length))
+    return "".join(random.choice(string.ascii_lowercase) for _ in range(length))
+
 
 def generate_ids(num_ids, prefix_length):
     """Generate a list of sequential IDs with a random prefix.
@@ -276,9 +302,6 @@ def check_file_path(file_path, make_dirs=True):
 
     else:
         raise TypeError("The provided file path must be a string.")
-
-
-
 
 
 def get_downloaded_models_dir() -> str:
@@ -809,7 +832,9 @@ def create_hover_box(title: str, feature_html: HTML = None) -> VBox:
     return container
 
 
-def create_warning_box(title: str = None, msg: str = None, msg_width: str = "75%",box_width: str = "50%") -> HBox:
+def create_warning_box(
+    title: str = None, msg: str = None, msg_width: str = "75%", box_width: str = "50%"
+) -> HBox:
     """
     Creates a warning box with a title and message that can be closed with a close button.
 
@@ -834,7 +859,7 @@ def create_warning_box(title: str = None, msg: str = None, msg_width: str = "75%
         f"<span style='color: red'>⚠️</span>{msg}"
         f"</div>"
     )
-    
+
     x_button = ToggleButton(
         value=False,
         tooltip="Close Warning Box",
@@ -845,7 +870,7 @@ def create_warning_box(title: str = None, msg: str = None, msg_width: str = "75%
 
     close_button = ToggleButton(
         value=False,
-        description='Close',
+        description="Close",
         tooltip="Close Warning Box",
         button_style="danger",
         layout=Layout(height="28px", width="60px"),
@@ -853,8 +878,8 @@ def create_warning_box(title: str = None, msg: str = None, msg_width: str = "75%
 
     # create vertical box to hold title and msg
     warning_content = VBox(
-        [warning_title, warning_msg,close_button],
-        layout=Layout(width= msg_width, max_width="95%"),
+        [warning_title, warning_msg, close_button],
+        layout=Layout(width=msg_width, max_width="95%"),
     )
 
     def close_click(change):
@@ -863,10 +888,13 @@ def create_warning_box(title: str = None, msg: str = None, msg_width: str = "75%
             x_button.close()
             close_button.close()
             warning_box.close()
-    
+
     close_button.observe(close_click, "value")
     x_button.observe(close_click, "value")
-    warning_box = HBox([warning_content, x_button] , layout=Layout(width=box_width,border="2px solid red"))
+    warning_box = HBox(
+        [warning_content, x_button],
+        layout=Layout(width=box_width, border="2px solid red"),
+    )
     return warning_box
 
 
@@ -1019,7 +1047,7 @@ def convert_wgs_to_utm(lon: float, lat: float) -> str:
     return epsg_code
 
 
-def extract_roi_by_id(gdf: gpd.geodataframe, roi_id: int) -> gpd.geodataframe:
+def extract_roi_by_id(gdf: gpd.geodataframe, roi_id: int = None) -> gpd.geodataframe:
     """Returns geodataframe with a single ROI whose id matches roi_id.
        If roi_id is None returns gdf
 
@@ -1031,16 +1059,14 @@ def extract_roi_by_id(gdf: gpd.geodataframe, roi_id: int) -> gpd.geodataframe:
     Returns:
         gpd.geodataframe: ROI with id matching roi_id
     """
-    if roi_id is None:
-        single_roi = gdf
-    else:
+    single_roi = gdf
+    if roi_id:
         # Select a single roi by id
         single_roi = gdf[gdf["id"].astype(str) == str(roi_id)]
         # if the id was not found in the geodataframe raise an exception
     if single_roi.empty:
         logger.error(f"Id: {id} was not found in {gdf}")
         raise exceptions.Id_Not_Found(id)
-    logger.info(f"single_roi: {single_roi}")
     return single_roi
 
 
@@ -1148,6 +1174,7 @@ def create_directory(file_path: str, name: str) -> str:
         os.makedirs(new_directory)
     return new_directory
 
+
 def check_unique_ids(data: gpd.GeoDataFrame) -> bool:
     """
     Checks if all the ids in the 'id' column of a geodataframe are unique. If the 'id' column does not exist returns False
@@ -1158,23 +1185,27 @@ def check_unique_ids(data: gpd.GeoDataFrame) -> bool:
     Returns:
         bool: True if all ids are unique, False otherwise.
     """
-    if 'id' not in data.columns:
+    if "id" not in data.columns:
         return False
-    return not any(data['id'].duplicated())
+    return not any(data["id"].duplicated())
 
 
-def preprocess_geodataframe(data: gpd.GeoDataFrame = gpd.GeoDataFrame(), columns_to_keep: List[str] = None,create_ids:bool =True ) -> gpd.GeoDataFrame:
+def preprocess_geodataframe(
+    data: gpd.GeoDataFrame = gpd.GeoDataFrame(),
+    columns_to_keep: List[str] = None,
+    create_ids: bool = True,
+) -> gpd.GeoDataFrame:
     """
     This function preprocesses a GeoDataFrame. It performs several transformations:
 
     - If 'ID' column exists, it's renamed to lowercase 'id'.
     - Z-axis coordinates are removed from data.
-    - If an 'id' column does not exist, it creates one with unique IDs generated by a function generate_ids() 
-      with prefix of length 3. This option can be turned off by setting the parameter create_ids=False. 
+    - If an 'id' column does not exist, it creates one with unique IDs generated by a function generate_ids()
+      with prefix of length 3. This option can be turned off by setting the parameter create_ids=False.
     - If the list of columns_to_keep is provided, only those columns are retained in the data.
 
     Args:
-        data (gpd.GeoDataFrame, optional): The input GeoDataFrame to be preprocessed. 
+        data (gpd.GeoDataFrame, optional): The input GeoDataFrame to be preprocessed.
             Defaults to an empty GeoDataFrame.
         columns_to_keep (List[str], optional): The list of column names to retain in the preprocessed DataFrame.
             Defaults to None, in which case all columns are kept.
@@ -1194,7 +1225,7 @@ def preprocess_geodataframe(data: gpd.GeoDataFrame = gpd.GeoDataFrame(), columns
         # if an 'id' column does not exist, create one with row indices as ids
         if create_ids:
             if "id" not in data.columns.str.lower():
-                ids = generate_ids(num_ids =len(data), prefix_length=3)
+                ids = generate_ids(num_ids=len(data), prefix_length=3)
                 data["id"] = ids
 
         # if columns_to_keep is specified, keep only those columns
@@ -1204,92 +1235,8 @@ def preprocess_geodataframe(data: gpd.GeoDataFrame = gpd.GeoDataFrame(), columns
 
     return data
 
-# def preprocess_geodataframe(data: gpd.GeoDataFrame = gpd.GeoDataFrame(), columns_to_keep: List[str] = None, overwrite_ids: bool = True) -> gpd.GeoDataFrame:
-#     """
-#     Preprocesses a GeoDataFrame by renaming column 'ID' to 'id' (if it exists),
-#     removing the z-axis from the data, adding a unique 'id' column if it doesn't exist,
-#     and keeping only specified columns.
 
-#     Parameters:
-#     data (gpd.GeoDataFrame, optional): Input GeoDataFrame to be preprocessed. 
-#         If not provided, the function will return an empty GeoDataFrame.
-#     columns_to_keep (List[str], optional): List of column names to retain in the preprocessed DataFrame.
-#         If not provided, all columns in the DataFrame will be kept.
-#     overwrite_ids (bool, optional): If True, overwrite existing ids with row indices as ids. Defaults to True.
-
-#     Returns:
-#     gpd.GeoDataFrame: Preprocessed GeoDataFrame with specified transformations.
-#     """
-#     if not data.empty:
-#         # rename 'ID' to lowercase if it exists
-#         data.rename(columns={"ID": "id"}, inplace=True)
-
-#         # remove z-axis from data
-#         data = remove_z_coordinates(data)
-
-#         # check if 'id' column exists and is unique
-#         if "id" in data.columns.str.lower():
-#             if check_unique_ids(data):
-#                 if overwrite_ids:
-#                     data["id"] = data.index.astype(str).tolist()
-#             elif not overwrite_ids:
-#                 raise exceptions.Duplicate_ID_Exception('transects')
-
-#         # if an 'id' column does not exist, create one with row indices as ids
-#         if "id" not in data.columns.str.lower():
-#             data["id"] = data.index.astype(str).tolist()
-
-#         # if columns_to_keep is specified, keep only those columns
-#         if columns_to_keep:
-#             columns_to_keep = set(col.lower() for col in columns_to_keep)
-#             data = data[[col for col in data.columns if col.lower() in columns_to_keep]]
-
-#     return data
-
-# def merge_geodataframes(data: gpd.GeoDataFrame = gpd.GeoDataFrame(),old_data: gpd.GeoDataFrame = gpd.GeoDataFrame(), columns_to_keep: List[str] = None, overwrite_ids: bool = True) -> gpd.GeoDataFrame:
-#     """
-#     Preprocesses a GeoDataFrame by renaming column 'ID' to 'id' (if it exists),
-#     removing the z-axis from the data, adding a unique 'id' column if it doesn't exist,
-#     and keeping only specified columns.
-
-#     Parameters:
-#     data (gpd.GeoDataFrame, optional): Input GeoDataFrame to be preprocessed. 
-#         If not provided, the function will return an empty GeoDataFrame.
-#     columns_to_keep (List[str], optional): List of column names to retain in the preprocessed DataFrame.
-#         If not provided, all columns in the DataFrame will be kept.
-#     overwrite_ids (bool, optional): If True, overwrite existing ids with row indices as ids. Defaults to True.
-
-#     Returns:
-#     gpd.GeoDataFrame: Preprocessed GeoDataFrame with specified transformations.
-#     """
-#     if not data.empty:
-#         # rename 'ID' to lowercase if it exists
-#         data.rename(columns={"ID": "id"}, inplace=True)
-
-#         # remove z-axis from data
-#         data = remove_z_coordinates(data)
-
-#         # check if 'id' column exists and is unique
-#         if "id" in data.columns.str.lower():
-#             if check_unique_ids(data):
-#                 if overwrite_ids:
-#                     data["id"] = data.index.astype(str).tolist()
-#             elif not overwrite_ids:
-#                 raise exceptions.Duplicate_ID_Exception('transects')
-
-#         # if an 'id' column does not exist, create one with row indices as ids
-#         if "id" not in data.columns.str.lower():
-#             data["id"] = data.index.astype(str).tolist()
-
-#         # if columns_to_keep is specified, keep only those columns
-#         if columns_to_keep:
-#             columns_to_keep = set(col.lower() for col in columns_to_keep)
-#             data = data[[col for col in data.columns if col.lower() in columns_to_keep]]
-
-#     return data
-
-
-
+@time_func
 def get_transect_points_dict(feature: gpd.geodataframe) -> dict:
     """Returns dict of np.arrays of transect start and end points
     Example
@@ -1411,10 +1358,9 @@ def remove_z_coordinates(geodf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         no_z_gdf = feature_exploded.apply(remove_z_from_row, axis=1)
         return no_z_gdf
     else:
-        #@debug not sure if this will break everything
+        # @debug not sure if this will break everything
         # Use explode to break multilinestrings in linestrings
         return geodf.explode(ignore_index=True)
-
 
 
 def create_csv_per_transect(
@@ -1513,7 +1459,6 @@ def save_extracted_shorelines(
         "extracted_shorelines_dict.json",
         extracted_shorelines.dictionary,
     )
-
 
 
 def stringify_datetime_columns(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:

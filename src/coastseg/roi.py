@@ -17,6 +17,19 @@ from coastseg.extracted_shoreline import Extracted_Shoreline
 logger = logging.getLogger(__name__)
 
 __all__ = ["ROI"]
+from time import perf_counter
+
+
+def time_func(func):
+    def wrapper(*args, **kwargs):
+        start = perf_counter()
+        result = func(*args, **kwargs)
+        end = perf_counter()
+        print(f"{func.__name__} took {end - start:.6f} seconds to run.")
+        logger.debug(f"{func.__name__} took {end - start:.6f} seconds to run.")
+        return result
+
+    return wrapper
 
 
 class ROI:
@@ -72,9 +85,11 @@ class ROI:
             None.
         """
 
-        rois_gdf = common.preprocess_geodataframe(rois_gdf,columns_to_keep=['id','geometry'],create_ids=True)
+        rois_gdf = common.preprocess_geodataframe(
+            rois_gdf, columns_to_keep=["id", "geometry"], create_ids=True
+        )
         # make sure all the ids  are unique
-        rois_gdf = common.create_unique_ids(rois_gdf,prefix_length=3)
+        rois_gdf = common.create_unique_ids(rois_gdf, prefix_length=3)
         # get row ids of ROIs with area that's too large
         drop_ids = common.get_ids_with_invalid_area(rois_gdf)
         if drop_ids:
@@ -307,9 +322,18 @@ class ROI:
             )
 
         # clean the geodataframe
-        fishnet_intersect_gdf = common.preprocess_geodataframe(fishnet_intersect_gdf,columns_to_keep=['id','geometry',],create_ids=True)
+        fishnet_intersect_gdf = common.preprocess_geodataframe(
+            fishnet_intersect_gdf,
+            columns_to_keep=[
+                "id",
+                "geometry",
+            ],
+            create_ids=True,
+        )
         # make sure all the ids are unique
-        fishnet_intersect_gdf = common.create_unique_ids(fishnet_intersect_gdf,prefix_length=3)
+        fishnet_intersect_gdf = common.create_unique_ids(
+            fishnet_intersect_gdf, prefix_length=3
+        )
         logger.info(f"Created fishnet_intersect_gdf: {fishnet_intersect_gdf}")
         return fishnet_intersect_gdf
 
