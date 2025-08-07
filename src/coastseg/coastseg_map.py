@@ -36,6 +36,7 @@ from coastseg import file_utilities
 from coastseg import geodata_processing
 from coastseg import tide_correction
 from coastseg import core_utilities
+from coastseg.settings_manager import SettingsManager, SettingsError
 
 # Internal/Local imports: modules
 from coastseg import (
@@ -230,8 +231,10 @@ def delete_extracted_shorelines_files(session_path: str, selected_items: List):
 
 class CoastSeg_Map:
     def __init__(self, create_map: bool = True):
-        # Basic settings and configurations
-        self.settings = {}
+        # Settings management using the new settings manager
+        self.settings_manager = SettingsManager()
+        
+        # Basic configurations
         self.map = None
         self.draw_control = None
         self.warning_box = None
@@ -245,7 +248,6 @@ class CoastSeg_Map:
         # Optional: a user drawn polygon only keep extracted shorelines within this polygon
         self.shoreline_extraction_area = None
 
-        self.set_settings()
         self.session_name = ""
 
         # Factory for creating map objects
@@ -1498,94 +1500,70 @@ class CoastSeg_Map:
                 save_config_files(config_json, config_gdf, filepath)
                 print(f"Saved config files for each ROI to {filepath}")
 
-    def set_settings(self, **kwargs):
+    def set_settings(self, **kwargs) -> Dict[str, Any]:
         """
-        Saves the settings for downloading data by updating the `self.settings` dictionary with the provided key-value pairs.
-        If any of the keys are missing, they will be set to their default value as specified in `default_settings`.
+        Update settings using the new settings manager with validation.
 
-        Example: set_settings(sat_list=sat_list, dates=dates,**more_settings)
+        Example: set_settings(sat_list=['L8', 'L9'], dates=['2023-01-01', '2023-12-31'])
 
         Args:
-        **kwargs: Keyword arguments representing the key-value pairs to be added to or updated in `self.settings`.
+            **kwargs: Keyword arguments representing the key-value pairs to update.
 
         Returns:
-        None
-        """
-        logger.info(f"New Settings: {kwargs}")
-        # Check if any of the keys are missing
-        # if any keys are missing set the default value
-        self.default_settings = {
-            "landsat_collection": "C02",
-            "dates": ["2017-12-01", "2018-01-01"],
-            "months_list": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-            "sat_list": ["L8"],
-            "download_cloud_thresh": 0.8,
-            "min_roi_coverage": 0.5,
-            "cloud_thresh": 0.8,
-            "percent_no_data": 0.8,
-            "dist_clouds": 300,
-            "output_epsg": 4326,
-            "check_detection": False,
-            "adjust_detection": False,
-            "save_figure": True,
-            "min_beach_area": 4500,
-            "min_length_sl": 100,
-            "cloud_mask_issue": False,
-            "sand_color": "default",
-            "pan_off": "False",
-            "max_dist_ref": 25,
-            "along_dist": 25,
-            "min_points": 3,
-            "max_std": 15,
-            "max_range": 30,
-            "min_chainage": -100,
-            "multiple_inter": "auto",
-            "prc_multiple": 0.1,
-            "apply_cloud_mask": True,
-            "image_size_filter": True,
-            "drop_intersection_pts": False,
-            "coastseg_version": __version__,
-        }
-
-        # Function to parse dates with flexibility for different formats
-        def parse_date(date_str):
-            for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
-                except ValueError:
-                    continue
-            raise ValueError(f"Date format for {date_str} not recognized.")
-
-        # Update the settings with the new key-value pairs
-        self.settings.update(kwargs)
-
-        # Special handling for 'dates'
-        if "dates" in kwargs:
-            self.settings["dates"] = [parse_date(d) for d in kwargs["dates"]]
-
-        for key, value in self.default_settings.items():
-            self.settings.setdefault(key, value)
-
-        logger.info(f"Set Settings: {self.settings}")
-        return self.settings.copy()
-
-    def get_settings(self):
-        """
-        Retrieves the current settings.
-
-        Returns:
-            dict: A dictionary containing the current settings.
+            Dict[str, Any]: A copy of the updated settings as a flat dictionary.
 
         Raises:
-            Exception: If no settings are found. Click save settings or load a config file.
-
+            SettingsError: If validation fails for any setting.
         """
-        SETTINGS_NOT_FOUND = (
-            "No settings found. Click save settings or load a config file."
-        )
-        if self.settings is None or self.settings == {}:
-            raise Exception(SETTINGS_NOT_FOUND)
-        return self.settings
+        try:
+            self.settings_manager.update_settings(**kwargs)
+            logger.info(f"Settings updated successfully: {list(kwargs.keys())}")
+            return self.settings_manager.get_flat_dict()
+        except SettingsError as e:
+            logger.error(f"Settings update failed: {e}")
+            raise
+
+    def get_settings(self) -> Dict[str, Any]:
+        """
+        Retrieve the current settings as a flat dictionary.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing the current settings.
+        """
+        return self.settings_manager.get_flat_dict()
+
+    def save_settings_to_file(self, filepath: Union[str, Path]) -> None:
+        """
+        Save current settings to a JSON file.
+
+        Args:
+            filepath: Path where to save the settings file.
+
+        Raises:
+            SettingsError: If saving fails.
+        """
+        try:
+            self.settings_manager.save_to_file(filepath)
+        except SettingsError as e:
+            logger.error(f"Failed to save settings: {e}")
+            raise
+
+    def load_settings_from_file(self, filepath: Union[str, Path]) -> None:
+        """
+        Load settings from a JSON file.
+
+        Args:
+            filepath: Path to the settings file.
+
+        Raises:
+            SettingsError: If loading fails.
+        """
+        try:
+            self.settings_manager.load_from_file(filepath)
+            logger.info(f"Settings loaded from {filepath}")
+        except SettingsError as e:
+            logger.error(f"Failed to load settings: {e}")
+            raise
 
     def update_transects_html(self, feature: dict, **kwargs):
         """
