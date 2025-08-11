@@ -49,11 +49,11 @@ class Shoreline(Feature):
 
     def __init__(
         self,
-        bbox: gpd.GeoDataFrame = None,
-        shoreline: gpd.GeoDataFrame = None,
-        filename: str = None,
-        services: ShorelineServices = None,
-        download_location: str = None,
+        bbox: Optional[gpd.GeoDataFrame] = None,
+        shoreline: Optional[gpd.GeoDataFrame] = None,
+        filename: Optional[str] = None,
+        services: Optional[ShorelineServices] = None,
+        download_location: Optional[str] = None,
     ):
         # function to download shoreline files by default use download_url
         services = services or ShorelineServices()
@@ -81,6 +81,70 @@ class Shoreline(Feature):
         if not value.endswith(".geojson"):
             raise ValueError("Filename must end with '.geojson'.")
         self._filename = value
+
+    @classmethod
+    def from_gdf(
+        cls, 
+        gdf: gpd.GeoDataFrame, 
+        filename: Optional[str] = None,
+        services: Optional[ShorelineServices] = None,
+        **kwargs
+    ) -> 'Shoreline':
+        """
+        Factory method to create a Shoreline from a GeoDataFrame.
+        
+        This provides a cleaner interface for creating shorelines directly from
+        existing GeoDataFrames without needing to understand the constructor's
+        bbox/shoreline parameter distinction.
+        
+        Args:
+            gdf: GeoDataFrame containing shoreline geometries
+            filename: Optional filename for the shoreline
+            services: Optional services for dependency injection
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Shoreline instance initialized with the provided GeoDataFrame
+        """
+        return cls(
+            shoreline=gdf,
+            filename=filename,
+            services=services,
+            **kwargs
+        )
+
+    @classmethod
+    def from_bbox(
+        cls,
+        bbox: gpd.GeoDataFrame,
+        filename: Optional[str] = None,
+        services: Optional[ShorelineServices] = None,
+        download_location: Optional[str] = None,
+        **kwargs
+    ) -> 'Shoreline':
+        """
+        Factory method to create a Shoreline by loading shorelines within a bounding box.
+        
+        This method automatically finds and loads shoreline data that intersects
+        with the provided bounding box, downloading from external sources if necessary.
+        
+        Args:
+            bbox: GeoDataFrame defining the bounding box area
+            filename: Optional filename for the shoreline
+            services: Optional services for dependency injection
+            download_location: Optional location for downloading shoreline files
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Shoreline instance with shorelines loaded from the bounding box area
+        """
+        return cls(
+            bbox=bbox,
+            filename=filename,
+            services=services,
+            download_location=download_location,
+            **kwargs
+        )
 
     def __str__(self):
         # Get column names and their data types

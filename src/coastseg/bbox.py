@@ -24,7 +24,7 @@ class Bounding_Box(Feature):
     MIN_AREA = 1000  # UNITS = Sq. Meters
     LAYER_NAME = "Bbox"
 
-    def __init__(self, rectangle: Union[dict, gpd.GeoDataFrame], filename: str = None):
+    def __init__(self, rectangle: Union[dict, gpd.GeoDataFrame], filename: Optional[str] = None):
         self.gdf = None
         self.filename = filename if filename else "bbox.geojson"
         if isinstance(rectangle, gpd.GeoDataFrame):
@@ -35,6 +35,46 @@ class Bounding_Box(Feature):
             raise Exception(
                 "Invalid rectangle provided to BBox must be either a geodataframe or dict"
             )
+
+    @classmethod
+    def from_gdf(
+        cls,
+        gdf: gpd.GeoDataFrame,
+        filename: Optional[str] = None,
+        **kwargs
+    ) -> 'Bounding_Box':
+        """
+        Factory method to create a Bounding_Box from a GeoDataFrame.
+        
+        Args:
+            gdf: GeoDataFrame containing the bounding box geometry
+            filename: Optional filename for the bounding box
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Bounding_Box instance initialized with the provided GeoDataFrame
+        """
+        return cls(rectangle=gdf, filename=filename)
+
+    @classmethod
+    def from_geojson_dict(
+        cls,
+        geojson_dict: dict,
+        filename: Optional[str] = None,
+        **kwargs
+    ) -> 'Bounding_Box':
+        """
+        Factory method to create a Bounding_Box from a GeoJSON dictionary.
+        
+        Args:
+            geojson_dict: Dictionary containing GeoJSON geometry
+            filename: Optional filename for the bounding box
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Bounding_Box instance initialized with the provided GeoJSON
+        """
+        return cls(rectangle=geojson_dict, filename=filename)
 
     def __str__(self):
         return f"BBox: geodataframe {self.gdf}"

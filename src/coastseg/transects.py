@@ -232,9 +232,9 @@ class Transects(Feature):
 
     def __init__(
         self,
-        bbox: gpd.GeoDataFrame = None,
-        transects: gpd.GeoDataFrame = None,
-        filename: str = None,
+        bbox: Optional[gpd.GeoDataFrame] = None,
+        transects: Optional[gpd.GeoDataFrame] = None,
+        filename: Optional[str] = None,
     ):
         """
         Initialize a Transects object with either a bounding box GeoDataFrame, a transects GeoDataFrame,
@@ -243,6 +243,52 @@ class Transects(Feature):
         self.gdf = gpd.GeoDataFrame()
         self.filename = filename if filename else "transects.geojson"
         self.initialize_transects(bbox, transects)
+
+    @classmethod
+    def from_gdf(
+        cls,
+        gdf: gpd.GeoDataFrame,
+        filename: Optional[str] = None,
+        **kwargs
+    ) -> 'Transects':
+        """
+        Factory method to create Transects from a GeoDataFrame.
+        
+        This provides a cleaner interface for creating transects directly from
+        existing GeoDataFrames.
+        
+        Args:
+            gdf: GeoDataFrame containing transect geometries
+            filename: Optional filename for the transects
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Transects instance initialized with the provided GeoDataFrame
+        """
+        return cls(transects=gdf, filename=filename, **kwargs)
+
+    @classmethod
+    def from_bbox(
+        cls,
+        bbox: gpd.GeoDataFrame,
+        filename: Optional[str] = None,
+        **kwargs
+    ) -> 'Transects':
+        """
+        Factory method to create Transects by loading transects within a bounding box.
+        
+        This method automatically finds and loads transect data that intersects
+        with the provided bounding box.
+        
+        Args:
+            bbox: GeoDataFrame defining the bounding box area
+            filename: Optional filename for the transects
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Transects instance with transects loaded from the bounding box area
+        """
+        return cls(bbox=bbox, filename=filename, **kwargs)
 
     def __str__(self):
         # Get column names and their data types
