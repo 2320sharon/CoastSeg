@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 def initialize_gee(
     auth_mode: str = "",
     print_mode: bool = True,
-    auth_args: dict = {},
+    auth_kwargs: dict = {},
     project: str = "",
     force: bool = False,
     **kwargs,
@@ -57,7 +57,7 @@ def initialize_gee(
       'gcloud' and 'colab' methods are not supported.
        See https://developers.google.com/earth-engine/guides/auth for more details.
     - print_mode (bool, optional): Whether to print initialization messages. Defaults to True.
-    - auth_args (dict, optional): Additional arguments for authentication. Defaults to {}.
+    - auth_kwargs (dict, optional): Additional arguments for authentication. Defaults to {}.
     - project (str, optional): The project to initialize GEE with. Defaults to an empty string.
     - force (bool, optional): Forces re-authentication if True. Defaults to False.
     - **kwargs: Additional keyword arguments for `ee.Initialize()`.
@@ -70,80 +70,127 @@ def initialize_gee(
     if auth_mode in ["gcloud", "colab"]:
         raise ValueError(f"{auth_mode} authentication is not supported.")
 
-    # separate the force argument from the auth_args
-    if "force" in auth_args:
-        force = auth_args["force"]
-        del auth_args["force"]
+    # separate the force argument from the auth_kwargs
+    if "force" in auth_kwargs:
+        force = auth_kwargs["force"]
+        del auth_kwargs["force"]
 
     # Update authentication arguments
     if auth_mode:
-        auth_args["auth_mode"] = auth_mode
+        auth_kwargs["auth_mode"] = auth_mode
     if project:
         kwargs["project"] = project
 
     # Authenticate and initialize
-    authenticate_and_initialize(print_mode, force, auth_args, kwargs)
+    authenticate_and_initialize(print_mode, force, auth_kwargs, init_kwargs=kwargs)
 
+
+def needs_authentication(force: bool) -> bool:
+    """Decide whether we must (re)authenticate."""
+    if force:
+        return True
+    try:
+        return not gee_credentials_exist()  # your helper
+    except Exception as e:
+        logger.debug("Credential check failed; proceeding without forced auth: %s", e)
+        return False
+
+def do_authenticate(force: bool, auth_kwargs: dict) -> None:
+    """Run ee.Authenticate with safe logging."""
+    logger.info("Authenticating with GEE (force=%s)", force)
+    ee.Authenticate(force=force, **auth_kwargs)
+
+def do_initialize(init_kwargs: dict) -> None:
+    """Run ee.Initialize."""
+    logger.info("Initializing GEE")
+    ee.Initialize(**init_kwargs)
+
+def describe_error(e: Exception) -> str:
+    """Short, user-friendly error text."""
+    s = str(e)
+    if "Please refresh your Google authentication token" in s:
+        return "Please refresh your Google authentication token."
+    if "Credentials file not found" in s:
+        return "Credentials file not found. Please authenticate with Google Earth Engine."
+    return f"An error occurred: {s}"
+
+def gee_credentials_path():
+    """Return the default path to the Earth Engine credentials file."""
+    return os.path.expanduser("~/.config/earthengine/credentials")
+
+def gee_credentials_exist():
+    """Check if the Earth Engine credentials file exists."""
+    return os.path.isfile(gee_credentials_path())
+
+def clear_gee_credentials():
+    """Delete the Earth Engine credentials file if it exists."""
+    path = gee_credentials_path()
+    if os.path.isfile(path):
+        os.remove(path)
+        print(f"Deleted credentials file: {path}")
+    else:
+        print("No credentials file found to delete.")
 
 def authenticate_and_initialize(
     print_mode: bool,
     force: bool,
-    auth_args: dict,
-    kwargs: dict,
-    attempt: int = 1,
+    auth_kwargs: dict,
+    init_kwargs: dict,
     max_attempts: int = 2,
-):
+) -> None:
     """
     Handles the authentication and initialization of Google Earth Engine.
 
     Args:
         print_mode (bool): Flag indicating whether to print status messages.
         force (bool): Flag indicating whether to force authentication.
-        auth_args (dict): Dictionary of authentication arguments for ee.Authenticate().
+        auth_kwargs (dict): Dictionary of authentication arguments for ee.Authenticate().
         kwargs (dict): Dictionary of initialization arguments for ee.Initialize().
         attempt (int): Current attempt number for authentication.
         max_attempts (int): Maximum number of authentication attempts.
-    """
-    print(
-        f"kwargs {kwargs} force {force} auth_args {auth_args} print_mode {print_mode} attempt {attempt} max_attempts {max_attempts}"
-    )
-    logger.info(
-        f"kwargs {kwargs} force {force} auth_args {auth_args} print_mode {print_mode} attempt {attempt} max_attempts {max_attempts}"
-    )
-    if print_mode:
-        print(
-            f"{'Forcing authentication and ' if force else ''}Initializing Google Earth Engine...\n"
-        )
-    try:
-        if force or not ee.data._credentials:
-            ee.Authenticate(force=force, **auth_args)
-        print(f"kwargs passed to ee.Initialize {kwargs}")
-        ee.Initialize(**kwargs)
-        if print_mode:
-            print("Google Earth Engine initialized successfully.\n")
-    except Exception as e:
-        error_message = str(e)
-        if "Please refresh your Google authentication token" in error_message:
-            print("Please refresh your Google authentication token.\n")
-        elif "Credentials file not found" in error_message:
-            print(
-                "Credentials file not found. Please authenticate with Google Earth Engine:\n"
-            )
-        else:
-            print(f"An error occurred: {error_message}\n")
 
-        # Re-attempt authentication only if attempts are less than max_attempts
-        if attempt < max_attempts:
-            print(
-                f"Re-attempting authentication (Attempt {attempt + 1}/{max_attempts})...\n"
-            )
-            authenticate_and_initialize(
-                print_mode, True, auth_args, kwargs, attempt + 1, max_attempts
-            )  # Force re-authentication on retry
-        else:
-            raise Exception(
-                f"Failed to initialize Google Earth Engine after {attempt} attempts: {error_message}"
-            )
+    Raises:
+        RuntimeError: If authentication or initialization fails after the maximum number of attempts.
+
+    """
+    logger.info(
+        "GEE init start | force=%s print_mode=%s max_attempts=%d auth_keys=%s init_keys=%s",
+        force, print_mode, max_attempts, list(auth_kwargs.keys()), list(init_kwargs.keys())
+    )
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if print_mode:
+                print(f"{'Forcing authentication and ' if force else ''}Initializing Google Earth Engine...\n")
+
+            # note: the do_authenticate function requires user input
+            # check if authentication is needed by looking for the credentials file
+            if needs_authentication(force):
+                do_authenticate(force=True, auth_kwargs=auth_kwargs)
+            # attempt to initialize the Earth Engine after authenticating
+            do_initialize(init_kwargs=init_kwargs)
+            if print_mode:
+                print("Google Earth Engine initialized successfully.\n")
+            return  # success
+
+        except Exception as e:
+            if print_mode:
+                print(describe_error(e) + "\n")
+
+            # Re-attempt authentication only if attempts are less than max_attempts
+            if attempt < max_attempts:
+                if print_mode:
+                    print(f"Re-attempting authentication (Attempt {attempt + 1}/{max_attempts})...\n")
+                logger.warning("GEE init attempt %d failed: %s | retrying", attempt, e)
+                # On retries, always force re-auth
+                force = True
+                continue
+
+            raise RuntimeError(
+                f"Failed to initialize Google Earth Engine after {max_attempts} attempts"
+            ) from e
+
+
 
 
 def merge_tide_corrected_with_raw_timeseries(session_path, tide_timeseries):
