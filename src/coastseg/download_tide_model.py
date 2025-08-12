@@ -923,6 +923,50 @@ def ftp_download_file(
     except Exception as e:
         print(f"{e} \n{traceback.format_exc()}")
 
+def check_ftp_status(host: str, username: str = 'anonymous', password: str = '') -> tuple[bool, str]:
+    """
+    Attempt to establish an FTP connection to a specified host.
+
+    This function wraps ``pyTMD.utilities.check_ftp_connection`` to test 
+    connectivity and login capability to an FTP server. It returns a 
+    status flag and a descriptive message instead of raising exceptions.
+
+    Parameters
+    ----------
+    host : str
+        Remote FTP host to connect to.
+    username : str, optional
+        Username for FTP login. Defaults to 'anonymous'.
+    password : str, optional
+        Password for FTP login. Defaults to an empty string.
+
+    Returns
+    -------
+    tuple of (bool, str)
+        - bool: True if connection and login were successful, False otherwise.
+        - str: Message describing the connection result or error.
+
+    Notes
+    -----
+    - Under the hood, this calls ``pyTMD.utilities.check_ftp_connection``,
+      which sends a ``NOOP`` command to verify the FTP server is responsive.
+    - Exceptions from network issues or authentication errors are caught
+      and returned as error messages instead of propagating.
+
+    Examples
+    --------
+    >>> check_ftp_status("ftp.example.com")
+    (True, "FTP connection successful")
+
+    >>> check_ftp_status("invalid.host")
+    (False, "FTP error: Check internet connection")
+    """
+    try:
+        status = pyTMD.utilities.check_ftp_connection(host, username, password)
+        return status, "FTP connection successful"
+    # This will catch runtime and IO errors from Internet connection issue and login credentials
+    except Exception as e:
+        return False, f"FTP error: {e}"
 
 def download_fes_tides(
     user="",
