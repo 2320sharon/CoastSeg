@@ -8,8 +8,6 @@ a) More performant shoreline extraction: the goal is fast and accurate shoreline
 
 b) Improved imagery: the goal is to use ML to enhance imagery, where possible. Key goals include 1) image super-resolution, 2) image inpainting, and 3) automated image registration
 
-c) Additional image sources. The initial focus will be on integrating with Planet Labs' Planetscope (3-m) imagery
-
 A major goal is to incorporate more data-driven approaches to shoreline detection using Machine Learning sub-components. We track progress using the [project board](https://github.com/orgs/Doodleverse/projects/5/views/2) and in [issues](https://github.com/Doodleverse/CoastSeg/issues). If you have an idea for a new feature not listed here, please get in touch!
 
 #### Major features:
@@ -28,14 +26,11 @@ A major goal is to incorporate more data-driven approaches to shoreline detectio
 * CoastSeg allows users to filter out images by placing images into a bad directory to not use them for shoreline extraction
 
 - More Shoreline Filter for Shoreline Extraction
-  - vertex simplification
   - outliers based on time-average shoreline
   - discontinuous shorelines
-- Image Sources
-  - Planet 3m
 - Super Resolution
-- Image Registration
 - Image Inpainting - Stable Diffusion
-- Docker container
-- New Frontend?
+- New Frontend
   - Goal to move away from jupyter potentially for better performance and hosting
+  - Our Team is currently exploring using NiceGui.
+
