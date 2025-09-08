@@ -21,9 +21,7 @@ import pandas as pd
 from shapely.ops import unary_union
 from shapely.geometry import Polygon, linestring
 
-
 logger = logging.getLogger(__name__)
-
 
 def drop_columns(
     gdf: gpd.GeoDataFrame, columns_to_drop: list = None
@@ -42,7 +40,6 @@ def drop_columns(
         if col in gdf.columns:
             gdf.drop(columns=[col], inplace=True)
     return gdf
-
 
 def create_transects_with_arrowheads(
     gdf: gpd.GeoDataFrame, arrow_length=0.0004, arrow_angle=30
@@ -230,18 +227,24 @@ class Transects(Feature):
     # nearest_x: x-coordinate of the nearest slope location to the transect
     # nearest_y: y-coordinate of the nearest slope location to the transect
 
+    @property
+    def gdf(self) -> gpd.GeoDataFrame:
+        """Returns the GeoDataFrame, empty or with features."""
+        return self._gdf
+
+
     def __init__(
         self,
         bbox: Optional[gpd.GeoDataFrame] = None,
         transects: Optional[gpd.GeoDataFrame] = None,
-        filename: Optional[str] = None,
+        filename: str = "transects.geojson",
     ):
         """
         Initialize a Transects object with either a bounding box GeoDataFrame, a transects GeoDataFrame,
         or a filename string.
         """
-        self.gdf = gpd.GeoDataFrame()
-        self.filename = filename if filename else "transects.geojson"
+        self._gdf = gpd.GeoDataFrame()
+        self.filename = filename
         self.initialize_transects(bbox, transects)
 
     @classmethod

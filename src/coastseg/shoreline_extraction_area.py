@@ -1,21 +1,31 @@
+from typing import Optional
 from coastseg.feature import Feature
 import geopandas as gpd
+import ipyleaflet
 
 class Shoreline_Extraction_Area(Feature):
     LAYER_NAME = "shoreline_extraction_area"
     
     def __init__(
         self,
-        gdf: gpd.GeoDataFrame = None,
-        filename: str = None,
+        gdf: Optional[gpd.GeoDataFrame] = None,
+        filename: str = "shoreline_extraction_area.geojson",
     ):
-        """Initialize the Shoreline_Extraction_Area object"""
+        """
+        Initializes a Shoreline_Extraction_Area object.
+
+        Args:
+            gdf (Optional[gpd.GeoDataFrame], optional): A GeoDataFrame containing shoreline extraction area data. 
+                If None, an empty GeoDataFrame is created. Defaults to None.
+            filename (str, optional): The filename to use for saving the shoreline extraction area. 
+                Defaults to "shoreline_extraction_area.geojson".
+        """
         if gdf is not None:
             self.gdf = gdf
         else:
             self.gdf = gpd.GeoDataFrame()
-        self.filename = filename if filename else "shoreline_extraction_area.geojson"
-    
+        self.filename = filename
+
     @property
     def filename(self):
         return self._filename
@@ -28,7 +38,7 @@ class Shoreline_Extraction_Area(Feature):
             raise ValueError("Filename must end with '.geojson'.")
         self._filename = value
     
-    def style_layer(self, geojson: dict, layer_name: str) -> "ipyleaflet.GeoJSON":
+    def style_layer(self, geojson: dict, layer_name: str) -> ipyleaflet.GeoJSON:
         """Return styled GeoJson object with layer name
 
         Args:
@@ -44,7 +54,7 @@ class Shoreline_Extraction_Area(Feature):
             "fillOpacity": 0.1,
             "weight": 3,
         }
-        return super().style_layer(geojson, layer_name, style=style, hover_style=None)
+        return super().style_layer(geojson, layer_name, style=style)
     
     
     def __str__(self):

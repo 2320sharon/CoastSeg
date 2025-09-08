@@ -30,6 +30,9 @@ __all__ = ["Shoreline", "ShorelineServices"]
 
 
 class ShorelineServices:
+
+
+
     def __init__(
         self,
         download_service: Callable[[str, str, Optional[str]], Any] = None,
@@ -46,6 +49,11 @@ class Shoreline(Feature):
 
     LAYER_NAME = "shoreline"
     SELECTED_LAYER_NAME = "Selected Shorelines"
+
+    @property
+    def gdf(self) -> gpd.GeoDataFrame:
+        """Returns the GeoDataFrame, empty or with features."""
+        return self._gdf
 
     def __init__(
         self,
@@ -66,7 +74,7 @@ class Shoreline(Feature):
             os.path.abspath(__file__)
         )
 
-        self.gdf = gpd.GeoDataFrame()
+        self._gdf = gpd.GeoDataFrame()
         self.filename = filename if filename else "shoreline.geojson"
         self.initialize_shorelines(bbox, shoreline)
 
@@ -444,21 +452,6 @@ class Shoreline(Feature):
         hover_style={"color": "white", "dashArray": "4", "fillOpacity": 0.7}
         return super().style_layer(geojson, layer_name, style=style, hover_style=hover_style)
     
-        # assert geojson != {}, "ERROR.\n Empty geojson cannot be drawn onto  map"
-        # return GeoJSON(
-        #     data=geojson,
-        #     name=layer_name,
-        #     style={
-        #         "color": "black",
-        #         "fill_color": "black",
-        #         "opacity": 1,
-        #         "dashArray": "5",
-        #         "fillOpacity": 0.5,
-        #         "weight": 4,
-        #     },
-        #     hover_style={"color": "white", "dashArray": "4", "fillOpacity": 0.7},
-        # )
-
     def download_shoreline(
         self, filename: str, save_location: str, dataset_id: str = "7814755"
     ):
@@ -523,7 +516,7 @@ def get_intersecting_files(
 def load_total_bounds_df(
     bounding_boxes_location: str,
     location: str = "usa",
-    mask: gpd.GeoDataFrame = None,
+    mask: Optional[gpd.GeoDataFrame] = None,
 ) -> gpd.GeoDataFrame:
     """
     Returns dataframe containing total bounds for each set of shorelines in the geojson file specified by location.

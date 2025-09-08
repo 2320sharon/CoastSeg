@@ -9,6 +9,7 @@ from coastseg.feature import Feature
 # External dependencies imports
 import geopandas as gpd
 from shapely.geometry import shape
+import ipyleaflet
 from ipyleaflet import GeoJSON
 
 __all__ = ["Bounding_Box"]
@@ -24,17 +25,20 @@ class Bounding_Box(Feature):
     MIN_AREA = 1000  # UNITS = Sq. Meters
     LAYER_NAME = "Bbox"
 
+    @property
+    def gdf(self) -> gpd.GeoDataFrame:
+        """Returns the GeoDataFrame, empty or with features."""
+        return self._gdf
+
     def __init__(self, rectangle: Union[dict, gpd.GeoDataFrame], filename: Optional[str] = None):
-        self.gdf = None
+        self._gdf = gpd.GeoDataFrame()  # Start with empty GeoDataFrame
         self.filename = filename if filename else "bbox.geojson"
         if isinstance(rectangle, gpd.GeoDataFrame):
-            self.gdf = self._initialize_from_gdf(rectangle)
+            self._gdf = self._initialize_from_gdf(rectangle)
         elif isinstance(rectangle, dict):
-            self.gdf = self.create_geodataframe(rectangle)
+            self._gdf = self.create_geodataframe(rectangle)
         else:
-            raise Exception(
-                "Invalid rectangle provided to BBox must be either a geodataframe or dict"
-            )
+            raise ValueError("Invalid rectangle provided to BBox must be either a geodataframe or dict")
 
     @classmethod
     def from_gdf(
@@ -82,18 +86,22 @@ class Bounding_Box(Feature):
     def __repr__(self):
         return f"BBox: geodataframe {self.gdf}"
 
-    def _initialize_from_gdf(self, bbox_gdf: gpd.GeoDataFrame) -> None:
+    def _initialize_from_gdf(self, bbox_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
-        Initialize the `gdf` attribute from a GeoDataFrame containing a bounding box.
+        Initializes and cleans a bounding box GeoDataFrame.
+
+        This method preprocesses the input GeoDataFrame by retaining only the 'geometry' column,
+        setting the coordinate reference system to 'EPSG:4326', and validating that all geometries
+        are either 'Polygon' or 'MultiPolygon' types. The cleaned and validated GeoDataFrame is returned.
 
         Args:
-            rois_gdf: A GeoDataFrame containing a bounding box.
+            bbox_gdf (gpd.GeoDataFrame): The input GeoDataFrame containing bounding box geometries.
 
         Returns:
-            None.
+            gpd.GeoDataFrame: The cleaned and validated GeoDataFrame.
 
         Raises:
-            None.
+            ValueError: If any geometry in the GeoDataFrame is not a 'Polygon' or 'MultiPolygon'.
         """
         # clean the geodataframe
         bbox_gdf = preprocess_geodataframe(
@@ -108,7 +116,7 @@ class Bounding_Box(Feature):
         return bbox_gdf
 
     def create_geodataframe(
-        self, rectangle: dict, crs: Optional[str] = "EPSG:4326"
+        self, rectangle: dict, crs: str = "EPSG:4326"
     ) -> gpd.GeoDataFrame:
         """Creates a geodataframe in crs "EPSG:4326" with the provided geometry in rectangle. The
         The geometry must in CRS epsg 4326 or the code will not work properly
@@ -150,21 +158,9 @@ class Bounding_Box(Feature):
             "fillOpacity": 0.1,
             "weight": 3,
         }
-        return super().style_layer(geojson, layer_name, style=style, hover_style=None)
-        # if geojson == {}:
-        #     raise Exception("ERROR.\n Empty geojson cannot be drawn onto map")
-        # return GeoJSON(
-        #     data=geojson,
-        #     name=layer_name,
-        #     style={
-        #         "color": "#75b671",
-        #         "fill_color": "#75b671",
-        #         "opacity": 1,
-        #         "fillOpacity": 0.1,
-        #         "weight": 3,
-        #     },
-        # )
+        return super().style_layer(geojson, layer_name, style=style, hover_style={})
 
+    @staticmethod
     def check_bbox_size(bbox_area: float):
         """ "Raises an exception if the size of the bounding box is too large or small."""
         # Check if the size is greater than MAX_BBOX_SIZE

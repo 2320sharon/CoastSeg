@@ -31,6 +31,11 @@ class ROI(Feature):
     MAX_SIZE = 98000000  # 98km^2 area
     MIN_SIZE = 0
 
+    @property
+    def gdf(self) -> gpd.GeoDataFrame:
+        """Returns the GeoDataFrame, empty or with features."""
+        return self._gdf
+
     def __init__(
         self,
         bbox: gpd.GeoDataFrame = None,
@@ -41,7 +46,7 @@ class ROI(Feature):
         filename: str = None,
     ):
         # gdf : geodataframe of ROIs
-        self.gdf = gpd.GeoDataFrame()
+        self._gdf = gpd.GeoDataFrame()  # Start with empty GeoDataFrame
         # roi_settings : after ROIs have been downloaded holds all download settings
         self.roi_settings = {}
         # extract_shorelines : dictionary with ROIs' ids as the keys holding the extracted shorelines
@@ -360,7 +365,7 @@ class ROI(Feature):
         """
         if roi_id in self.get_ids_with_extracted_shorelines():
             extracted_shoreline = self.get_extracted_shoreline(roi_id)
-            if extracted_shoreline is not None:
+            if extracted_shoreline is not None and hasattr(extracted_shoreline, "remove_selected_shorelines"):
                 extracted_shoreline.remove_selected_shorelines(dates, satellites)
 
     def add_extracted_shoreline(
