@@ -112,30 +112,6 @@ def check_if_subset(subset: set, superset: set, superset_name: str, message: str
             f"Missing keys {subset-superset} from {superset_name}\n{message}</br>Try clicking save settings"
         )
 
-
-# this function does not do what it claims to do
-# def check_if_rois_downloaded(roi_settings: dict, roi_ids: list,data_path:str="/data"):
-#     """
-#     Check if all ROIs have been downloaded based on the ROI settings and IDs.
-
-#     Args:
-#     roi_settings (dict): The settings for the ROIs.
-#     roi_ids (list): The list of ROI IDs.
-
-#     Raises:
-#     FileNotFoundError: If not all ROIs have been downloaded.
-#     """
-#     missing_dirs = {}
-#     # Check if each ROI selected has been downloaded to the location specified by the config.json (roi settings are derived from this)
-#     for roi_id in roi_ids:
-#         # check if roi_id directory exists at location specified by filepath in roi_settings
-#         if common.were_rois_downloaded(roi_settings, roi_ids) == False:
-#             logger.error(f"{roi_id} directory does not exist")
-#             missing_dirs[roi_id] = roi_settings[roi_id]["sitename"]
-#     # if any of the ROIs were not found in the data dir then raise an exception
-#     check_if_dirs_missing(missing_dirs,data_path) 
-
-
 def can_feature_save_to_file(feature, feature_type: str = ""):
     """
     Check if a feature can be saved to a file, and raise a ValueError if it cannot.
@@ -392,15 +368,6 @@ def handle_exception(error:Exception, row: "ipywidgets.HBox", title: str = None,
             error_message = str(error)
         logger.error(f"{error_message}")
         launch_error_box(row, title="Error", msg=error_message)
-
-
-# def handle_warning(warning, row: "ipywidgets.HBox", title: str = None, msg: str = None):
-#     error_message = f"{warning}"
-#     logger.error(f"{traceback.format_exc()}")
-#     if isinstance(warning, exceptions.Object_Not_Found):
-#         error_message = str(warning)
-#     logger.error(f"{error_message}")
-#     launch_error_box(row, title="Error", msg=error_message)
 
 
 def handle_bbox_error(error_msg: Union[exceptions.BboxTooLargeError, exceptions.BboxTooSmallError], row: "ipywidgets.HBox"):
