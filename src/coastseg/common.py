@@ -10,7 +10,6 @@ import shutil
 import string
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-from sysconfig import get_python_version
 
 # Third-party imports
 import geopandas as gpd
@@ -3238,9 +3237,9 @@ def check_unique_ids(data: gpd.GeoDataFrame) -> bool:
 
 def preprocess_geodataframe(
     data: gpd.GeoDataFrame = gpd.GeoDataFrame(),
-    columns_to_keep: List[str] = None,
+    columns_to_keep: Optional[List[str]] = None,
     create_ids: bool = True,
-    output_crs: str = None,
+    output_crs: str = "",
 ) -> gpd.GeoDataFrame:
     """
     This function preprocesses a GeoDataFrame. It performs several transformations:
@@ -3627,12 +3626,12 @@ def set_crs_or_initialize_empty(gdf: gpd.GeoDataFrame, epsg_code: str):
 
 def create_config_gdf(
     rois_gdf: gpd.GeoDataFrame,
-    shorelines_gdf: gpd.GeoDataFrame = None,
-    transects_gdf: gpd.GeoDataFrame = None,
-    bbox_gdf: gpd.GeoDataFrame = None,
-    epsg_code: int = None,
-    shoreline_extraction_area_gdf: gpd.GeoDataFrame = None,
-) -> gpd.GeoDataFrame:
+    shorelines_gdf: Optional[gpd.GeoDataFrame] = None,
+    transects_gdf: Optional[gpd.GeoDataFrame] = None,
+    bbox_gdf: Optional[gpd.GeoDataFrame] = None,
+    epsg_code: Optional[int] = None,
+    shoreline_extraction_area_gdf: Optional[gpd.GeoDataFrame] = None,
+) -> Optional[gpd.GeoDataFrame]:
     """
     Create a concatenated GeoDataFrame from provided GeoDataFrames with a consistent CRS.
 
