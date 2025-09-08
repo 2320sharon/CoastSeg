@@ -1,7 +1,9 @@
 # Standard library imports
+import os
 import collections
+import collections.abc
 import logging
-from typing import Iterable, Union, List
+from typing import Iterable, Union, List, Optional
 import datetime
 
 # Internal dependencies imports
@@ -28,8 +30,13 @@ class ROI(Feature):
 
     LAYER_NAME = "ROIs"
     SELECTED_LAYER_NAME = "Selected ROIs"
-    MAX_SIZE = 98000000  # 98km^2 area
-    MIN_SIZE = 0
+    MAX_AREA = 98000000  # 98km^2 area
+    MAX_SIZE = MAX_AREA  # Deprecated: use MAX_AREA. Do not use as a property.
+    MIN_AREA = 0
+    MIN_SIZE = MIN_AREA # Deprecated: use MIN_AREA. Do not use as a property.
+    DEFAULT_FILENAME = "rois.geojson"
+
+    # Note: Do not use a property named MAX_SIZE or MIN_SIZE. Use MAX_AREA and MIN_AREA instead.
 
     @property
     def gdf(self) -> gpd.GeoDataFrame:
@@ -38,13 +45,35 @@ class ROI(Feature):
 
     def __init__(
         self,
-        bbox: gpd.GeoDataFrame = None,
-        shoreline: gpd.GeoDataFrame = None,
-        rois_gdf: gpd.GeoDataFrame = None,
-        square_len_lg: float = 0,
+        bbox: Optional[gpd.GeoDataFrame] = None,
+        shoreline: Optional[gpd.GeoDataFrame] = None,
+        rois_gdf: Optional[gpd.GeoDataFrame] = None,
+        square_len_lg: float = 5000,
         square_len_sm: float = 0,
-        filename: str = None,
+        filename: str = "rois.geojson",
     ):
+        """
+        Initialize a Region of Interest (ROI) object.
+        ROIs are squares used to define specific areas on the map for analysis and processing.
+        Each ROI can have a set of shorelines that were exacted from the imagery captured within its bounds.
+        
+        Note: a single ROI object can contain multiple ROIs.
+
+        Parameters:
+            bbox (Optional[gpd.GeoDataFrame]):
+                The bounding box as a GeoDataFrame. Used to define the spatial extent for ROI generation.
+            shoreline (Optional[gpd.GeoDataFrame]):
+                The shoreline as a GeoDataFrame. Used to ensure ROIs intersect relevant shoreline features.
+            rois_gdf (Optional[gpd.GeoDataFrame]):
+                An existing GeoDataFrame of ROIs. If provided, initialization uses this directly.
+            square_len_lg (float):
+                Sets the side length of the main ROI square, in meters. For example, if set to 1000, each ROI square will be 1000 m x 1000 m.
+            square_len_sm (float):
+                Sets the side length of each small ROI square, in meters. If specified, creates overlapping smaller ROIs in addition to the large ones. For example, if set to 500, each smaller ROI will be 500 m x 500 m, overlapping within the larger ones.
+            filename (str):
+                The filename to use when saving the ROIs. Defaults to "rois.geojson".
+
+        """
         # gdf : geodataframe of ROIs
         self._gdf = gpd.GeoDataFrame()  # Start with empty GeoDataFrame
         # roi_settings : after ROIs have been downloaded holds all download settings
@@ -65,11 +94,11 @@ class ROI(Feature):
 
     def __str__(self):
         # Get column names and their data types
-        col_info = self.gdf.dtypes.apply(lambda x: x.name).to_string()
+        col_info = self._gdf.dtypes.apply(lambda x: x.name).to_string()
         # Get first 5 rows as a string
-        first_rows = self.gdf.head().to_string()
+        first_rows = self._gdf.head().to_string()
         # Get CRS information
-        crs_info = f"CRS: {self.gdf.crs}" if self.gdf.crs else "CRS: None"
+        crs_info = f"CRS: {self._gdf.crs}" if self._gdf.crs else "CRS: None"
         extracted_shoreline_info = ""
         for key in self.extracted_shorelines.keys():
             if hasattr(self.extracted_shorelines[key], "gdf") and (
@@ -83,11 +112,11 @@ class ROI(Feature):
 
     def __repr__(self):
         # Get column names and their data types
-        col_info = self.gdf.dtypes.apply(lambda x: x.name).to_string()
+        col_info = self._gdf.dtypes.apply(lambda x: x.name).to_string()
         # Get first 5 rows as a string
-        first_rows = self.gdf.head().to_string()
+        first_rows = self._gdf.head().to_string()
         # Get CRS information
-        crs_info = f"CRS: {self.gdf.crs}" if self.gdf.crs else "CRS: None"
+        crs_info = f"CRS: {self._gdf.crs}" if self._gdf.crs else "CRS: None"
         extracted_shoreline_info = ""
         for key in self.extracted_shorelines.keys():
             if hasattr(self.extracted_shorelines[key], "gdf") and (
@@ -99,11 +128,43 @@ class ROI(Feature):
                     )
         return f"ROI:\nROI IDs: {self.get_ids()}\nROI IDs with extracted shorelines: {extracted_shoreline_info}\nROI IDs with shoreline transect intersections: {list(self.cross_shore_distances.keys())}\n gdf:\n{crs_info}\nColumns and Data Types:\n{col_info}\n\nFirst 5 Rows:\n{first_rows}"
 
+    def to_file(
+        self,
+        filepath: str = DEFAULT_FILENAME,
+        roi_id: Optional[str] = None,
+        print_mode: bool = False
+    ) -> None:
+        """
+        Save the ROI(s) to a GeoJSON file.
+
+        Parameters:
+            filepath (Optional[str]): The path to save the GeoJSON file. If not provided, defaults to "rois.geojson" in the current directory.
+            roi_id (Optional[str]): If provided, only the ROI with this ID will be saved. Otherwise, all ROIs are saved.
+            print_mode (bool): If True, prints the file path after saving.
+        Raises:
+            ValueError: If filepath is not a directory, or ROI ID is not found in the GeoDataFrame.
+        """
+        # Check GeoDataFrame existence
+        if self._gdf is None or self._gdf.empty:
+            raise ValueError("GeoDataFrame is empty or None. Cannot save ROIs.")
+        
+        # Filter by ROI ID if provided
+        gdf_to_save = self._gdf
+        if roi_id is not None:
+            if "id" not in gdf_to_save.columns or str(roi_id) not in gdf_to_save["id"].astype(str).values:
+                raise ValueError(f"ROI ID '{roi_id}' not found in GeoDataFrame.")
+            gdf_to_save = gdf_to_save.loc[gdf_to_save["id"].astype(str) == str(roi_id)]
+
+        # Save to GeoJSON
+        gdf_to_save.to_file(filepath, driver="GeoJSON")
+        if print_mode:
+            print(f"Saved ROI(s) to {os.path.abspath(filepath)}")
+
     def remove_by_id(
         self, ids_to_drop: list | set | tuple | str | int
     ) -> gpd.GeoDataFrame:
-        if self.gdf.empty or "id" not in self.gdf.columns or ids_to_drop is None:
-            return self.gdf
+        if self._gdf.empty or "id" not in self._gdf.columns or ids_to_drop is None:
+            return self._gdf
         if isinstance(ids_to_drop, (str, int)):
             ids_to_drop = [
                 str(ids_to_drop)
@@ -112,12 +173,12 @@ class ROI(Feature):
         ids_to_drop = set(map(str, ids_to_drop))
         logger.info(f"ids_to_drop from roi: {ids_to_drop}")
         # drop the ids from the geodataframe
-        self.gdf = self.gdf[~self.gdf["id"].astype(str).isin(ids_to_drop)]
+        self._gdf = self._gdf[~self._gdf["id"].astype(str).isin(ids_to_drop)]
         # remove the corresponding extracted shorelines
         for roi_id in ids_to_drop:
             self.remove_extracted_shorelines(roi_id)
 
-        return self.gdf
+        return self._gdf
 
     def _initialize_from_roi_gdf(self, rois_gdf: gpd.GeoDataFrame) -> None:
         """
@@ -162,12 +223,12 @@ class ROI(Feature):
                     min_size=ROI.MIN_SIZE,
                 )
 
-        self.gdf = rois_gdf
+        self._gdf = rois_gdf
 
     def _initialize_from_bbox_and_shoreline(
         self,
-        bbox: gpd.GeoDataFrame,
-        shoreline: gpd.GeoDataFrame,
+        bbox: Optional[gpd.GeoDataFrame],
+        shoreline: Optional[gpd.GeoDataFrame],
         square_len_lg: float,
         square_len_sm: float,
     ) -> None:
@@ -200,7 +261,7 @@ class ROI(Feature):
             logger.error("Invalid square size for ROI")
             raise ValueError("Invalid square size for ROI. Must be greater than 0")
 
-        self.gdf = self.create_geodataframe(
+        self._gdf = self.create_geodataframe(
             bbox, shoreline, square_len_lg, square_len_sm
         )
 
@@ -257,11 +318,13 @@ class ROI(Feature):
         logger.info(f"Saving roi_settings {roi_settings}")
         self.roi_settings = roi_settings
 
-    def update_roi_settings(self, new_settings: dict) -> None:
+    def update_roi_settings(self, new_settings: dict) -> dict:
         """Updates the ROI settings dictionary with the specified values.
-
         Args:
             new_settings (dict): A dictionary of new settings for the ROI.
+
+        Returns:
+            dict: The updated ROI settings dictionary.
         """
         if new_settings is None:
             raise ValueError("new_settings cannot be None")
@@ -286,9 +349,9 @@ class ROI(Feature):
 
     def get_ids(self) -> list:
         """Returns list of all roi ids"""
-        if "id" not in self.gdf.columns:
+        if "id" not in self._gdf.columns:
             return []
-        return self.gdf["id"].tolist()
+        return self._gdf["id"].tolist()
 
     def get_ids_with_extracted_shorelines(self) -> Union[None, List[str]]:
         """Returns list of roi ids that had extracted shorelines"""
@@ -315,13 +378,13 @@ class ROI(Feature):
         if drop_ids:
             print("Dropping ROIs that are an invalid size ")
             logger.info(f"Dropping ROIs that are an invalid size {drop_ids}")
-            gdf.drop(index=drop_ids, axis=0, inplace=True)
+            gdf.drop(index=list(drop_ids), axis=0, inplace=True)
         # Combine the two GeoDataFrames and drop duplicates from columns "id" and "geometry"
-        combined_gdf = pd.concat([self.gdf, gdf], axis=0).drop_duplicates(
+        combined_gdf = pd.concat([self._gdf, gdf], axis=0).drop_duplicates(
             subset=["id", "geometry"]
         )
         # Convert the combined DataFrame back to a GeoDataFrame
-        self.gdf = gpd.GeoDataFrame(combined_gdf, crs=self.gdf.crs)
+        self._gdf = gpd.GeoDataFrame(combined_gdf, crs=self._gdf.crs)
         return self
 
     def get_all_extracted_shorelines(self) -> dict:
@@ -335,7 +398,7 @@ class ROI(Feature):
         return self.extracted_shorelines
 
     def remove_extracted_shorelines(
-        self, roi_id: str = None, remove_all: bool = False
+        self, roi_id: Optional[str] = None, remove_all: bool = False
     ) -> None:
         """Removes the extracted shoreline for the specified ROI ID, or all extracted shorelines.
 
@@ -363,7 +426,8 @@ class ROI(Feature):
         Returns:
             None
         """
-        if roi_id in self.get_ids_with_extracted_shorelines():
+        ids_with_shorelines = self.get_ids_with_extracted_shorelines() or []
+        if roi_id in ids_with_shorelines:
             extracted_shoreline = self.get_extracted_shoreline(roi_id)
             if extracted_shoreline is not None and hasattr(extracted_shoreline, "remove_selected_shorelines"):
                 extracted_shoreline.remove_selected_shorelines(dates, satellites)
@@ -411,20 +475,25 @@ class ROI(Feature):
             roi_id (str): The ID of the ROI to associate the cross_shore_distance dictionary
         """
         self.cross_shore_distances[roi_id] = cross_shore_distance
-        # logger.info(f"Newly added cross_shore_distance: {cross_shore_distance}")
 
     def get_all_cross_shore_distances(
         self,
-    ) -> None:
+    ) -> dict:
         """Returns a dictionary of all cross shore distances
 
         Returns:
             dict: A dictionary containing all cross shore distances, indexed by ROI ID.
+
+        Example:
+        {
+            "roi_1": {"distance": 100, "geometry": "LINESTRING(...)"},
+            "roi_2": {"distance": 200, "geometry": "LINESTRING(...)"},
+        }
         """
         return self.cross_shore_distances
 
     def remove_cross_shore_distance(
-        self, roi_id: str = None, remove_all: bool = False
+        self, roi_id: Optional[str] = None, remove_all: bool = False
     ) -> None:
         """Removes the cross shore distance for the specified ROI ID, or all  cross shore distances.
 
@@ -441,14 +510,18 @@ class ROI(Feature):
         self,
         bbox: gpd.GeoDataFrame,
         shoreline: gpd.GeoDataFrame,
-        large_length: float = 7500,
-        small_length: float = 5000,
+        large_length: int | float = 7500,
+        small_length: int | float = 5000,
         crs: str = "EPSG:4326",
     ) -> gpd.GeoDataFrame:
         """Generates series of overlapping ROIS along shoreline on map using fishnet method
         with the crs specified by crs
         Args:
 
+            bbox (gpd.GeoDataFrame): The bounding box GeoDataFrame.
+            shoreline (gpd.GeoDataFrame): The shoreline GeoDataFrame.
+            large_length (int | float, optional): The side length of the large fishnet squares. Defaults to 7500.
+            small_length (int | float, optional): The side length of the small fishnet squares. Defaults to 5000.
             crs (str, optional): coordinate reference system string. Defaults to 'EPSG:4326'.
 
         Returns:
@@ -458,17 +531,13 @@ class ROI(Feature):
         # Create a single set of fishnets with square size = small and/or large side lengths that overlap each other
         # logger.info(f"Small Length: {small_length}  Large Length: {large_length}")
         if small_length == 0 or large_length == 0:
-            # logger.info("Creating one fishnet")
             # create a fishnet geodataframe with square size of either large_length or small_length
             fishnet_size = large_length if large_length != 0 else small_length
-            fishnet_intersect_gdf = self.get_fishnet_gdf(bbox, shoreline, fishnet_size)
+            fishnet_intersect_gdf = self.get_fishnet_gdf(bbox, shoreline, int(fishnet_size))
         else:
-            # logger.info("Creating two fishnets")
             # Create two fishnets, one big (2000m) and one small(1500m) so they overlap each other
             fishnet_gpd_large = self.get_fishnet_gdf(bbox, shoreline, large_length)
             fishnet_gpd_small = self.get_fishnet_gdf(bbox, shoreline, small_length)
-            # logger.info(f"fishnet_gpd_large : {fishnet_gpd_large}")
-            # logger.info(f"fishnet_gpd_small : {fishnet_gpd_small}")
             # Concat the fishnets together to create one overlapping set of rois
             fishnet_intersect_gdf = gpd.GeoDataFrame(
                 pd.concat([fishnet_gpd_large, fishnet_gpd_small], ignore_index=True)
@@ -487,7 +556,6 @@ class ROI(Feature):
         fishnet_intersect_gdf = common.create_unique_ids(
             fishnet_intersect_gdf, prefix_length=3
         )
-        # logger.info(f"Created fishnet_intersect_gdf: {fishnet_intersect_gdf}")
         return fishnet_intersect_gdf
 
     def style_layer(self, geojson: dict, layer_name: str) -> GeoJSON:
@@ -565,21 +633,29 @@ class ROI(Feature):
     def create_fishnet(
         self,
         bbox_gdf: gpd.GeoDataFrame,
-        input_espg: str,
-        output_epsg: str,
+        input_espg: Union[str, int],
+        output_epsg: Union[str, int],
         square_size: float = 1000,
     ) -> gpd.GeoDataFrame:
         """Returns a fishnet of ROIs that intersects the bounding box specified by bbox_gdf where each ROI(square) has a side length = square size(meters)
 
         Args:
-            bbox_gdf (gpd.GeoDataFrame): Bounding box that fishnet intersects.
+            bbox_gdf (gpd.GeoDataFrame): Bounding box that fishnet intersects. 
             input_espg (str): espg string that bbox_gdf is projected in
             output_epsg (str): espg to convert the fishnet of ROIs to.
-            square_size (int, optional): Size of each square in fishnet(meters). Defaults to 1000.
+            square_size (int, optional): Size of the side length of each square in fishnet(meters). Defaults to 1000.
 
         Returns:
-            gpd.GeoDataFrame: fishnet of ROIs that intersects bbox_gdf. Each ROI has a side lenth = sqaure_size
+            gpd.GeoDataFrame: fishnet of ROIs that intersects bbox_gdf. Each ROI has a side length = square_size
         """
+        print(f"bbox_gdf.crs create fishnet: {bbox_gdf.crs}")
+
+        if bbox_gdf.crs is None:
+            raise ValueError("Input GeoDataFrame must have a valid CRS.")
+        if bbox_gdf.crs != input_espg:
+            print(f"Converting bbox_gdf from {bbox_gdf.crs} to {input_espg}")
+            bbox_gdf = bbox_gdf.to_crs(input_espg)
+
         minX, minY, maxX, maxY = bbox_gdf.total_bounds
         # Create a fishnet where each square has side length = square size
         x, y = (minX, minY)
@@ -613,7 +689,7 @@ class ROI(Feature):
         self,
         bbox_gdf: gpd.GeoDataFrame,
         shoreline_gdf: gpd.GeoDataFrame,
-        square_length: int = 1000,
+        square_length: int | float = 1000,
     ) -> gpd.GeoDataFrame:
         """
         Returns fishnet where it intersects the shoreline
