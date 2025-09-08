@@ -8,7 +8,7 @@ import logging
 import glob
 from datetime import datetime
 from collections import defaultdict
-from typing import Any, Collection, Dict, List, Optional, Tuple, Union
+from typing import Any, Collection, Dict, List, Optional, Tuple, Union,Callable
 import traceback
 from pathlib import Path
 
@@ -37,6 +37,7 @@ from coastseg import geodata_processing
 from coastseg import tide_correction
 from coastseg import core_utilities
 from coastseg.settings_manager import SettingsManager, SettingsError
+from coastseg.factory import FeatureType
 
 # Internal/Local imports: modules
 from coastseg import (
@@ -238,11 +239,6 @@ class CoastSeg_Map:
         self.map = None
         self.draw_control = None
         self.warning_box = None
-        self.roi_html = None
-        self.roi_box = None
-        self.roi_widget = None
-        self.feature_html = None
-        self.hover_box = None
         # Assume that the user is not drawing a reference buffer
         self.drawing_shoreline_extraction_area = False
         # Optional: a user drawn polygon only keep extracted shorelines within this polygon
@@ -250,8 +246,9 @@ class CoastSeg_Map:
 
         self.session_name = ""
 
-        # Factory for creating map objects
-        self.factory = factory.Factory()
+        # Factory for creating map objects - use the new minimal factory functions
+        # No need to store a factory instance anymore
+        # self.factory = factory.Factory()  # Removed heavyweight factory
 
         # Observables
         self.id_container = IDContainer(ids=[])
@@ -268,6 +265,21 @@ class CoastSeg_Map:
             self._init_map_components()
             # Warning and information boxes that appear on top of the map
             self._init_info_boxes()
+
+    #@todo handle when features are loaded remove and stuff
+    def feature_event_handler(self, event, feature_type):
+        if event == 'loaded':
+            if feature_type == FeatureType.ROIS:
+                # Clear bounding box draw controls when ROIs are loaded
+                if self.draw_control is not None:
+                    self.draw_control.clear()
+            elif feature_type == FeatureType.BBOX:
+                # Optionally clear ROI draw controls, etc.
+                pass
+            # Add more feature_type cases as needed
+        elif event == 'removed':
+            # Optionally handle draw control updates on removal
+            pass
 
     def print_features(self):
         """
@@ -339,23 +351,22 @@ class CoastSeg_Map:
         Returns:
             None
         """
+        self.roi_html = HTML("""""") # popup on the side of the map to view the ROI's properties
+        self.feature_html = HTML("""""") # popup on the side of the map to view the feature's properties
         self.warning_box = HBox([], layout=Layout(height="242px"))
         self.warning_widget = WidgetControl(widget=self.warning_box, position="topleft")
         self.map.add(self.warning_widget)
 
-        self.roi_html = HTML("""""")
-        self.roi_box = common.create_hover_box(
+        
+        roi_box = common.create_hover_box(
             title="ROI", feature_html=self.roi_html, default_msg="Hover over a ROI"
         )
-        self.roi_widget = WidgetControl(widget=self.roi_box, position="topright")
-        self.map.add(self.roi_widget)
+        self.map.add(WidgetControl(widget=roi_box, position="topright"))
 
-        self.feature_html = HTML("""""")
-        self.hover_box = common.create_hover_box(
+        hover_box = common.create_hover_box(
             title="Feature", feature_html=self.feature_html
         )
-        self.hover_widget = WidgetControl(widget=self.hover_box, position="topright")
-        self.map.add(self.hover_widget)
+        self.map.add(WidgetControl(widget=hover_box, position="topright"))
 
     def __str__(self):
         return f"CoastSeg: roi={self.rois}\n shoreline={self.shoreline}\n  transects={self.transects}\n bbox={self.bbox}"
@@ -1585,7 +1596,6 @@ class CoastSeg_Map:
         feature_y = properties.get("feature_y", "unknown")
         nearest_x = properties.get("nearest_x", "unknown")
         nearest_y = properties.get("nearest_y", "unknown")
-        variables = [distance, feature_x, feature_y, nearest_x, nearest_y]
 
         def is_unknown_or_None_or_nan(value):
             if isinstance(value, str):
@@ -2467,10 +2477,7 @@ class CoastSeg_Map:
         if self.draw_control is not None:
             self.draw_control.clear()
 
-        if self.map is not None:
-            existing_layer = self.map.find_layer(Bounding_Box.LAYER_NAME)
-            if existing_layer is not None:
-                self.map.remove_layer(existing_layer)
+        self.remove_layer_by_name(Bounding_Box.LAYER_NAME)
         self.bbox = None
 
     def remove_shoreline_extraction_area(self):
@@ -2488,10 +2495,7 @@ class CoastSeg_Map:
         if self.draw_control is not None:
             self.draw_control.clear()
 
-        if self.map is not None:
-            existing_layer = self.map.find_layer(Shoreline_Extraction_Area.LAYER_NAME)
-            if existing_layer is not None:
-                self.map.remove_layer(existing_layer)
+        self.remove_layer_by_name(Shoreline_Extraction_Area.LAYER_NAME)
         self.shoreline_extraction_area = None
 
     def remove_layer_by_name(self, layer_name: str):
@@ -2509,6 +2513,16 @@ class CoastSeg_Map:
         existing_layer = self.map.find_layer(layer_name)
         if existing_layer is not None:
             self.map.remove(existing_layer)
+
+    def zoom_to_bounds(self,feature):
+        """
+        If the map is being used then zoom to the bounds with the feature's gdf.
+        """
+        if self.map is not None:
+            if hasattr(feature, "gdf"):
+                if hasattr(feature.gdf, "total_bounds"):
+                    bounds = feature.gdf.total_bounds
+                    self.map.zoom_to_bounds(bounds)
 
     def remove_shoreline(self):
         del self.shoreline
@@ -2549,9 +2563,8 @@ class CoastSeg_Map:
     def remove_all_rois(self) -> None:
         """Removes all the unselected rois from the map"""
         # Remove the selected and unselected rois
-        if self.map is not None:
-            self.remove_layer_by_name(ROI.SELECTED_LAYER_NAME)
-            self.remove_layer_by_name(ROI.LAYER_NAME)
+        self.remove_layer_by_name(ROI.SELECTED_LAYER_NAME)
+        self.remove_layer_by_name(ROI.LAYER_NAME)
         # clear all the ids from the selected set
         self.selected_set = set()
         del self.rois
@@ -2561,9 +2574,8 @@ class CoastSeg_Map:
         """Removes all the unselected shorelines from the map"""
         logger.info("Removing selected shorelines from map")
         # Remove the selected and unselected rois
-        if self.map is not None:
-            self.remove_layer_by_name(SELECTED_LAYER_NAME)
-            self.remove_layer_by_name(Shoreline.LAYER_NAME)
+        self.remove_layer_by_name(SELECTED_LAYER_NAME)
+        self.remove_layer_by_name(Shoreline.LAYER_NAME)
         # delete selected ROIs from dataframe
         if self.shoreline:
             self.shoreline.remove_by_id(self.selected_shorelines_set)
@@ -2578,9 +2590,8 @@ class CoastSeg_Map:
     def remove_selected_rois(self) -> None:
         """Removes all the unselected rois from the map"""
         # Remove the selected and unselected rois
-        if self.map is not None:
-            self.remove_layer_by_name(ROI.SELECTED_LAYER_NAME)
-            self.remove_layer_by_name(ROI.LAYER_NAME)
+        self.remove_layer_by_name(ROI.SELECTED_LAYER_NAME)
+        self.remove_layer_by_name(ROI.LAYER_NAME)
         # delete selected ROIs from dataframe
         if self.rois:
             self.rois.remove_by_id(self.selected_set)
@@ -2825,7 +2836,6 @@ class CoastSeg_Map:
             file (str, optional): geojson file containing feature. Defaults to "".
             gdf (gpd.GeoDataFrame, optional): GeoDataFrame containing feature geometry. Defaults to None.
         """
-        new_feature = None
         # create the feature based on the feature name either from file, gdf or load a default feature(if available)
         new_feature = self._get_feature(feature_name, file, gdf, **kwargs)
 
@@ -2838,7 +2848,7 @@ class CoastSeg_Map:
             )
 
     def _get_feature(
-        self, feature_name: str, file: str = "", gdf: gpd.GeoDataFrame = None, **kwargs
+        self, feature_name: str, file: str = "", gdf: Optional[gpd.GeoDataFrame] = None, **kwargs
     ) -> Any:
         """
         Retrieves a feature based on the given feature name, file path, or GeoDataFrame.
@@ -2866,31 +2876,8 @@ class CoastSeg_Map:
             else:
                 return self.load_feature_from_gdf(feature_name, gdf, **kwargs)
         else:
-            # if gdf is None then create the feature from scratch by loading a default
-            return self.factory.make_feature(self, feature_name, gdf, **kwargs)
-
-    def make_feature(
-        self, feature_name: str, gdf: gpd.GeoDataFrame = None, **kwargs
-    ) -> Feature:
-        """Creates a new feature of type feature_name from a given GeoDataFrame.
-        If no gdf is provided then a default feature is created if the feature_name is "rois" "shoreline" or "transects"
-
-        Args:
-            feature_name (str): name of feature must be one of the following
-            "shoreline","transects","bbox","rois"
-            gdf (gpd.GeoDataFrame): GeoDataFrame containing feature geometry optional. Defaults to None.
-
-
-        Returns:
-            Feature: new feature created from gdf.
-        """
-        # Ensure the gdf is not empty
-        if gdf is not None and gdf.empty:
-            logger.info(f"No {feature_name} was empty")
-            return
-        # create the feature and add it to the class
-        new_feature = self.factory.make_feature(self, feature_name, gdf, **kwargs)
-        return new_feature
+            # if gdf is None then create the feature from scratch using the new minimal factory
+            return factory.create_feature_from_string(feature_name, gdf, **kwargs)
 
     def load_feature_from_file(self, feature_name: str, file: str, **kwargs) -> Feature:
         """Loads feature of type feature_name  from a file and creates it as a new feature.
@@ -2913,8 +2900,8 @@ class CoastSeg_Map:
             logger.info(f"No {feature_name} was empty or None")
             return
 
-        # create the feature and add it to the class
-        new_feature = self.factory.make_feature(self, feature_name, gdf, **kwargs)
+        # create the feature and add it to the class using the new minimal factory
+        new_feature = factory.create_feature_from_string(feature_name, gdf, **kwargs)
         return new_feature
 
     def load_feature_from_gdf(
@@ -2936,8 +2923,8 @@ class CoastSeg_Map:
             logger.info(f"No {feature_name} was empty")
             return
 
-        # create the feature and add it to the class
-        new_feature = self.factory.make_feature(self, feature_name, gdf, **kwargs)
+        # create the feature and add it to the class using the new minimal factory
+        new_feature = factory.create_feature_from_string(feature_name, gdf, **kwargs)
         return new_feature
 
     def add_feature_on_map(
@@ -2945,7 +2932,6 @@ class CoastSeg_Map:
         new_feature,
         feature_name: str,
         layer_name: str = "",
-        zoom_to_bounds=False,
         **kwargs,
     ) -> None:
         """
@@ -2968,15 +2954,7 @@ class CoastSeg_Map:
         # if layer name is not given use the layer name of the feature
         if not layer_name and hasattr(new_feature, "LAYER_NAME"):
             layer_name = new_feature.LAYER_NAME
-        # if the feature has a GeoDataFrame zoom the map to the bounds of the feature
-        # if zoom_to_bounds and hasattr(new_feature, "gdf"):
-        #     bounds = new_feature.gdf.total_bounds
-        #     self.map.zoom_to_bounds(bounds)
-        if self.map is not None:
-            if hasattr(new_feature, "gdf"):
-                if hasattr(new_feature.gdf, "total_bounds"):
-                    bounds = new_feature.gdf.total_bounds
-                    self.map.zoom_to_bounds(bounds)
+        self.zoom_to_bounds(new_feature)
         self.load_on_map(new_feature, layer_name, on_hover, on_click)
 
     def get_on_click_handler(self, feature_name: str) -> callable:
@@ -2996,9 +2974,14 @@ class CoastSeg_Map:
             on_click = self.shoreline_onclick_handler
         return on_click
 
-    def get_on_hover_handler(self, feature_name: str) -> callable:
+
+    def get_on_hover_handler(self, feature_name: str) -> Optional[Callable]:
         """
         Returns a callable function that handles mouse hover events for a given feature.
+        Currently, custom handlers are defined for specific feature types:
+        - Shoreline: self.update_shoreline_html
+        - Transect: self.update_transects_html
+        - ROI: self.update_roi_html
 
         Args:
         - feature_name (str): A string representing the name of the feature for which the hover handler needs to be returned.
@@ -3033,7 +3016,7 @@ class CoastSeg_Map:
             layer_name, new_layer, on_hover=on_hover, on_click=on_click
         )
 
-    def create_layer(self, feature: Feature, layer_name: str) -> GeoJSON:
+    def create_layer(self, feature: Feature, layer_name: str) -> Optional[GeoJSON]:
         """
         Creates a layer for the map using the given feature and layer name.
 
@@ -3042,13 +3025,14 @@ class CoastSeg_Map:
             layer_name (str): The name of the layer.
 
         Returns:
-            GeoJSON: The styled layer in GeoJSON format.
+            GeoJSON (optional): The styled layer in GeoJSON format.
         """
+        # @todo refactor the feature class so it has the gdf property
         if not hasattr(feature, "gdf"):
             logger.warning("Cannot add an empty GeoDataFrame layer to the map.")
             print("Cannot add an empty layer to the map.")
             return None
-        if feature.gdf is None:
+        if feature.gdf is None: 
             logger.warning("Cannot add an empty GeoDataFrame layer to the map.")
             print("Cannot add an empty layer to the map.")
             return None
@@ -3061,7 +3045,7 @@ class CoastSeg_Map:
         return styled_layer
 
     def geojson_onclick_handler(
-        self, event: str = None, id: str = None, properties: dict = None, **args
+        self, event: Optional[str] = None, id: Optional[str] = None, properties: dict = {}, **args
     ):
         """On click handler for when unselected geojson is clicked.
 
@@ -3073,7 +3057,7 @@ class CoastSeg_Map:
             id (NoneType, optional):  Defaults to None.
             properties (dict, optional): geojson dict for clicked geojson. Defaults to None.
         """
-        if properties is None:
+        if not properties:
             return
         # Add id of clicked ROI to selected_set
         self.selected_set.add(str(properties["id"]))
@@ -3095,9 +3079,9 @@ class CoastSeg_Map:
 
     def shoreline_onclick_handler(
         self,
-        event: str = None,
-        id: int = None,
-        properties: dict = None,
+        event: Optional[str] = None,
+        id: Optional[int] = None,
+        properties: Optional[dict] = None,
         **args,
     ):
         """On click handler for when unselected geojson is clicked.
@@ -3110,7 +3094,7 @@ class CoastSeg_Map:
             id (NoneType, optional):  Defaults to None.
             properties (dict, optional): geojson dict for clicked geojson. Defaults to None.
         """
-        if properties is None:
+        if not properties:
             return
         # Add id of clicked shape to selected_set
         self.selected_shorelines_set.add(str(properties["id"]))
@@ -3131,7 +3115,7 @@ class CoastSeg_Map:
         )
 
     def selected_shoreline_onclick_handler(
-        self, event: str = None, id: str = None, properties: dict = None, **args
+        self, event: Optional[str] = None, id: Optional[str] = None, properties: Optional[dict] = None, **args
     ):
         """On click handler for selected geojson layer.
 
@@ -3143,9 +3127,8 @@ class CoastSeg_Map:
             id (NoneType, optional):  Defaults to None.
             properties (dict, optional): geojson dict for clicked selected geojson. Defaults to None.
         """
-        if properties is None:
+        if not properties:
             return
-
         # Remove the current layers cid from selected set
         self.selected_shorelines_set.remove(str(properties["id"]))
         self.remove_layer_by_name(SELECTED_LAYER_NAME)
@@ -3165,7 +3148,7 @@ class CoastSeg_Map:
         )
 
     def selected_onclick_handler(
-        self, event: str = None, id: str = None, properties: dict = None, **args
+        self, event: Optional[str] = None, id: Optional[str] = None, properties: Optional[dict] = None, **args
     ):
         """On click handler for selected geojson layer.
 
@@ -3177,7 +3160,7 @@ class CoastSeg_Map:
             id (NoneType, optional):  Defaults to None.
             properties (dict, optional): geojson dict for clicked selected geojson. Defaults to None.
         """
-        if properties is None:
+        if not properties:
             return
         # Remove the current layers cid from selected set
         self.selected_set.remove(properties["id"])
