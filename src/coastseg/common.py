@@ -570,20 +570,27 @@ def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict
     Creates a new configuration dictionary by combining the given settings and ROI settings.
 
     Arguments:
-    -----------
-    roi_ids: list
-        A list of ROI IDs to include in the new configuration.
-    settings: dict
-        A dictionary containing general settings for the configuration.
-    roi_settings: dict
-        A dictionary containing ROI-specific settings for the configuration.
+    roi_ids (list): A list of ROI IDs to include in the new configuration.
+    settings (dict): A dictionary containing general settings for the configuration.
+    roi_settings (dict): A dictionary containing ROI-specific settings for the configuration.
         example:
-        {'example_roi_id': {'dates':[]}
+        {'example_roi_id': {'dates':[]}}
 
     Returns:
-    -----------
     new_config: dict
         A dictionary containing the combined settings and ROI settings, as well as the ROI IDs.
+    
+    Example:
+    >>> roi_settings = {'roi1': {'dates': ['2021-01-01', '2021-12-31'], 'sitename': 'SiteA', 'polygon': [[...]], 'roi_id': 'roi1', 'sat_list': ['L8', 'S2'], 'landsat_collection': 'LC08'},
+    >>> settings = {'cloud_thresh': 20, 'min_beach_area': 500}
+    >>> roi_ids = ['roi1']
+    >>> new_config = create_new_config(roi_ids, settings, roi_settings)
+    >>> print(new_config)
+    {
+        'settings': {'cloud_thresh': 20, 'min_beach_area': 500},
+        'roi_ids': ['roi1'],
+        'roi1': {'dates': ['2021-01-01', '2021-12-31'], 'sitename': 'SiteA', 'polygon': [[...]], 'roi_id': 'roi1', 'sat_list': ['L8', 'S2'], 'landsat_collection': 'LC08'}
+    }   
     """
     new_config = {
         "settings": {},
@@ -597,7 +604,6 @@ def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict
     new_config["roi_ids"].extend(roi_ids)
     new_config["settings"] = settings
     return new_config
-
 
 def update_transect_time_series(
     filepaths: List[str], dates_list: List[datetime]
