@@ -627,14 +627,30 @@ def extract_dates_and_sats(
     selected_items: List[str],
 ) -> Tuple[List[datetime], List[str]]:
     """
-    Extract the dates and satellite names from a list of selected items.
+    Parse a list of strings containing satellite names and timestamps, and return
+    separate lists of UTC-aware datetimes and satellite identifiers.
+
+    Each input string must follow the format:
+        "<satellite>_<YYYY-MM-DD HH:MM:SS>"
+
+    Example: 
+    >>> extract_dates_and_sats(["L8_2021-01-01 00:00:00", "S2_2021-02-01 00:00:00"])
+    (
+        [
+            datetime.datetime(2021, 1, 1, 0, 0, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2021, 2, 1, 0, 0, tzinfo=datetime.timezone.utc)
+        ],
+        ["L8", "S2"]
+    )
 
     Args:
-        selected_items: A list of strings, where each string is in the format "satname_dates".
+        selected_items (List[str]) : List of strings, where each string encodes a satellite name and a UTC timestamp separated by an underscore. Example: "L8_2021-01-01 00:00:00".
 
     Returns:
-        A tuple of two lists: the first list contains datetime objects corresponding to the dates in the selected items,
-        and the second list contains the satellite names in the selected items.
+        dates_list : list of datetime.datetime
+            Datetime objects parsed from the input strings, each set to UTC timezone corresponding to the dates extracted from the input strings.
+        sat_list : list of str
+            Satellite identifiers extracted from the input strings corresponding to the satellite names.
     """
     dates_list = []
     sat_list = []
