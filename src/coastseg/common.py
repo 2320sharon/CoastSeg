@@ -9,10 +9,11 @@ import re
 import shutil
 import string
 from datetime import datetime, timezone
-from typing import Mapping, Hashable, Any, Callable, Dict, List, Optional, Set, Tuple, Union,Sequence
+from typing import Iterable, Hashable, Any, Callable, Dict, List, Optional, Set, Tuple, Union,Sequence
 from sysconfig import get_python_version
 
 # Third-party imports
+from pyproj import CRS
 import geopandas as gpd
 import numpy as np
 import pandas as pd
@@ -238,7 +239,7 @@ def delete_unmatched_rows(
 def filter_extract_dict(
     gdf: gpd.GeoDataFrame,
     extracted_shorelines_dict: Dict[str, Union[List[np.ndarray], np.ndarray]],
-    output_crs: str,
+    output_crs: Optional[Union[str, int, CRS]],
 ) -> Dict[str, Union[List[np.ndarray], np.ndarray]]:
     """
     Filters and updates the extracted shorelines dictionary based on the selected indexes from a GeoDataFrame.
@@ -254,10 +255,10 @@ def filter_extract_dict(
     sats = np.array(gdf.satname)
     dates = np.array(pd.to_datetime(gdf["date"]).dt.tz_localize("UTC"))
     selected_indexes = get_selected_indexes(
-        extracted_shorelines_dict, dates_list=dates, sat_list=sats
+        extracted_shorelines_dict, dates_list=dates, sat_list=sats # type: ignore
     )
     # convert gdf to the output epsg otherwise output dict will not be in correct crs
-    projected_gdf = gdf.to_crs(output_crs)
+    projected_gdf = gdf.to_crs(output_crs) # type: ignore
 
     # update the extracted_shorelines_dict with the selected indexes
     for idx in selected_indexes:
@@ -944,8 +945,8 @@ def remove_matching_rows(gdf: gpd.GeoDataFrame, **kwargs) -> gpd.GeoDataFrame:
 
 def get_selected_indexes(
     data_dict: Dict[Hashable, Union[Sequence[Any], pd.Series]],
-    dates_list: Sequence[Union[str, pd.Timestamp, datetime]],
-    sat_list: Sequence[str],
+    dates_list: Iterable[Union[str, pd.Timestamp]],
+    sat_list: Iterable[Union[str, pd.Timestamp]],
 ) -> List[int]:
     """
     Retrieve indexes of rows in a dictionary that match specified dates and satellite names.
@@ -2453,7 +2454,7 @@ def filter_points_outside_transects(
 def convert_points_to_linestrings(
     gdf,
     group_col="date",
-    output_crs="epsg:4326",
+    output_crs: Optional[Union[str, int, CRS]] = "epsg:4326",
 ) -> gpd.GeoDataFrame:
     """
     Convert points to LineStrings.
@@ -3210,9 +3211,9 @@ def check_unique_ids(data: gpd.GeoDataFrame) -> bool:
 
 def preprocess_geodataframe(
     data: gpd.GeoDataFrame = gpd.GeoDataFrame(),
-    columns_to_keep: List[str] = None,
+    columns_to_keep: Optional[Iterable[str]] = None,
     create_ids: bool = True,
-    output_crs: str = None,
+    output_crs: Optional[Union[str, int, CRS]] = None,
 ) -> gpd.GeoDataFrame:
     """
     This function preprocesses a GeoDataFrame. It performs several transformations:
@@ -3226,7 +3227,7 @@ def preprocess_geodataframe(
     Args:
         data (gpd.GeoDataFrame, optional): The input GeoDataFrame to be preprocessed.
             Defaults to an empty GeoDataFrame.
-        columns_to_keep (List[str], optional): The list of column names to retain in the preprocessed DataFrame.
+        columns_to_keep (Iterable[str], optional): The list of column names to retain in the preprocessed DataFrame.
             Defaults to None, in which case all columns are kept.
         create_ids (bool, optional): Flag to decide whether to create 'id' column if it doesn't exist.
             Defaults to True.
