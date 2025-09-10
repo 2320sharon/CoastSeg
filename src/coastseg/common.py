@@ -9,7 +9,7 @@ import re
 import shutil
 import string
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
+from typing import Mapping, Hashable, Any, Callable, Dict, List, Optional, Set, Tuple, Union,Sequence
 from sysconfig import get_python_version
 
 # Third-party imports
@@ -47,24 +47,21 @@ def initialize_gee(
     project: str = "",
     force: bool = False,
     **kwargs,
-):
+) -> None:
     """
-    Initialize Google Earth Engine (GEE). If initialization fails due to authentication issues,prompt the user to authenticate and try again.
+    Initialize Google Earth Engine (GEE). If initialization fails due to authentication issues, prompt the user to authenticate and try again.
 
-    Arguments:
-    -----------
-    - auth_mode (str, optional): The authentication mode
-      'gcloud' and 'colab' methods are not supported.
-       See https://developers.google.com/earth-engine/guides/auth for more details.
-    - print_mode (bool, optional): Whether to print initialization messages. Defaults to True.
-    - auth_args (dict, optional): Additional arguments for authentication. Defaults to {}.
-    - project (str, optional): The project to initialize GEE with. Defaults to an empty string.
-    - force (bool, optional): Forces re-authentication if True. Defaults to False.
-    - **kwargs: Additional keyword arguments for `ee.Initialize()`.
+    Args:
+        auth_mode (str, optional): The authentication mode. 'gcloud' and 'colab' methods are not supported. See https://developers.google.com/earth-engine/guides/auth for more details.
+        print_mode (bool, optional): Whether to print initialization messages. Defaults to True.
+        auth_args (dict, optional): Additional arguments for authentication. Defaults to {}.
+        project (str, optional): The project to initialize GEE with. Defaults to an empty string.
+        force (bool, optional): Forces re-authentication if True. Defaults to False.
+        **kwargs: Additional keyword arguments for `ee.Initialize()`.
 
     Raises:
-    - ValueError: If an unsupported authentication mode is specified.
-    - Exception: If initialization fails after authentication.
+        ValueError: If an unsupported authentication mode is specified.
+        Exception: If initialization fails after authentication.
     """
     # Validate authentication mode
     if auth_mode in ["gcloud", "colab"]:
@@ -92,7 +89,7 @@ def authenticate_and_initialize(
     kwargs: dict,
     attempt: int = 1,
     max_attempts: int = 2,
-):
+) -> None:
     """
     Handles the authentication and initialization of Google Earth Engine.
 
@@ -115,7 +112,7 @@ def authenticate_and_initialize(
             f"{'Forcing authentication and ' if force else ''}Initializing Google Earth Engine...\n"
         )
     try:
-        if force or not ee.data._credentials:
+        if force or not ee.data._credentials:  # pyright: ignore[reportPrivateImportUsage]
             ee.Authenticate(force=force, **auth_args)
         print(f"kwargs passed to ee.Initialize {kwargs}")
         ee.Initialize(**kwargs)
@@ -148,28 +145,16 @@ def authenticate_and_initialize(
 
 def merge_tide_corrected_with_raw_timeseries(session_path, tide_timeseries):
     """
-    Merges tide-corrected timeseries data with raw timeseries data to add columns such as the classifier scores,thresholds
-    and other relevant information to the tide-corrected timeseries data.
+    Merges tide-corrected timeseries data with raw timeseries data to add columns such as classifier scores, thresholds, and other relevant information to the tide-corrected timeseries data.
 
-    If the timeseries passed in is not the tide corrected one then it is returned as is.
+    If the timeseries passed in is not the tide-corrected one, then it is returned as is.
 
-    This function takes a session path and a tide timeseries DataFrame,
-    converts the 'dates' column in the tide timeseries to datetime format,
-    and attempts to find and read a raw timeseries CSV file in the specified
-    session path. It then merges the tide timeseries with the raw timeseries
-    on the 'dates' and 'transect_id' columns, excluding certain columns from
-    the raw timeseries.
-
-    Parameters:
-    session_path (str): The file path to the session directory where the raw
-                        timeseries CSV file is located.
-    tide_timeseries (pd.DataFrame): A DataFrame containing the tide-corrected
-                                    timeseries data with a 'dates' column.
+    Args:
+        session_path (str): The file path to the session directory where the raw timeseries CSV file is located.
+        tide_timeseries (pd.DataFrame): A DataFrame containing the tide-corrected timeseries data with a 'dates' column.
 
     Returns:
-    pd.DataFrame: A DataFrame containing the merged timeseries data. If the
-                    raw timeseries file is not found, returns the original
-                    tide_timeseries DataFrame.
+        pd.DataFrame: A DataFrame containing the merged timeseries data. If the raw timeseries file is not found, returns the original tide_timeseries DataFrame.
     """
     # if the tides dataframe already has the columns from the model scores then we don't need to merge
     model_cols = [
@@ -214,32 +199,25 @@ def merge_tide_corrected_with_raw_timeseries(session_path, tide_timeseries):
 
 
 def delete_unmatched_rows(
-    data_dict: Dict[str, Union[List[Any], pd.Series]],
+    data_dict: Dict[Hashable, Union[Sequence[Any], pd.Series]],
     dates_list: List[Union[str, pd.Timestamp]],
     sat_list: List[str],
-) -> Dict[str, Union[List[Any], pd.Series]]:
+) -> Dict[Hashable, Any]:
     """
     Delete rows in the data dictionary that do not match any of the specified dates and satellite names.
 
-    This function accepts a dictionary containing at least two keys: 'dates' and 'satname'.
-    It then deletes rows where the date and satellite name do not match any of those provided in
-    the dates_list and sat_list respectively, and returns the updated dictionary.
-
-    Parameters:
-    - data_dict (Dict[str, Union[List[Any], pd.Series]]): The dictionary containing data arrays.
-                                                          Expected keys are 'dates' and 'satname'.
-                                                          If the keys are absent, they will be set with empty lists.
-    - dates_list (List[Union[str, pd.Timestamp]]): A list containing dates to match against.
-    - sat_list (List[str]): A list containing satellite names to match against.
+    Args:
+        data_dict (Dict[Hashable, Union[Sequence[Any], pd.Series]]): The dictionary containing data arrays. Expected keys are 'dates' and 'satname'.
+        dates_list (List[Union[str, pd.Timestamp]]): A list containing dates to match against.
+        sat_list (List[str]): A list containing satellite names to match against.
 
     Returns:
-    - Dict[str, Union[List[Any], pd.Series]]: The updated dictionary where rows that do not match any of the provided lists
-                                              have been deleted. Returns the original dictionary if all rows match or if the data_dict is empty.
+        Dict[Hashable, Union[Sequence[Any], pd.Series]]: The updated dictionary where rows that do not match any of the provided lists have been deleted. Returns the original dictionary if all rows match or if the data_dict is empty.
 
-    Examples:
-    >>> data = {'dates': ['2021-01-01', '2021-01-02'], 'satname': ['sat1', 'sat2']}
-    >>> delete_unmatched_rows(data, ['2021-01-01'], ['sat1'])
-    {'dates': ['2021-01-01'], 'satname': ['sat1']}
+    Example:
+        >>> data = {'dates': ['2021-01-01', '2021-01-02'], 'satname': ['sat1', 'sat2']}
+        >>> delete_unmatched_rows(data, ['2021-01-01'], ['sat1'])
+        {'dates': ['2021-01-01'], 'satname': ['sat1']}
     """
     if not data_dict:
         return data_dict
@@ -266,16 +244,12 @@ def filter_extract_dict(
     Filters and updates the extracted shorelines dictionary based on the selected indexes from a GeoDataFrame.
 
     Args:
-        gdf (GeoDataFrame): The a GeoDataFrame containing  filtered shorelines.
-        - Gdf must have columns 'satname' and 'date' representing the satellite name and date of the shoreline data.
-        extracted_shorelines_dict (dict): The extracted shorelines dictionary to be updated. It contains the following:
-        - The dictionary must contain a key 'shorelines' with a list of NumPy arrays representing the shorelines.
-        - The dictionary must also contain a key 'dates' with a list of dates corresponding to the shorelines.
-        - The dictionary must also contain a key 'satname' with a list of satellite names corresponding to the shorelines.
-        output_crs (str): The output crs to convert the gdf to so its in the same crs as the shoreline arrays in extracted_shorelines_dict.
-    Returns:
-        dict: The updated extracted shorelines dictionary. That has removed any shorelines that are not in the gdf.
+        gdf (gpd.GeoDataFrame): The GeoDataFrame containing filtered shorelines. Must have columns 'satname' and 'date'.
+        extracted_shorelines_dict (dict): The extracted shorelines dictionary to be updated. Must contain keys 'shorelines', 'dates', and 'satname'.
+        output_crs (str): The output CRS to convert the gdf to so it's in the same CRS as the shoreline arrays in extracted_shorelines_dict.
 
+    Returns:
+        dict: The updated extracted shorelines dictionary with only shorelines present in the gdf.
     """
     sats = np.array(gdf.satname)
     dates = np.array(pd.to_datetime(gdf["date"]).dt.tz_localize("UTC"))
@@ -300,24 +274,28 @@ def filter_extract_dict(
 
 def arr_to_LineString(coords):
     """
-    Makes a line feature from a list of xy tuples
-    inputs: coords
-    outputs: line
+    Makes a LineString geometry from a list of (x, y) coordinate tuples.
+
+    Args:
+        coords (list): List of (x, y) tuples.
+
+    Returns:
+        shapely.geometry.LineString: LineString geometry created from the input coordinates.
     """
-    points = [None] * len(coords)
-    i = 0
-    for xy in coords:
-        points[i] = shapely.geometry.Point(xy)
-        i = i + 1
+    points = [shapely.geometry.Point(xy) for xy in coords]
     line = shapely.geometry.LineString(points)
     return line
 
 
 def LineString_to_arr(line):
     """
-    Makes an array from linestring
-    inputs: line
-    outputs: array of xy tuples
+    Converts a LineString geometry to a NumPy array of (x, y) tuples.
+
+    Args:
+        line (shapely.geometry.LineString): The LineString geometry to convert.
+
+    Returns:
+        np.ndarray: Array of (x, y) tuples.
     """
     listarray = []
     for pp in line.coords:
@@ -331,14 +309,13 @@ def ref_poly_filter(
 ) -> gpd.GeoDataFrame:
     """
     Filters shorelines that are within a reference polygon.
-    filters extracted shorelines that are not contained within a reference region/polygon
 
     Args:
-        ref_poly_gdf (GeoDataFrame): A GeoDataFrame representing the reference polygon.
-        raw_shorelines_gdf (GeoDataFrame): A GeoDataFrame representing the raw shorelines.
+        ref_poly_gdf (gpd.GeoDataFrame): A GeoDataFrame representing the reference polygon.
+        raw_shorelines_gdf (gpd.GeoDataFrame): A GeoDataFrame representing the raw shorelines.
 
     Returns:
-        GeoDataFrame: A filtered GeoDataFrame containing shorelines that are within the reference polygon.
+        gpd.GeoDataFrame: A filtered GeoDataFrame containing shorelines that are within the reference polygon.
     """
     if ref_poly_gdf.empty:
         return raw_shorelines_gdf
@@ -387,15 +364,15 @@ def ref_poly_filter(
 
 def merge_dataframes(df1, df2, columns_to_merge_on=set(["transect_id", "dates"])):
     """
-    Merges two DataFrames based on column names provided in columns_to_merge_on by default
-    merges on "transect_id", "dates".
+    Merges two DataFrames based on column names provided in columns_to_merge_on (default: "transect_id", "dates").
 
     Args:
-    - df1 (DataFrame): First DataFrame.
-    - df2 (DataFrame): Second DataFrame.
-    - columns_to_merge_on(collection): column names to merge on
+        df1 (pd.DataFrame): First DataFrame.
+        df2 (pd.DataFrame): Second DataFrame.
+        columns_to_merge_on (Collection): Column names to merge on.
+
     Returns:
-    - DataFrame: Merged data.
+        pd.DataFrame: Merged DataFrame with duplicates dropped.
     """
     merged_df = pd.merge(df1, df2, on=list(columns_to_merge_on), how="inner")
     return merged_df.drop_duplicates(ignore_index=True)
@@ -421,10 +398,9 @@ def update_config(config_json: dict, roi_settings: dict) -> dict:
 def update_downloaded_configs(roi_settings: dict, roi_ids: list = None):
     """
     Update the downloaded configuration files for the specified ROI(s).
+
     Args:
-        roi_settings (dict, optional): Dictionary containing the ROI settings. Defaults to None.
-            ROI settings should contain the ROI IDs as the keys and a dictionary of settings as the values.
-            Each ROI ID should have the following keys: "dates", "sitename", "polygon", "roi_id", "sat_list", "landsat_collection", "filepath"
+        roi_settings (dict, optional): Dictionary containing the ROI settings. ROI settings should contain the ROI IDs as the keys and a dictionary of settings as the values. Each ROI ID should have the following keys: "dates", "sitename", "polygon", "roi_id", "sat_list", "landsat_collection", "filepath"
         roi_ids (list, optional): List of ROI IDs to update. Defaults to None.
     """
     if not isinstance(roi_settings, dict):
@@ -468,15 +444,14 @@ def extract_roi_settings(
 ) -> dict:
     """
     Extracts the settings for regions of interest (ROI) from the given JSON data.
-    Overwrites the filepath attribute for each ROI with the data_path provided.
+
     Args:
         json_data (dict): The JSON data containing ROI information.
-        data_path (str): The path to the data directory.
-        fields_of_interest (set, optional): A set of fields to include in the ROI settings.
-            Defaults to an empty set.
+        fields_of_interest (set, optional): A set of fields to include in the ROI settings. Defaults to an empty set.
+        roi_ids (list, optional): List of ROI IDs to extract. Defaults to None.
+
     Returns:
-        dict: A dictionary containing the ROI settings, where the keys are ROI IDs and
-            the values are dictionaries containing the fields of interest for each ROI.
+        dict: A dictionary containing the ROI settings, where the keys are ROI IDs and the values are dictionaries containing the fields of interest for each ROI.
     """
     if not fields_of_interest:
         fields_of_interest = {
@@ -569,28 +544,43 @@ def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict
     """
     Creates a new configuration dictionary by combining the given settings and ROI settings.
 
-    Arguments:
-    roi_ids (list): A list of ROI IDs to include in the new configuration.
-    settings (dict): A dictionary containing general settings for the configuration.
-    roi_settings (dict): A dictionary containing ROI-specific settings for the configuration.
-        example:
-        {'example_roi_id': {'dates':[]}}
+    Args:
+        roi_ids (list): A list of ROI IDs to include in the new configuration.
+        settings (dict): A dictionary containing general settings for the configuration.
+        roi_settings (dict): A dictionary containing ROI-specific settings for the configuration.
+            Example:
+                {'example_roi_id': {'dates':[]}}
 
     Returns:
-    new_config: dict
-        A dictionary containing the combined settings and ROI settings, as well as the ROI IDs.
-    
+        dict: A dictionary containing the combined settings, ROI IDs, and ROI-specific configurations.
+
     Example:
-    >>> roi_settings = {'roi1': {'dates': ['2021-01-01', '2021-12-31'], 'sitename': 'SiteA', 'polygon': [[...]], 'roi_id': 'roi1', 'sat_list': ['L8', 'S2'], 'landsat_collection': 'LC08'},
-    >>> settings = {'cloud_thresh': 20, 'min_beach_area': 500}
-    >>> roi_ids = ['roi1']
-    >>> new_config = create_new_config(roi_ids, settings, roi_settings)
-    >>> print(new_config)
-    {
-        'settings': {'cloud_thresh': 20, 'min_beach_area': 500},
-        'roi_ids': ['roi1'],
-        'roi1': {'dates': ['2021-01-01', '2021-12-31'], 'sitename': 'SiteA', 'polygon': [[...]], 'roi_id': 'roi1', 'sat_list': ['L8', 'S2'], 'landsat_collection': 'LC08'}
-    }   
+        >>> roi_settings = {
+        ...     'roi1': {
+        ...         'dates': ['2021-01-01', '2021-12-31'],
+        ...         'sitename': 'SiteA',
+        ...         'polygon': [[...]],
+        ...         'roi_id': 'roi1',
+        ...         'sat_list': ['L8', 'S2'],
+        ...         'landsat_collection': 'LC08'
+        ...     }
+        ... }
+        >>> settings = {'cloud_thresh': 20, 'min_beach_area': 500}
+        >>> roi_ids = ['roi1']
+        >>> new_config = create_new_config(roi_ids, settings, roi_settings)
+        >>> print(new_config)
+        {
+            'settings': {'cloud_thresh': 20, 'min_beach_area': 500},
+            'roi_ids': ['roi1'],
+            'roi1': {
+                'dates': ['2021-01-01', '2021-12-31'],
+                'sitename': 'SiteA',
+                'polygon': [[...]],
+                'roi_id': 'roi1',
+                'sat_list': ['L8', 'S2'],
+                'landsat_collection': 'LC08'
+            }
+        }
     """
     new_config = {
         "settings": {},
@@ -611,9 +601,12 @@ def update_transect_time_series(
     """
     Updates a series of CSV files by removing rows based on certain dates.
 
-    :param filepaths: A list of file paths to the CSV files.
-    :param dates_list: A list of datetime objects representing the dates to be filtered out.
-    :return: None
+    Args:
+        filepaths (List[str]): A list of file paths to the CSV files.
+        dates_list (List[datetime]): A list of datetime objects representing the dates to be filtered out.
+
+    Returns:
+        None
     """
     for filepath in filepaths:
         # Read the CSV file into a DataFrame
@@ -633,30 +626,19 @@ def extract_dates_and_sats(
     selected_items: List[str],
 ) -> Tuple[List[datetime], List[str]]:
     """
-    Parse a list of strings containing satellite names and timestamps, and return
-    separate lists of UTC-aware datetimes and satellite identifiers.
+    Parse a list of strings containing satellite names and timestamps, and return separate lists of UTC-aware datetimes and satellite identifiers.
 
-    Each input string must follow the format:
-        "<satellite>_<YYYY-MM-DD HH:MM:SS>"
-
-    Example: 
-    >>> extract_dates_and_sats(["L8_2021-01-01 00:00:00", "S2_2021-02-01 00:00:00"])
-    (
-        [
-            datetime.datetime(2021, 1, 1, 0, 0, tzinfo=datetime.timezone.utc),
-            datetime.datetime(2021, 2, 1, 0, 0, tzinfo=datetime.timezone.utc)
-        ],
-        ["L8", "S2"]
-    )
+    Each input string must follow the format: "<satellite>_<YYYY-MM-DD HH:MM:SS>"
 
     Args:
-        selected_items (List[str]) : List of strings, where each string encodes a satellite name and a UTC timestamp separated by an underscore. Example: "L8_2021-01-01 00:00:00".
+        selected_items (List[str]): List of strings, where each string encodes a satellite name and a UTC timestamp separated by an underscore. Example: "L8_2021-01-01 00:00:00".
 
     Returns:
-        dates_list : list of datetime.datetime
-            Datetime objects parsed from the input strings, each set to UTC timezone corresponding to the dates extracted from the input strings.
-        sat_list : list of str
-            Satellite identifiers extracted from the input strings corresponding to the satellite names.
+        Tuple[List[datetime], List[str]]: Tuple containing a list of UTC datetime objects and a list of satellite identifiers.
+
+    Example:
+        >>> extract_dates_and_sats(["L8_2021-01-01 00:00:00", "S2_2021-02-01 00:00:00"])
+        ([datetime.datetime(2021, 1, 1, 0, 0, tzinfo=datetime.timezone.utc), datetime.datetime(2021, 2, 1, 0, 0, tzinfo=datetime.timezone.utc)], ["L8", "S2"])
     """
     dates_list = []
     sat_list = []
@@ -676,13 +658,13 @@ def transform_data_to_nested_arrays(
     Convert a dictionary of data to a new dictionary with nested NumPy arrays.
 
     Args:
-        data_dict: A dictionary of data, where each value is either a list of integers, floats, or NumPy arrays, or a NumPy array.
+        data_dict (dict): A dictionary of data, where each value is either a list of integers, floats, or NumPy arrays, or a NumPy array.
 
     Returns:
-        A new dictionary with the same keys as `data_dict`, where each value is a NumPy array or a nested NumPy array.
+        dict: A new dictionary with the same keys as data_dict, where each value is a NumPy array or a nested NumPy array.
 
     Raises:
-        TypeError: If `data_dict` is not a dictionary, or if any value in `data_dict` is not a list or NumPy array.
+        TypeError: If data_dict is not a dictionary, or if any value in data_dict is not a list or NumPy array.
     """
     transformed_dict = {}
     for key, items in data_dict.items():
@@ -700,11 +682,11 @@ def process_data_input(data):
     """
     Process the data input and transform it to nested arrays.
 
-    Parameters:
-    data (dict or str): The data input to process. If data is a string, it is assumed to be the full path to the JSON file.
+    Args:
+        data (dict or str): The data input to process. If data is a string, it is assumed to be the full path to the JSON file.
 
     Returns:
-    dict: The processed data as nested arrays.
+        dict: The processed data as nested arrays.
     """
     # Determine if data is a dictionary or a file path
     if isinstance(data, dict):
@@ -724,18 +706,18 @@ def process_data_input(data):
 
 
 def update_extracted_shorelines_dict_transects_dict(
-    session_path, filename, dates_list, sat_list
-):
+    session_path: str, filename: str, dates_list: list, sat_list: list
+) -> None:
     """
     Updates the extracted shorelines and transects dictionaries by removing selected indexes.
-    This function reads data from a JSON file, processes it into nested arrays, and removes
-    selected indexes based on the provided dates and satellite lists. It also updates the
-    transects dictionary if the corresponding file exists.
+    Reads data from a JSON file, processes it into nested arrays, and removes selected indexes based on the provided dates and satellite lists. Also updates the transects dictionary if the corresponding file exists.
+
     Args:
         session_path (str): The path to the session directory.
         filename (str): The name of the JSON file containing the extracted shorelines data.
         dates_list (list): A list of dates to filter the extracted shorelines data.
         sat_list (list): A list of satellite identifiers to filter the extracted shorelines data.
+
     Returns:
         None
     """
@@ -748,7 +730,7 @@ def update_extracted_shorelines_dict_transects_dict(
         if extracted_shorelines_dict is not None:
             # Get the indexes of the selected items in the extracted_shorelines_dict
             selected_indexes = get_selected_indexes(
-                extracted_shorelines_dict, dates_list, sat_list
+                extracted_shorelines_dict, dates_list, sat_list # type: ignore
             )
             # attempt to delete the selected indexes from the "transect_cross_distances.json"
             transect_cross_distances_path = os.path.join(
@@ -782,14 +764,14 @@ def update_extracted_shorelines_dict_transects_dict(
 
 def delete_selected_indexes(input_dict, selected_indexes):
     """
-    Delete the selected indexes from the transects_dict.
+    Delete the selected indexes from the input dictionary.
 
-    Parameters:
-    input_dict (dict): The transects dictionary to modify.
-    selected_indexes (list): The indexes to delete.
+    Args:
+        input_dict (dict): The dictionary to modify.
+        selected_indexes (list): The indexes to delete.
 
     Returns:
-    dict: The modified transects dictionary.
+        dict: The modified dictionary with selected indexes removed.
     """
     if not selected_indexes:
         return input_dict
@@ -853,36 +835,17 @@ def load_settings(
         "prc_multiple",
     },
     new_settings: dict = {},
-):
+) -> dict:
     """
     Loads settings from a JSON file and applies them to the object.
+
     Args:
         filepath (str, optional): The filepath to the JSON file containing the settings. Defaults to an empty string.
-        keys (list or set, optional): A list of keys specifying which settings to load from the JSON file. If empty, no settings are loaded. Defaults to a set with the following
-                                                    "sat_list",
-                                                    "dates",
-                                                    "download_cloud_thresh"
-                                                    "min_roi_coverage"
-                                                    "cloud_thresh",
-                                                    "cloud_mask_issue",
-                                                    "min_beach_area",
-                                                    "min_length_sl",
-                                                    "output_epsg",
-                                                    "sand_color",
-                                                    "pan_off",
-                                                    "max_dist_ref",
-                                                    "dist_clouds",
-                                                    "percent_no_data",
-                                                    "max_std",
-                                                    "min_points",
-                                                    "along_dist",
-                                                    "max_range",
-                                                    "min_chainage",
-                                                    "multiple_inter",
-                                                    "prc_multiple".
-        new_settings(dict, optional): A dictionary containing new settings to apply to the object. Defaults to an empty dictionary.
+        keys (list or set, optional): A list of keys specifying which settings to load from the JSON file. If empty, no settings are loaded.
+        new_settings (dict, optional): A dictionary containing new settings to apply to the object. Defaults to an empty dictionary.
+
     Returns:
-        None
+        dict: The filtered and combined settings dictionary.
     """
     # Convert keys to a list if a set is passed
     if isinstance(keys, set):
@@ -943,15 +906,12 @@ def remove_matching_rows(gdf: gpd.GeoDataFrame, **kwargs) -> gpd.GeoDataFrame:
     """
     Remove rows from a GeoDataFrame that match ALL the columns and items specified in the keyword arguments.
 
-    Each of the keyword argument should be a column name in the GeoDataFrame with the values
-    to filter in the given column.
-
-    Parameters:
-    gdf (GeoDataFrame): The input GeoDataFrame.
-    **kwargs: Keyword arguments representing column names and items to match.
+    Args:
+        gdf (gpd.GeoDataFrame): The input GeoDataFrame.
+        **kwargs: Keyword arguments representing column names and items to match.
 
     Returns:
-    GeoDataFrame: The modified GeoDataFrame with matching rows removed.
+        gpd.GeoDataFrame: The modified GeoDataFrame with matching rows removed.
     """
 
     # Initialize a mask with all True values
@@ -983,32 +943,25 @@ def remove_matching_rows(gdf: gpd.GeoDataFrame, **kwargs) -> gpd.GeoDataFrame:
 
 
 def get_selected_indexes(
-    data_dict: Dict[str, Union[List[Any], pd.Series]],
-    dates_list: List[Union[str, pd.Timestamp]],
-    sat_list: List[str],
+    data_dict: Dict[Hashable, Union[Sequence[Any], pd.Series]],
+    dates_list: Sequence[Union[str, pd.Timestamp, datetime]],
+    sat_list: Sequence[str],
 ) -> List[int]:
     """
     Retrieve indexes of rows in a dictionary that match specified dates and satellite names.
 
-    This function accepts a dictionary containing at least two keys: 'dates' and 'satname'.
-    It then returns a list of indexes where the dates and satellite names match those provided in
-    the dates_list and sat_list respectively.
-
-    Parameters:
-    - data_dict (Dict[str, Union[List[Any], pd.Series]]): The dictionary containing data arrays.
-                                                          Expected keys are 'dates' and 'satname'.
-                                                          If the keys are absent, they will be set with empty lists.
-    - dates_list (List[Union[str, pd.Timestamp]]): A list containing dates to match against.
-    - sat_list (List[str]): A list containing satellite names to match against.
+    Args:
+        data_dict (Dict[str, Union[List[Any], pd.Series]]): The dictionary containing data arrays. Expected keys are 'dates' and 'satname'.
+        dates_list (List[Union[str, pd.Timestamp]]): A list containing dates to match against.
+        sat_list (List[str]): A list containing satellite names to match against.
 
     Returns:
-    - List[int]: A list of integer indexes where the 'dates' and 'satname' in the data_dict
-                 match the provided lists. Returns an empty list if no matches are found or if the data_dict is empty.
+        List[int]: A list of integer indexes where the 'dates' and 'satname' in the data_dict match the provided lists. Returns an empty list if no matches are found or if the data_dict is empty.
 
-    Examples:
-    >>> data = {'dates': ['2021-01-01', '2021-01-02'], 'satname': ['sat1', 'sat2']}
-    >>> get_selected_indexes(data, ['2021-01-01'], ['sat1'])
-    [0]
+    Example:
+        >>> data = {'dates': ['2021-01-01', '2021-01-02'], 'satname': ['sat1', 'sat2']}
+        >>> get_selected_indexes(data, ['2021-01-01'], ['sat1'])
+        [0]
     """
     if not data_dict:
         return []
@@ -1033,12 +986,16 @@ def get_selected_indexes(
 
 
 def save_new_config(path: str, roi_ids: list, destination: str) -> dict:
-    """Save a new config file to a path.
+    """
+    Save a new config file to a path.
 
     Args:
-        path (str): the path to read the original config file from
-        roi_ids (list): a list of roi_ids to include in the new config file
-        destination (str):the path to save the new config file to
+        path (str): The path to read the original config file from.
+        roi_ids (list): A list of roi_ids to include in the new config file.
+        destination (str): The path to save the new config file to.
+
+    Returns:
+        dict: The new configuration dictionary that was saved.
     """
     with open(path) as f:
         config = json.load(f)
@@ -1068,26 +1025,19 @@ def filter_images_by_roi(roi_settings: list[dict]):
     This function assumes the ROI coordinates are in EPSG:4326.
 
     Args:
-        roi_settings (list[dict]): A list of dictionaries, each containing the settings
-                                   for a Region of Interest (ROI). Each dictionary must
-                                   have the following structure:
-                                   {
-                                     'roi_id': <int>,
-                                     'sitename': <str>,
-                                     'filepath': <str>,  # Base filepath for the ROI
-                                     'polygon': <list>,  # List of coordinates representing the ROI polygon (in EPSG:4326)
-                                   }
+        roi_settings (list[dict]): A list of dictionaries, each containing the settings for a Region of Interest (ROI). Each dictionary must have the following structure:
+            {
+                'roi_id': <int>,
+                'sitename': <str>,
+                'filepath': <str>,  # Base filepath for the ROI
+                'polygon': <list>,  # List of coordinates representing the ROI polygon (in EPSG:4326)
+            }
 
     Returns:
-        None: This function doesn't return anything.
+        None
 
     Raises:
-        KeyError: If a required key ('sitename', 'filepath', 'polygon') is missing
-                  in any of the dictionaries in roi_settings.
-
-    Logs:
-        A warning if the location specified by 'filepath' and 'sitename', or the 'ROI_jpg_location'
-        does not exist, specifying the nonexistent location.
+        KeyError: If a required key ('sitename', 'filepath', 'polygon') is missing in any of the dictionaries in roi_settings.
 
     Example:
         >>> roi_settings = [
@@ -1129,7 +1079,7 @@ def delete_jpg_files(
 
     Args:
         dates_list (List[datetime]): A list of datetime objects representing the dates.
-        sat_list (list): A list of satellite names.
+        sat_list (List[str]): A list of satellite names.
         jpg_path (str): The path to the directory containing the JPEG files.
 
     Returns:
@@ -1659,19 +1609,19 @@ def create_unique_ids(data, prefix_length: int = 3):
 
 
 def extract_feature_from_geodataframe(
-    gdf: gpd.GeoDataFrame, feature_type: Union[int, str], type_column: str = "type"
-) -> gpd.GeoDataFrame:
+    gdf: Union[gpd.GeoDataFrame, pd.DataFrame], feature_type: Union[int, str], type_column: str = "type"
+) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
     """
     Extracts a GeoDataFrame of features of a given type and specified columns from a larger GeoDataFrame.
 
     Args:
-        gdf (gpd.GeoDataFrame): The GeoDataFrame containing the features to extract.
-        feature_type Union[int, str]: The type of feature to extract. Typically one of the following 'shoreline','rois','transects','bbox'
+        gdf (Union[gpd.GeoDataFrame, pd.DataFrame]): The GeoDataFrame containing the features to extract.
+        feature_type (Union[int, str]): The type of feature to extract. Typically one of the following 'shoreline','rois','transects','bbox'
         Feature_type can also be list of strings such as ['shoreline','shorelines', 'reference shoreline'] to match the same kind of feature with muliple names.
         type_column (str, optional): The name of the column containing feature types. Defaults to 'type'.
 
     Returns:
-        gpd.GeoDataFrame: A new GeoDataFrame containing only the features of the specified type and columns.
+        Union[gpd.GeoDataFrame, pd.DataFrame]: A new GeoDataFrame containing only the features of the specified type and columns.
 
     Raises:
         ValueError: Raised when feature_type or any of the columns specified do not exist in the GeoDataFrame.
