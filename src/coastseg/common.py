@@ -802,7 +802,7 @@ def delete_selected_indexes(input_dict, selected_indexes):
 
 def load_settings(
     filepath: str = "",
-    keys: set = {
+    keys: Iterable[str] = {
         "months_list",
         "model_session_path",
         "apply_cloud_mask",
@@ -1610,7 +1610,7 @@ def create_unique_ids(data, prefix_length: int = 3):
 
 
 def extract_feature_from_geodataframe(
-    gdf: Union[gpd.GeoDataFrame, pd.DataFrame], feature_type: Union[int, str], type_column: str = "type"
+    gdf: Union[gpd.GeoDataFrame, pd.DataFrame], feature_type: Union[int, str,Iterable], type_column: str = "type"
 ) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
     """
     Extracts a GeoDataFrame of features of a given type and specified columns from a larger GeoDataFrame.
@@ -3113,7 +3113,7 @@ def convert_wgs_to_utm(lon: float, lat: float) -> str:
     return epsg_code
 
 
-def extract_roi_by_id(gdf: gpd.GeoDataFrame, roi_id: int) -> gpd.GeoDataFrame:
+def extract_roi_by_id(gdf: gpd.GeoDataFrame, roi_id: Union[str, int]) -> gpd.GeoDataFrame:
     """Returns GeoDataFrame with a single ROI whose id matches roi_id.
        If roi_id is None returns gdf
 
