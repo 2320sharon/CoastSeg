@@ -5,6 +5,8 @@ import os
 def is_interactive() -> bool:
     """
     Check if the code is running in a Jupyter Notebook environment.
+    Returns:
+        True if running in a Jupyter Notebook, False otherwise.
     """
     try:
         shell = get_python_version().__class__.__name__
@@ -18,9 +20,15 @@ def is_interactive() -> bool:
         return False  # Not in an interactive shell
 
 
-def get_base_dir(repo_name="CoastSeg") -> pathlib.Path:
+def get_base_dir(repo_name:str="CoastSeg") -> pathlib.Path:
     """
-    Get the project directory path.
+    Retrieve the base directory for CoastSeg.
+
+    Get the base directory of the project by searching for the specified project directory name
+    in the current working directory and its parent directories.
+
+    Args:
+        repo_name (str): The name of the project directory to locate. Default is "CoastSeg".
 
     Returns:
         A `pathlib.Path` object representing the project directory path.
