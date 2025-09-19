@@ -1014,7 +1014,7 @@ def save_new_config(path: str, roi_ids: list, destination: str) -> dict:
         json.dump(new_config, f)
 
 
-def filter_images_by_roi(roi_settings: list[dict]):
+def filter_images_by_roi(roi_settings: dict) -> None:
     """
     Filters images in specified locations based on their Regions of Interest (ROI).
 
@@ -1026,7 +1026,7 @@ def filter_images_by_roi(roi_settings: list[dict]):
     This function assumes the ROI coordinates are in EPSG:4326.
 
     Args:
-        roi_settings (list[dict]): A list of dictionaries, each containing the settings for a Region of Interest (ROI). Each dictionary must have the following structure:
+        roi_settings (dict): A dictionary containing the settings for a Region of Interest (ROI). Each dictionary must have the following structure:
             {
                 'roi_id': <int>,
                 'sitename': <str>,
@@ -3516,12 +3516,12 @@ def save_extracted_shorelines(
     )
 
 
-def stringify_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
+def stringify_datetime_columns(df: Union[pd.DataFrame, gpd.GeoDataFrame]) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Convert all datetime columns in a DataFrame or GeoDataFrame to string.
 
     Args:
-        df: A pandas DataFrame or GeoPandas GeoDataFrame.
+        df (Union[pd.DataFrame, gpd.GeoDataFrame]): The input DataFrame or GeoDataFrame.
 
     Returns:
         A copy of the input with datetime columns converted to string.
@@ -3938,7 +3938,7 @@ def create_roi_settings(
             "sentinel_1_properties": {
                 "transmitterReceiverPolarisation": ["VH"],
                 "instrumentMode": "IW",
-            },  # @todo these are hardcoded for now because only the logic for handling the VH polarisation is implemented
+            },  # default sentinel 1 properties 
         }
         roi_settings[roi_id] = inputs_dict
     return roi_settings

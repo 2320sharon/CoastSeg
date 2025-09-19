@@ -16,8 +16,6 @@ import pandas as pd
 from shapely import geometry
 from ipyleaflet import GeoJSON
 
-# from coastseg.extracted_shoreline import Extracted_Shoreline
-
 logger = logging.getLogger(__name__)
 
 __all__ = ["ROI"]
@@ -122,9 +120,6 @@ class ROI(Feature):
             rois_gdf: A GeoDataFrame of ROIs.
 
         Returns:
-            None.
-
-        Raises:
             None.
         """
         # make sure to perform a CRS check here too
@@ -252,7 +247,7 @@ class ROI(Feature):
         logger.info(f"Saving roi_settings {roi_settings}")
         self.roi_settings = roi_settings
 
-    def update_roi_settings(self, new_settings: dict) -> None:
+    def update_roi_settings(self, new_settings: dict) -> dict:
         """Updates the ROI settings dictionary with the specified values.
 
         Args:
@@ -268,14 +263,14 @@ class ROI(Feature):
             self.roi_settings.update(new_settings)
         return self.roi_settings
 
-    def get_extracted_shoreline(self, roi_id: str) -> Union[None, dict]:
+    def get_extracted_shoreline(self, roi_id: str) -> Union[None, "Extracted_Shoreline"]:
         """Returns the extracted shoreline for the specified ROI ID.
 
         Args:
             roi_id (str): The ID of the ROI to retrieve the shoreline for.
 
         Returns:
-            Union[None, dict]: The extracted shoreline dictionary for the specified ROI ID, or None if it does not exist.
+            Union[None, "Extracted_Shoreline"]: The extracted shoreline for the specified ROI ID, or None if it does not exist.
         """
         return self.extracted_shorelines.get(roi_id, None)
 
@@ -365,7 +360,7 @@ class ROI(Feature):
 
     def add_extracted_shoreline(
         self,
-        extracted_shoreline: "coastseg.extracted_shoreline.Extracted_Shoreline",
+        extracted_shoreline: "Extracted_Shoreline",
         roi_id: str,
     ) -> None:
         """Adds an extracted shoreline dictionary to the collection, indexed by the specified ROI ID.

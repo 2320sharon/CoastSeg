@@ -9,13 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_collection_by_tier(
-    polygon: List[List[float]],
+    polygon: list[list[float]],
     start_date: Union[str, datetime],
     end_date: Union[str, datetime],
     satellite: str,
     tier: int,
     max_cloud_cover: float = 95,
-    months_list=None,
+    months_list: list[int] = None,
 ) -> Union[ee.ImageCollection, None]:
     """
     This function takes the required parameters and returns an ImageCollection from
@@ -30,7 +30,12 @@ def get_collection_by_tier(
     max_cloud_cover (float): The maximum cloud cover percentage for the entire scene (not just the roi) to filter the ImageCollection by.
 
     Returns:
-    ee.ImageCollection or None: The filtered ImageCollection or None if the inputs are invalid.
+        ee.ImageCollection or None: The filtered ImageCollection, or None if inputs are invalid or not available for the given tier/satellite.
+
+    Example:
+        >>> collection = get_collection_by_tier(polygon, '2020-01-01', '2020-12-31', 'L8', 1, 50, [6,7,8])
+        >>> print(collection.size().getInfo())
+        12
     """
     if months_list is None:
         months_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
@@ -113,41 +118,35 @@ def count_images_in_ee_collection(
     min_roi_coverage: float = 0.0,
 ) -> dict:
     """
-    Count the number of images in specified satellite collections over a certain area and time period.
+    Counts the number of images in specified satellite collections over a given area and time period.
 
-    Parameters:
-    polygon (list[list[float]]): A list of lists representing the vertices of a polygon in lon/lat coordinates.
-    start_date (str or datetime): The start date of the time period. If a string, it should be in 'YYYY-MM-DD' format.
-    end_date (str or datetime): The end date of the time period. If a string, it should be in 'YYYY-MM-DD' format.
-    max_cloud_cover (float, optional): The maximum cloud cover percentage. Images with a cloud cover percentage higher than this will be excluded. Defaults to 99.
-    satellites (Collection[str], optional): A collection of satellite names. The function will return image counts for these satellites. Defaults to ("L5","L7","L8","L9","S2").
-    tiers (list[int], optional): A list of tiers. The function will return image counts for these tiers. Defaults to [1,2]
-    months_list (list[int], optional): A list of months to filter the images by. Defaults to None meaning all the months will be included.
-    min_roi_coverage (float, optional): The minimum percentage of the ROI that must be covered by the imagery to be considered valid. Defaults to 0.0.
+    Args:
+        polygon (list[list[float]]): Vertices of a polygon in [lon, lat] coordinates.
+        start_date (Union[str, datetime]): Start date ('YYYY-MM-DD' or datetime).
+        end_date (Union[str, datetime]): End date ('YYYY-MM-DD' or datetime).
+        max_cloud_cover (float, optional): Maximum allowed cloud cover percentage. Defaults to 95.
+        satellites (Collection[str], optional): Satellite names to count images for. Defaults to ("L5", "L7", "L8", "L9", "S2", "S1").
+        tiers (list[int], optional): List of tiers to include. Defaults to [1, 2].
+        months_list (list[int], optional): Months (1-12) to include. Defaults to all months.
+        min_roi_coverage (float, optional): Minimum percentage of ROI that must be covered by imagery. Defaults to 0.0.
 
     Returns:
-    dict: A dictionary where the keys are the satellite names and the values are the image counts.
+        dict: Dictionary mapping satellite names to image counts.
 
     Raises:
-    ValueError: If start_date or end_date are not strings or datetime objects.
+        ValueError: If start_date or end_date are not strings or datetime objects, or if end_date is not after start_date.
+        Exception: If Earth Engine is not initialized.
 
     Example:
-    >>> polygon = [[[151.2957545, -33.7390216],
-    ... [151.312234, -33.7390216],
-    ... [151.312234, -33.7012561],
-    ... [151.2957545, -33.7012561],
-    ... [151.2957545, -33.7390216]]]
-    >>> start_date = '2017-12-01'
-    >>> end_date = '2018-01-01'
-    >>> count_images(polygon, start_date, end_date)
-        {
-            'L5': 10,
-            'L7': 15,
-            'L8': 20,
-            'L9': 5,
-            'S2': 30,
-            'S1': 25
-        }
+        >>> polygon = [[[151.2957545, -33.7390216],
+        ... [151.312234, -33.7390216],
+        ... [151.312234, -33.7012561],
+        ... [151.2957545, -33.7012561],
+        ... [151.2957545, -33.7390216]]]
+        >>> start_date = '2017-12-01'
+        >>> end_date = '2018-01-01'
+        >>> count_images_in_ee_collection(polygon, start_date, end_date)
+        {'L5': 10, 'L7': 15, 'L8': 20, 'L9': 5, 'S2': 30, 'S1': 25}
     """
     if months_list is None:
         months_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]

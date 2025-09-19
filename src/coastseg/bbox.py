@@ -111,25 +111,20 @@ class Bounding_Box(Feature):
             "weight": 3,
         }
         return super().style_layer(geojson, layer_name, style=style, hover_style=None)
-        # if geojson == {}:
-        #     raise Exception("ERROR.\n Empty geojson cannot be drawn onto map")
-        # return GeoJSON(
-        #     data=geojson,
-        #     name=layer_name,
-        #     style={
-        #         "color": "#75b671",
-        #         "fill_color": "#75b671",
-        #         "opacity": 1,
-        #         "fillOpacity": 0.1,
-        #         "weight": 3,
-        #     },
-        # )
 
-    def check_bbox_size(bbox_area: float):
-        """ "Raises an exception if the size of the bounding box is too large or small."""
-        # Check if the size is greater than MAX_BBOX_SIZE
+    @staticmethod
+    def check_bbox_size(bbox_area: float) -> None:
+        """
+        Validates that the bounding box area is within acceptable limits.
+
+        Args:
+            bbox_area (float): The area of the bounding box in square meters.
+
+        Raises:
+            BboxTooLargeError: If the bbox area exceeds the maximum allowed size.
+            BboxTooSmallError: If the bbox area is below the minimum required size.
+        """
         if bbox_area > Bounding_Box.MAX_AREA:
             raise BboxTooLargeError()
-        # Check if size smaller than MIN_BBOX_SIZE
         elif bbox_area < Bounding_Box.MIN_AREA:
             raise BboxTooSmallError()

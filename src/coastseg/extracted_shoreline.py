@@ -2134,25 +2134,25 @@ class Extracted_Shoreline:
 
     def create_extracted_shorelines(
         self,
-        roi_id: str = None,
-        shoreline: gpd.GeoDataFrame = None,
-        roi_settings: dict = None,
-        settings: dict = None,
-        output_directory: str = None,
-        shoreline_extraction_area: gpd.GeoDataFrame = None,
+        roi_id: str,
+        shoreline: gpd.GeoDataFrame,
+        roi_settings: dict,
+        settings: dict,
+        output_directory: Optional[str] = None,
+        shoreline_extraction_area: Optional[gpd.GeoDataFrame] = None,
     ) -> "Extracted_Shoreline":
         """
         Extracts shorelines for a specified region of interest (ROI) and returns an Extracted_Shoreline class instance.
 
         Args:
-        - self: The object instance.
         - roi_id (str): The ID of the region of interest for which shorelines need to be extracted.
         - shoreline (GeoDataFrame): A GeoDataFrame of shoreline features.
         - roi_settings (dict): A dictionary of region of interest settings.
         - settings (dict): A dictionary of extraction settings.
-        - output_directory (str): The path to the directory where the extracted shorelines will be saved.
+        - output_directory (Optional[str]): The path to the directory where the extracted shorelines will be saved.
            - detection figures will be saved in a subfolder called 'jpg_files' within the output_directory.
            - extract_shoreline reports will be saved within the output_directory.
+        - shoreline_extraction_area (gpd.GeoDataFrame, optional): A GeoDataFrame containing the area to extract shorelines from. Not required.
 
         Returns:
         - object: The Extracted_Shoreline class instance.

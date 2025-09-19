@@ -2,6 +2,7 @@
 import os
 import datetime
 import logging
+from typing import Optional
 
 # Internal Python imports
 from coastseg import exception_handler
@@ -103,7 +104,7 @@ class UI:
     download_view = widgets.Output(layout={"border": "1px solid black"})
     preview_view = widgets.Output()
 
-    def get_settings_dashboard(self, basic_settings: dict = {}):
+    def get_settings_dashboard(self, basic_settings: Optional[dict] = None):
         if not basic_settings:
             basic_settings = [
                 "dates",

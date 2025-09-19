@@ -221,7 +221,7 @@ class Factory:
         feature_name: str,
         gdf: Optional[GeoDataFrame] = None,
         **kwargs,
-    ) -> Union[Shoreline, Transects, Bounding_Box, ROI]:
+    ) -> Optional[Union[Shoreline, Transects, Bounding_Box, ROI]]:
         logger.info(
             f"feature_name {feature_name}\ncoastsegmap: {coastsegmap}\nGdf: {gdf}\nkwargs: {kwargs}"
         )
@@ -232,5 +232,8 @@ class Factory:
         if gdf is not None:
             if gdf.empty:
                 return None
+            
+        if feature_maker is None:
+            raise ValueError(f"Invalid feature name: {feature_name}")
 
         return feature_maker(coastsegmap, gdf, **kwargs)

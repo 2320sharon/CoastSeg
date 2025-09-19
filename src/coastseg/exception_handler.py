@@ -1,7 +1,7 @@
 # standard python imports
 import logging
 import traceback
-from typing import Union
+from typing import Union,Collection
 
 # internal python imports
 
@@ -171,43 +171,35 @@ def check_empty_dict(feature, feature_type: str = ""):
         if feature_type == "cross_distance_transects":
             raise Exception(NO_CROSS_DISTANCE_TRANSECTS)
 
-
 def check_empty_layer(layer, feature_type: str = ""):
     """
     Check if a given layer is empty and raise an exception if it is.
 
     Args:
-    layer: The layer to be checked.
-    feature_type (str): A string representing the type of the layer.
+        layer: The layer to be checked.
+        feature_type (str): A string representing the type of the layer.
 
     Raises:
-    Exception: If the layer is empty or None.
+        Exception: If the layer is empty or None.
     """
     if layer is None:
         if feature_type == ROI.LAYER_NAME:
-            logger.error(f"No ROI layer found on map")
-            raise Exception("No ROI layer found on map")
-        if feature_type == ROI.SELECTED_LAYER_NAME:
-            logger.error(f"No selected ROI layer found on map")
-            raise Exception("No selected ROI layer found on map")
-        logger.error(f"Cannot add an empty {feature_type} layer to the map.")
-        raise Exception(f"Cannot add an empty {feature_type} layer to the map.")
+            message = "No ROI layer found on map"
+        elif feature_type == ROI.SELECTED_LAYER_NAME:
+            message = "No selected ROI layer found on map"
+        else:
+            message = f"Cannot add an empty {feature_type} layer to the map."
 
+        logger.error(message)
+        raise Exception(message)
 
-def check_if_list_empty(items: list):
+def check_if_empty(items: Union[Collection,None]):
     """
-    Check if a given list is empty and raise an exception if it is.
-
-    Args:
-    items (list): The list to be checked.
-
-    Raises:
-    Exception: If the list is empty.
+    Raise an exception if the given collection is empty.
     """
-    if len(items) == 0:
+    if not items:
         logger.error(f"{items}\n{NO_ROIS_WITH_EXTRACTED_SHORELINES}")
         raise Exception(NO_ROIS_WITH_EXTRACTED_SHORELINES)
-
 
 def check_if_empty_string(feature, feature_type: str = "", message: str = ""):
     """
