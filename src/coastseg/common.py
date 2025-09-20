@@ -2927,9 +2927,9 @@ def create_hover_box(
 
 
 def create_warning_box(
-    title: str = None,
-    msg: str = None,
-    instructions: str = None,
+    title: Optional[str] = None,
+    msg: Optional[str] = None,
+    instructions: Optional[str] = None,
     msg_width: str = "75%",
     box_width: str = "60%",
 ) -> HBox:
