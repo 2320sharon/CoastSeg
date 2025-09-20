@@ -3687,7 +3687,9 @@ def get_jpgs_from_data() -> str:
                 + os.sep
                 + "*.jpg"
             )
-            file_utilities.copy_files_to_dst(src_path, new_path, glob_str)
+            # copy all jpg files from data folder in coastseg to new folder
+            for file in glob.glob(glob_str):
+                shutil.copy(file, new_path)
             RGB_path = os.path.join(new_folder, "RGB")
         return RGB_path
     else:

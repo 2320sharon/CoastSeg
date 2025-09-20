@@ -941,7 +941,7 @@ class CoastSeg_Map:
         logger.info(f"Loading session from session directory: {session_path}")
 
         # load the session from the parent directory and subdirectories within session path
-        directories_to_load = file_utilities.get_all_subdirectories(session_path)
+        directories_to_load = [dirpath for dirpath, dirnames, filenames in os.walk(session_path)]
         for directory in directories_to_load:
             self.load_session_from_directory(directory, data_path)
 
@@ -1591,11 +1591,13 @@ class CoastSeg_Map:
             Exception: Raised if config files are missing.
         """
         # if config_gdf.geojson does not exist, then this might be the wrong directory
-        if not file_utilities.file_exists(config_geojson_path, "config_gdf.geojson"):
+        if not os.path.exists(config_geojson_path):
+            logger.warning(f"config_gdf.geojson file missing at {config_geojson_path}")
             return False
 
+
         # config.json contains all the settings for the map, shorelines and transects it must exist
-        if not file_utilities.file_exists(config_json_path, "config.json"):
+        if not os.path.exists(config_json_path):
             raise Exception(f"config.json file missing at {config_json_path}")
 
         # load the config files
