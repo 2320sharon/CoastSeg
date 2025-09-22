@@ -9,7 +9,19 @@ import re
 import shutil
 import string
 from datetime import datetime, timezone
-from typing import Iterable, Hashable, Any, Callable, Dict, List, Optional, Set, Tuple, Union,Sequence
+from typing import (
+    Iterable,
+    Hashable,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    Sequence,
+)
 from sysconfig import get_python_version
 
 # Third-party imports
@@ -113,7 +125,9 @@ def authenticate_and_initialize(
             f"{'Forcing authentication and ' if force else ''}Initializing Google Earth Engine...\n"
         )
     try:
-        if force or not ee.data._credentials:  # pyright: ignore[reportPrivateImportUsage]
+        if (
+            force or not ee.data._credentials
+        ):  # pyright: ignore[reportPrivateImportUsage]
             ee.Authenticate(force=force, **auth_args)
         print(f"kwargs passed to ee.Initialize {kwargs}")
         ee.Initialize(**kwargs)
@@ -255,10 +269,10 @@ def filter_extract_dict(
     sats = np.array(gdf.satname)
     dates = np.array(pd.to_datetime(gdf["date"]).dt.tz_localize("UTC"))
     selected_indexes = get_selected_indexes(
-        extracted_shorelines_dict, dates_list=dates, sat_list=sats # type: ignore
+        extracted_shorelines_dict, dates_list=dates, sat_list=sats  # type: ignore
     )
     # convert gdf to the output epsg otherwise output dict will not be in correct crs
-    projected_gdf = gdf.to_crs(output_crs) # type: ignore
+    projected_gdf = gdf.to_crs(output_crs)  # type: ignore
 
     # update the extracted_shorelines_dict with the selected indexes
     for idx in selected_indexes:
@@ -596,6 +610,7 @@ def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict
     new_config["settings"] = settings
     return new_config
 
+
 def update_transect_time_series(
     filepaths: List[str], dates_list: List[datetime]
 ) -> None:
@@ -731,7 +746,7 @@ def update_extracted_shorelines_dict_transects_dict(
         if extracted_shorelines_dict is not None:
             # Get the indexes of the selected items in the extracted_shorelines_dict
             selected_indexes = get_selected_indexes(
-                extracted_shorelines_dict, dates_list, sat_list # type: ignore
+                extracted_shorelines_dict, dates_list, sat_list  # type: ignore
             )
             # attempt to delete the selected indexes from the "transect_cross_distances.json"
             transect_cross_distances_path = os.path.join(
@@ -1263,7 +1278,7 @@ def filter_images(
     return bad_files  # Optionally return the list of bad files
 
 
-def calculate_image_area(filepath: str, pixel_size: int) -> float:#
+def calculate_image_area(filepath: str, pixel_size: int) -> float:  #
     """
     Calculate the area of an image in square kilometers.
 
@@ -1610,7 +1625,9 @@ def create_unique_ids(data, prefix_length: int = 3):
 
 
 def extract_feature_from_geodataframe(
-    gdf: Union[gpd.GeoDataFrame, pd.DataFrame], feature_type: Union[int, str,Iterable], type_column: str = "type"
+    gdf: Union[gpd.GeoDataFrame, pd.DataFrame],
+    feature_type: Union[int, str, Iterable],
+    type_column: str = "type",
 ) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
     """
     Extracts a GeoDataFrame of features of a given type and specified columns from a larger GeoDataFrame.
@@ -2550,58 +2567,6 @@ def copy_configs(src: str, dst: str) -> None:
             shutil.copy(config_json_path, dst_file)
 
 
-def create_file_chooser_with_clear(
-    callback,
-    title: str = "Select a file",
-    filter_pattern: str = "",
-    starting_directory: str = "",
-):
-    """
-    This function creates a file chooser with a clear button.
-    It takes a callback function and an optional title as arguments.
-    It only searches for .geojson files, unless a different filter pattern is specified.
-
-    Args:
-        callback (Callable[[FileChooser], None]): A callback function that is called
-        when a file is selected.
-        title (str): Optional title for the file chooser.
-        filter_pattern (str): Optional filter pattern for the file chooser.
-        starting_directory (str): Optional starting directory for the file chooser.
-
-    Returns:
-        chooser (HBox): A HBox containing the file chooser and a clear button.
-    """
-    padding = "0px 0px 0px 5px"  # upper, right, bottom, left
-    initial_path = os.getcwd()
-    if starting_directory:
-        initial_path = os.path.join(initial_path, starting_directory)
-    file_chooser = FileChooser(initial_path)
-
-    file_chooser.dir_icon = os.sep
-    file_chooser.filter_pattern = (
-        ["*.geojson"] if not filter_pattern else [filter_pattern]
-    )
-    file_chooser.title = f"<b>{title or 'Select a geojson file'}</b>"
-
-    # callback function is called when a file is selected
-    file_chooser.register_callback(callback)
-
-    clear_button = Button(
-        description="Clear",
-        tooltip="Clear the selected file",
-        button_style="warning",
-        layout=Layout(height="28px", padding=padding),
-    )
-
-    def clear_selection(b):
-        file_chooser.reset()  # resets the file chooser
-
-    clear_button.on_click(clear_selection)
-
-    chooser = HBox([file_chooser, clear_button], layout=Layout(width="100%"))
-    return chooser, file_chooser
-
-
 def create_file_chooser(
     callback: Callable[[FileChooser], None],
     title: str = None,
@@ -3113,7 +3078,9 @@ def convert_wgs_to_utm(lon: float, lat: float) -> str:
     return epsg_code
 
 
-def extract_roi_by_id(gdf: gpd.GeoDataFrame, roi_id: Union[str, int]) -> gpd.GeoDataFrame:
+def extract_roi_by_id(
+    gdf: gpd.GeoDataFrame, roi_id: Union[str, int]
+) -> gpd.GeoDataFrame:
     """Returns GeoDataFrame with a single ROI whose id matches roi_id.
        If roi_id is None returns gdf
 
@@ -3516,7 +3483,9 @@ def save_extracted_shorelines(
     )
 
 
-def stringify_datetime_columns(df: Union[pd.DataFrame, gpd.GeoDataFrame]) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
+def stringify_datetime_columns(
+    df: Union[pd.DataFrame, gpd.GeoDataFrame],
+) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
     """
     Convert all datetime columns in a DataFrame or GeoDataFrame to string.
 
@@ -3940,7 +3909,7 @@ def create_roi_settings(
             "sentinel_1_properties": {
                 "transmitterReceiverPolarisation": ["VH"],
                 "instrumentMode": "IW",
-            },  # default sentinel 1 properties 
+            },  # default sentinel 1 properties
         }
         roi_settings[roi_id] = inputs_dict
     return roi_settings
