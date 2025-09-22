@@ -1,25 +1,24 @@
 # Standard Python imports
-import datetime
 import logging
 import os
-from typing import Any, Callable, Dict, List, Optional, Union
-
-# Internal Python imports
-from coastseg import common
-from coastseg import core_utilities
-from coastseg import exception_handler
-from coastseg import file_utilities
-from coastseg import UI_elements
-from coastseg.extract_shorelines_widget import Extracted_Shoreline_widget
-from coastseg.settings_UI import Settings_UI
+from typing import Any, Dict, List, Optional
 
 # External Python imports
 import ipywidgets as widgets
-import traitlets
-from IPython.display import clear_output, display
-from ipyfilechooser import FileChooser
 from google.auth import exceptions as google_auth_exceptions
+from ipyfilechooser import FileChooser
+from IPython.display import display
 
+# Internal Python imports
+from coastseg import (
+    UI_elements,
+    common,
+    core_utilities,
+    exception_handler,
+    file_utilities,
+)
+from coastseg.extract_shorelines_widget import Extracted_Shoreline_widget
+from coastseg.settings_UI import Settings_UI
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +41,7 @@ GRID_LAYOUT = widgets.Layout(
     grid_auto_columns="87px",
     width="550px",
 )
+
 
 def format_as_html(settings: Dict[str, Any]) -> str:
     """Generates HTML content displaying the settings.
@@ -92,7 +92,9 @@ class UI:
     download_view = widgets.Output(layout={"border": "1px solid black"})
     preview_view = widgets.Output()
 
-    def get_settings_dashboard(self, basic_settings: Optional[List[str]] = None) -> Settings_UI:
+    def get_settings_dashboard(
+        self, basic_settings: Optional[List[str]] = None
+    ) -> Settings_UI:
         """Gets or creates the settings dashboard.
 
         Args:
@@ -148,7 +150,6 @@ class UI:
             description="Enable image size filter",
             indent=False,  # To align the description with the label
         )
-
 
         # create slider to select minimum ROI coverage
         # this is the minimum percentage of the image that must overlap the ROI to be downloaded
@@ -468,7 +469,9 @@ class UI:
         self.save_style = dict(button_color="#50bf8f")
         self.clear_stlye = dict(button_color="#a3adac")
 
-    def launch_error_box(self, title: Optional[str] = None, msg: Optional[str] = None) -> None:
+    def launch_error_box(
+        self, title: Optional[str] = None, msg: Optional[str] = None
+    ) -> None:
         """Shows a user error message in a warning box.
 
         Args:
@@ -479,7 +482,7 @@ class UI:
             None
         """
         # Show user error message
-        warning_box = common.create_warning_box(title=title, msg=msg) # type: ignore
+        warning_box = common.create_warning_box(title=title, msg=msg)  # type: ignore
         # clear row and close all widgets in row before adding new warning_box
         common.clear_row(self.error_row)
         # add instance of warning_box to self.error_row
@@ -844,7 +847,7 @@ class UI:
 
     def _create_HTML_widgets(self) -> None:
         """Creates HTML widgets that display the instructions.
-        
+
         Widgets created: instr_create_roi, instr_save_roi, instr_load_btns,
         instr_download_roi
 
@@ -1191,6 +1194,7 @@ class UI:
         Returns:
             None
         """
+
         # Prompt user to select a config geojson file
         def load_callback(filechooser: FileChooser) -> None:
             try:
@@ -1243,6 +1247,7 @@ class UI:
         Returns:
             None
         """
+
         # Prompt user to select a geojson file
         def load_callback(filechooser: FileChooser) -> None:
             try:
@@ -1322,28 +1327,28 @@ class UI:
         try:
             # Prompt the user to select a directory of images
             if "extracted shorelines" in btn.description.lower():
-                print(f"Removing extracted shoreline")
+                print("Removing extracted shoreline")
                 self.coastseg_map.remove_extracted_shoreline_layers()
             elif "selected shorelines" in btn.description.lower():
-                print(f"Removing Selected Shorelines")
+                print("Removing Selected Shorelines")
                 self.coastseg_map.remove_selected_shorelines()
             elif "shoreline extraction area" in btn.description.lower():
-                print(f"Removing Shoreline Extraction Area")
+                print("Removing Shoreline Extraction Area")
                 self.coastseg_map.remove_shoreline_extraction_area()
             elif "selected rois" in btn.description.lower():
-                print(f"Removing Selected ROIs")
+                print("Removing Selected ROIs")
                 self.coastseg_map.remove_selected_rois()
             elif "shoreline" in btn.description.lower():
-                print(f"Removing shoreline")
+                print("Removing shoreline")
                 self.coastseg_map.remove_shoreline()
             elif "transects" in btn.description.lower():
-                print(f"Removing  transects")
+                print("Removing  transects")
                 self.coastseg_map.remove_transects()
             elif "bbox" in btn.description.lower():
-                print(f"Removing bounding box")
+                print("Removing bounding box")
                 self.coastseg_map.remove_bbox()
             elif "rois" in btn.description.lower():
-                print(f"Removing ROIs")
+                print("Removing ROIs")
                 self.coastseg_map.remove_all_rois()
         except Exception as error:
             # renders error message as a box on map
@@ -1362,22 +1367,22 @@ class UI:
         UI.debug_view.clear_output(wait=True)
         try:
             if "shoreline" in btn.description.lower():
-                print(f"Saving shoreline to file")
+                print("Saving shoreline to file")
                 self.coastseg_map.save_feature_to_file(
                     self.coastseg_map.shoreline, "shoreline"
                 )
             if "transects" in btn.description.lower():
-                print(f"Saving transects to file")
+                print("Saving transects to file")
                 self.coastseg_map.save_feature_to_file(
                     self.coastseg_map.transects, "transects"
                 )
             if "bbox" in btn.description.lower():
-                print(f"Saving bounding box to file")
+                print("Saving bounding box to file")
                 self.coastseg_map.save_feature_to_file(
                     self.coastseg_map.bbox, "bounding box"
                 )
             if "rois" in btn.description.lower():
-                print(f"Saving ROIs to file")
+                print("Saving ROIs to file")
                 self.coastseg_map.save_feature_to_file(self.coastseg_map.rois, "ROI")
         except Exception as error:
             # renders error message as a box on map
