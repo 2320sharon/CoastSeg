@@ -1,8 +1,16 @@
 import logging
 import os
+from typing import Optional
 
 from IPython.display import display
-from coastseg import common, core_utilities, file_utilities, settings_UI, zoo_model,UI_elements
+from coastseg import (
+    common,
+    core_utilities,
+    file_utilities,
+    settings_UI,
+    zoo_model,
+    UI_elements,
+)
 from coastseg.tide_correction import compute_tidal_corrections
 from coastseg.upload_feature_widget import FileUploader
 from ipyfilechooser import FileChooser
@@ -24,10 +32,11 @@ from ipywidgets import (
 logger = logging.getLogger(__name__)
 
 # syle standards
-MAX_HEIGHT='max-height: 300px;'
-OVERFLOW_Y='overflow-y: auto;'
-OVERFLOW_X='overflow-x: auto;'
-TEXT_ALIGN='text-align: center;'
+MAX_HEIGHT = "max-height: 300px;"
+OVERFLOW_Y = "overflow-y: auto;"
+OVERFLOW_X = "overflow-x: auto;"
+TEXT_ALIGN = "text-align: center;"
+
 
 class UI_Models:
     # all instances of UI will share the same debug_view
@@ -44,7 +53,7 @@ class UI_Models:
             title="",
             instructions=instructions,
             filter_pattern="*geojson",
-            dropdown_options=["transects", "shorelines","shoreline extraction area"],
+            dropdown_options=["transects", "shorelines", "shoreline extraction area"],
             file_selection_title="Select a geojson file",
             max_width=400,
         )
@@ -60,16 +69,16 @@ class UI_Models:
         }
         # list of RGB and MNDWI models available
         self.RGB_models = [
-            "global_segformer_RGB_4class_14036903", # global segformer model
-            "AK_segformer_RGB_4class_14037041", # AK segformer model
+            "global_segformer_RGB_4class_14036903",  # global segformer model
+            "AK_segformer_RGB_4class_14037041",  # AK segformer model
         ]
         self.MNDWI_models = [
             "global_segformer_MNDWI_4class_14183366",
-            "AK_segformer_MNDWI_4class_14187478 ", # AK segformer model
+            "AK_segformer_MNDWI_4class_14187478 ",  # AK segformer model
         ]
         self.NDWI_models = [
-            "global_segformer_NDWI_4class_14172182", # global segformer model
-            "AK_segformer_NDWI_4class_14183210", # AK segformer model
+            "global_segformer_NDWI_4class_14172182",  # global segformer model
+            "AK_segformer_NDWI_4class_14183210",  # AK segformer model
         ]
         self.session_name = ""
         self.shoreline_session_directory = ""
@@ -84,11 +93,10 @@ class UI_Models:
         self.warning_row1 = HBox([])
         self.warning_row2 = HBox([])
 
-    def get_warning_box(self, position: int = 1):
-        if position == 1:
-            return self.warning_row1
+    def get_warning_box(self, position: int = 1) -> HBox:
         if position == 2:
             return self.warning_row2
+        return self.warning_row1  # default return warning row 1
 
     def clear_extract_shorelines_btn(
         self,
@@ -99,7 +107,6 @@ class UI_Models:
         clear_button.on_click(self.clear_extract_shorelines_view)
         return clear_button
 
-
     def clear_tidal_correction_btn(
         self,
     ):
@@ -108,7 +115,6 @@ class UI_Models:
         )
         clear_button.on_click(self.clear_tidal_correction_view)
         return clear_button
-
 
     def clear_extract_shorelines_view(self, btn):
         UI_Models.extract_shorelines_view.clear_output()
@@ -154,7 +160,9 @@ class UI_Models:
             session_path = file_utilities.create_directory(base_path, "sessions")
             new_session_path = os.path.join(session_path, session_name)
             if os.path.exists(new_session_path):
-                print(f"Session {session_name} already exists at {new_session_path} and will be overwritten.")
+                print(
+                    f"Session {session_name} already exists at {new_session_path} and will be overwritten."
+                )
                 self.set_shoreline_session_name(session_name)
             elif not os.path.exists(new_session_path):
                 print(f"Session {session_name} will be created at {new_session_path}")
@@ -227,63 +235,88 @@ class UI_Models:
         return VBox([widget for widget_name, widget in settings.items()])
 
     def get_model_settings_accordion(self):
-            """
-            Returns an Accordion widget containing the basic and advanced model settings sections.
+        """
+        Returns an Accordion widget containing the basic and advanced model settings sections.
 
-            Returns:
-                Accordion: An Accordion widget with the basic and advanced model settings sections.
-            """
-            # create settings accordion widget
-            settings_accordion = Accordion(
-                children=[
-                    self.get_basic_model_settings_section(),
-                    self.get_adv_model_settings_section(),
-                ]
-            )
-            settings_accordion.set_title(0, "Basic Model Settings")
-            settings_accordion.set_title(1, "Advanced Model Settings")
-            settings_accordion.selected_index = 0
+        Returns:
+            Accordion: An Accordion widget with the basic and advanced model settings sections.
+        """
+        # create settings accordion widget
+        settings_accordion = Accordion(
+            children=[
+                self.get_basic_model_settings_section(),
+                self.get_adv_model_settings_section(),
+            ]
+        )
+        settings_accordion.set_title(0, "Basic Model Settings")
+        settings_accordion.set_title(1, "Advanced Model Settings")
+        settings_accordion.selected_index = 0
 
-            return settings_accordion
+        return settings_accordion
 
     def create_dashboard(self):
         self.file_row = HBox([])
         self.extracted_shoreline_file_row = HBox([])
         self.tidal_correct_file_row = HBox([])
-        layout = Layout(max_width='270px', overflow='auto',padding='0px 10px 0px 0px')
+        layout = Layout(max_width="270px", overflow="auto", padding="0px 10px 0px 0px")
         # step 1: Select a Model
-        step_1 = HBox([HBox([self.step_1_instr],layout = layout), self.get_model_settings_accordion()])
+        step_1 = HBox(
+            [
+                HBox([self.step_1_instr], layout=layout),
+                self.get_model_settings_accordion(),
+            ]
+        )
         # step 2: Select Settings
         step_2 = HBox(
+            [
+                VBox(
                     [
-                        VBox(
-                            [
-                                self.step_2_instr,
-                                self.save_settings_btn,
-                            ],
-                            layout = layout
-                        ),
-                        self.settings_dashboard.render(),
-                        self.get_view_settings_vbox(),
-                    ]
-                )
-        
+                        self.step_2_instr,
+                        self.save_settings_btn,
+                    ],
+                    layout=layout,
+                ),
+                self.settings_dashboard.render(),
+                self.get_view_settings_vbox(),
+            ]
+        )
+
         # step 3 : Upload Files
-        step_3 = HBox([HBox([self.step_3_instr],layout=layout), self.fileuploader.get_FileUploader_widget()])
-        
+        step_3 = HBox(
+            [
+                HBox([self.step_3_instr], layout=layout),
+                self.fileuploader.get_FileUploader_widget(),
+            ]
+        )
+
         # step 4 : Extract Shorelines with Model
-        step_4 = VBox([self.step_4_instr, self.get_session_selection(), self.use_select_images_button,self.file_row,self.extract_shorelines_button])
-        
+        step_4 = VBox(
+            [
+                self.step_4_instr,
+                self.get_session_selection(),
+                self.use_select_images_button,
+                self.file_row,
+                self.extract_shorelines_button,
+            ]
+        )
+
         # step 5 : Tidal Correction
         # Has the widgets: instructions, select session button,place to select session, and tidal correction widget
-        step_5 = VBox([self.step_5_instr, self.select_extracted_shorelines_session_button,self.tidal_correct_file_row, self.create_tidal_correction_widget()])
-        
+        step_5 = VBox(
+            [
+                self.step_5_instr,
+                self.select_extracted_shorelines_session_button,
+                self.tidal_correct_file_row,
+                self.create_tidal_correction_widget(),
+            ]
+        )
+
         display(
             step_1,
             step_2,
             step_3,
             step_4,
-           HBox(
+            HBox(
                 [self.clear_extract_shorelines_btn(), UI_Models.extract_shorelines_view]
             ),
             self.warning_row1,
@@ -302,22 +335,22 @@ class UI_Models:
             layout=Layout(margin="0px 5px 0px 0px"),
         )
 
-        self.instructions_ref_elv = HTML(value="Refence Elevation(m) relative to user-specified vertical datum)", 
-                style={'description_width': 'initial'},           
-                layout=Layout(
-                width='auto',         # allows the width to adjust automatically
-                min_width='100px',     # sets a minimum width
-                flex='1 1 auto'        # makes it flexible within a flex container
-            ))
+        self.instructions_ref_elv = HTML(
+            value="Refence Elevation(m) relative to user-specified vertical datum)",
+            style={"description_width": "initial"},
+            layout=Layout(
+                width="auto",  # allows the width to adjust automatically
+                min_width="100px",  # sets a minimum width
+                flex="1 1 auto",  # makes it flexible within a flex container
+            ),
+        )
         self.reference_elevation_text = FloatText(
             value=0.0,
             description="Reference Elevation:",
-            style={'description_width': 'initial'},
+            style={"description_width": "initial"},
         )
         self.beach_slope_selector = UI_elements.BeachSlopeSelector()
         self.tide_selector = UI_elements.TidesSelector()
-
-
 
         self.tidally_correct_button = Button(
             description="Correct Tides",
@@ -367,7 +400,12 @@ class UI_Models:
         tides_file = self.tide_selector.tides_file
         # load in shoreline settings, session directory with model outputs, and a new session name to store extracted shorelines
         compute_tidal_corrections(
-            session_name, [roi_id], beach_slope, reference_elevation,model = model, tides_file = tides_file
+            session_name,
+            [roi_id],
+            beach_slope,
+            reference_elevation,
+            model=model,
+            tides_file=tides_file,
         )
 
     def _create_widgets(self):
@@ -397,7 +435,11 @@ class UI_Models:
         )
         self.tta_radio.observe(self.handle_tta, "value")
         self.model_input_dropdown = Dropdown(
-            options=["RGB", "MNDWI", "NDWI",],
+            options=[
+                "RGB",
+                "MNDWI",
+                "NDWI",
+            ],
             value="RGB",
             description="Model Input:",
             disabled=False,
@@ -424,10 +466,12 @@ class UI_Models:
             icon="floppy-o",
         )
         self.save_settings_btn.on_click(self.save_settings_clicked)
-        
+
         # Extract Shorelines button: extracts shorelines from model outputs
         self.extract_shorelines_button = Button(
-            description="Extract Shorelines", style=action_style,icon="fa-bolt",
+            description="Extract Shorelines",
+            style=action_style,
+            icon="fa-bolt",
         )
         self.extract_shorelines_button.on_click(self.run_model_button_clicked)
 
@@ -471,7 +515,7 @@ class UI_Models:
             <br><b>2.</b> Click save to save the settings\
             ",
             layout=Layout(margin="0px 0px 0px 0px"),
-        ) 
+        )
         # step 3 : Upload Files
         self.step_3_instr = HTML(
             value="<h2>Step 3: Upload Files</h2>\
@@ -499,8 +543,8 @@ class UI_Models:
             <br><b>2. Run Tidal Correction:</b> Runs the tide model and save tidally corrected CSV files in the selected session directory.\
             ",
             layout=Layout(margin="0px 0px 0px 0px"),
-        )     
-        
+        )
+
         self.run_model_instr = HTML(
             value="<h2>Run a Model</h2>\
             <b>1. Session Name:</b> Enter a name.This creates a folder in the 'sessions' directory for model outputs.\
@@ -564,12 +608,9 @@ class UI_Models:
             self.model_dropdown.options = self.MNDWI_models
         if change["new"] == "NDWI":
             self.model_dropdown.options = self.NDWI_models
-            
-        self.model_dict["img_type"] = change["new"]
-        # if change["new"] == "RGB+MNDWI+NDWI":
-        #     self.model_dropdown.options = self.five_band_models
 
-        
+        self.model_dict["img_type"] = change["new"]
+
     @extract_shorelines_view.capture(clear_output=True)
     def run_model_button_clicked(self, button):
         # user must have selected imagery first
@@ -596,22 +637,23 @@ class UI_Models:
                 position=1,
             )
             return
-        
+
         print("Running the model. Please wait.")
         zoo_model_instance = self.get_model_instance()
 
         # get the transects and shorelines file paths that were uploaded
         transects_path = self.fileuploader.files_dict.get("transects", "")
         shoreline_path = self.fileuploader.files_dict.get("shorelines", "")
-        shoreline_extraction_area_path = self.fileuploader.files_dict.get("shoreline extraction area", "")
+        shoreline_extraction_area_path = self.fileuploader.files_dict.get(
+            "shoreline extraction area", ""
+        )
         zoo_model_instance.run_model_and_extract_shorelines(
             self.model_dict["sample_direc"],
             session_name=session_name,
             shoreline_path=shoreline_path,
             transects_path=transects_path,
-            shoreline_extraction_area_path = shoreline_extraction_area_path
+            shoreline_extraction_area_path=shoreline_extraction_area_path,
         )
-
 
     @extract_shorelines_view.capture(clear_output=True)
     def select_RGB_callback(self, filechooser: FileChooser) -> None:
@@ -652,7 +694,6 @@ class UI_Models:
         # add instance of file_chooser to self.file_row
         self.file_row.children = [file_chooser]
 
-
     @tidal_correction_view.capture(clear_output=True)
     def selected_shoreline_session_callback(self, filechooser: FileChooser) -> None:
         if filechooser.selected:
@@ -672,7 +713,9 @@ class UI_Models:
         # add instance of file_chooser to self.tidal_correct_file_row
         self.tidal_correct_file_row.children = [file_chooser]
 
-    def launch_error_box(self, title: str = None, msg: str = None, position: int = 1):
+    def launch_error_box(
+        self, title: Optional[str] = None, msg: Optional[str] = None, position: int = 1
+    ):
         # Show user error message
         warning_box = common.create_warning_box(
             title=title, msg=msg, instructions=None, msg_width="95%", box_width="30%"
@@ -682,7 +725,9 @@ class UI_Models:
         # add instance of warning_box to warning_row
         self.get_warning_box(position).children = [warning_box]
 
-    def save_updated_settings(self,):
+    def save_updated_settings(
+        self,
+    ):
         # get the settings from the settings dashboard
         settings = self.settings_dashboard.get_settings()
         # get the model settings
@@ -703,14 +748,14 @@ class UI_Models:
             self.zoo_model_instance.set_settings(**settings)
             # update the settings in the view settings section
             self.update_displayed_settings()
-        
+
         except Exception as error:
             self.launch_error_box(
                 "Error saving settings",
                 f"An error occurred while saving settings: {error}",
                 position=1,
             )
-            
+
     def get_view_settings_vbox(self) -> VBox:
         # update settings button
         action_style = dict(button_color="#ae3cf0")
@@ -722,13 +767,15 @@ class UI_Models:
         settings = self.zoo_model_instance.get_settings()
         setting_content = format_as_html(settings)
         self.settings_html = HTML(
-             f"<div style='max-height: 300px;max-width: 280px; overflow-x: auto; overflow-y:  auto; text-align: left;'>"
+            f"<div style='max-height: 300px;max-width: 280px; overflow-x: auto; overflow-y:  auto; text-align: left;'>"
             f"{setting_content}"
             f"</div>"
         )
         # The view settings section: contains the settings and a button to refresh the settings
         view_settings_vbox = VBox([self.settings_html, refresh_settings_btn])
-        html_settings_accordion = Accordion(children=[view_settings_vbox],selected_index=0)
+        html_settings_accordion = Accordion(
+            children=[view_settings_vbox], selected_index=0
+        )
         html_settings_accordion.set_title(0, "View Settings")
         return html_settings_accordion
 
@@ -744,7 +791,7 @@ class UI_Models:
                 f"An error occurred while saving settings: {error}",
                 position=1,
             )
-            
+
     def update_displayed_settings(self):
         """
         Updates the displayed settings in the UI.
@@ -757,6 +804,7 @@ class UI_Models:
         """
         setting_content = format_as_html(self.zoo_model_instance.get_settings())
         self.settings_html.value = f"""<div style='max-height: 300px;max-width: 280px; overflow-x: auto; overflow-y:  auto; text-align: left;'>{setting_content}</div>"""
+
 
 def format_as_html(settings: dict):
     """
@@ -793,4 +841,3 @@ def format_as_html(settings: dict):
     <p>multiple_inter: {settings.get("multiple_inter", "unknown")}</p>
     <p>prc_multiple: {settings.get("prc_multiple", "unknown")}</p>
     """
-    
