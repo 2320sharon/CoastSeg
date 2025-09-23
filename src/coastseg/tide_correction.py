@@ -1,30 +1,28 @@
 # Standard library imports
-import os
-import re
 import logging
+import os
 import pathlib
-from pathlib import Path
-from typing import Collection, Dict, List, Optional, Tuple, Union, Iterable, Any
+import re
 import traceback
-import pytz
 from enum import Enum
+from pathlib import Path
+from typing import Collection, Dict, Iterable, List, Tuple, Union
 
-from coastseg import file_utilities
-from coastseg.file_utilities import progress_bar_context
-from coastseg import common
-from coastseg import core_utilities
-
-# Third-party imports
-from tqdm import tqdm
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pyproj
-import netCDF4  # do this otherwise pyTMD will have issues loading netCDF4.Dataset
 import pyTMD.io
 import pyTMD.io.model
 import pyTMD.predict
 import pyTMD.time
+import pytz
+
+# Third-party imports
+from tqdm import tqdm
+
+from coastseg import common, core_utilities, file_utilities
+from coastseg.file_utilities import progress_bar_context
 
 # Logger setup
 logger = logging.getLogger(__name__)
@@ -1006,13 +1004,12 @@ def correct_tides(
     - Tidally corrected time series data will be saved to the session location for the ROI.
     """
     with progress_bar_context(use_progress_bar, total=6) as update:
-
         update(f"Getting time series for ROI : {roi_id}")
         # load the time series
         try:
             # read the merged csv of the raw timeseries (aka not tidally corrected)
             timeseries = get_timeseries(roi_id, session_name, is_merged=True)
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             print(
                 f"No time series data found for {roi_id} cannot perform tide correction"
             )
