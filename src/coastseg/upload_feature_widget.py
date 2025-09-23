@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Union, Collection
+from typing import Any, Collection, Dict, List, Union
 
 import ipywidgets as widgets
 from ipyfilechooser import FileChooser

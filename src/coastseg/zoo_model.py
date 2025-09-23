@@ -1955,8 +1955,8 @@ class Zoo_Model:
                 f"Cannot find corresponding .json or .modelcard.json files for .h5 files at {model_id}"
             )
 
-        logger.info(f"all_models_reponses : {all_models_reponses }")
-        logger.info(f"all_json_reponses : {all_json_reponses }")
+        logger.info(f"all_models_reponses : {all_models_reponses}")
+        logger.info(f"all_json_reponses : {all_json_reponses}")
         for response in all_models_reponses + all_json_reponses:
             # get the link of the best model
             link = response["links"]["self"]
