@@ -9,25 +9,27 @@ Example:
     >>> import geopandas as gpd
     >>> # Create from GeoJSON polygon
     >>> polygon = {
-    ...     "type": "Polygon", 
+    ...     "type": "Polygon",
     ...     "coordinates": [[[-118.5, 33.5], [-118.5, 33.6], [-118.4, 33.6], [-118.4, 33.5], [-118.5, 33.5]]]
     ... }
     >>> bbox = Bounding_Box(rectangle=polygon)
     >>> print(f"Area: {bbox.gdf.to_crs('EPSG:3857').area.iloc[0]:.2f} m²")
     >>> map_layer = bbox.style_layer(bbox.gdf.__geo_interface__, "My AOI")
 """
-# Standard library imports
-from typing import Any, Dict, List, Optional, Union
 
-# Internal dependencies imports
-from .exceptions import BboxTooLargeError, BboxTooSmallError
-from coastseg.common import preprocess_geodataframe, validate_geometry_types
-from coastseg.feature import Feature
+# Standard library imports
+from typing import Any, Dict, Optional, Union
 
 # External dependencies imports
 import geopandas as gpd
-from shapely.geometry import shape
 from ipyleaflet import GeoJSON
+from shapely.geometry import shape
+
+from coastseg.common import preprocess_geodataframe, validate_geometry_types
+from coastseg.feature import Feature
+
+# Internal dependencies imports
+from .exceptions import BboxTooLargeError, BboxTooSmallError
 
 __all__ = ["Bounding_Box"]
 
@@ -55,8 +57,13 @@ class Bounding_Box(Feature):
     MIN_AREA: int = 1000  # UNITS = Sq. Meters
     LAYER_NAME: str = "Bbox"
 
-    def __init__(self, rectangle: Union[Dict[str, Any], gpd.GeoDataFrame], filename: str = "bbox.geojson") -> None:
-        """Initialize a :class:`Bounding_Box` from a GeoJSON-like dict or GeoDataFrame.
+    def __init__(
+        self,
+        rectangle: Union[Dict[str, Any], gpd.GeoDataFrame],
+        filename: str = "bbox.geojson",
+    ) -> None:
+        """
+        Initialize Bounding_Box from geometry.
 
         Args:
             rectangle (Dict[str, Any] | gpd.GeoDataFrame): The bounding geometry. When a dict
@@ -67,7 +74,7 @@ class Bounding_Box(Feature):
             filename (str): Default filename.
 
         Raises:
-            Exception: If rectangle is not a supported type.
+            Exception: If rectangle type invalid.
         """
         self.gdf: Optional[gpd.GeoDataFrame] = None
         self.filename: str = filename
@@ -81,24 +88,22 @@ class Bounding_Box(Feature):
             )
 
     def __str__(self) -> str:
+        """Return string representation."""
         return f"BBox: geodataframe {self.gdf}"
 
     def __repr__(self) -> str:
+        """Return string representation."""
         return f"BBox: geodataframe {self.gdf}"
 
     def _initialize_from_gdf(self, bbox_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """Clean and validate a GeoDataFrame as a bounding box.
-
-        The input is filtered to keep only the geometry column, reprojected to
-        EPSG:4326, and validated to ensure Polygon/MultiPolygon types.
+        """
+        Clean and validate GeoDataFrame as bounding box.
 
         Args:
-            bbox_gdf (gpd.GeoDataFrame): A GeoDataFrame containing the bounding
-                geometry.
+            bbox_gdf: Input GeoDataFrame.
 
         Returns:
-            gpd.GeoDataFrame: A cleaned, validated GeoDataFrame in EPSG:4326.
-
+            Cleaned GeoDataFrame in EPSG:4326.
         """
         # clean the geodataframe
         bbox_gdf = preprocess_geodataframe(
@@ -115,21 +120,15 @@ class Bounding_Box(Feature):
     def create_geodataframe(
         self, rectangle: Dict[str, Any], crs: str = "EPSG:4326"
     ) -> gpd.GeoDataFrame:
-        """Create a normalized GeoDataFrame from a GeoJSON-like mapping.
-
-        The geometry is wrapped in a one-row GeoDataFrame, assigned the provided
-        CRS, cleaned to keep only the geometry, reprojected to EPSG:4326, and
-        validated to ensure Polygon/MultiPolygon types.
+        """
+        Create GeoDataFrame from GeoJSON mapping.
 
         Args:
-            rectangle (Dict[str, Any]): GeoJSON-like dictionary describing a Polygon or
-                MultiPolygon.
-            crs (str, optional): Coordinate reference system for the input geometry.
-                Defaults to "EPSG:4326".
+            rectangle: GeoJSON dict of geometry.
+            crs: Input CRS. Defaults to "EPSG:4326".
 
         Returns:
-            gpd.GeoDataFrame: A GeoDataFrame containing the geometry with CRS
-            EPSG:4326.
+            GeoDataFrame in EPSG:4326.
         """
         geom = [shape(rectangle)]
         geojson_bbox = gpd.GeoDataFrame({"geometry": geom})
@@ -147,17 +146,17 @@ class Bounding_Box(Feature):
         return geojson_bbox
 
     def style_layer(self, geojson: Dict[str, Any], layer_name: str) -> GeoJSON:
-        """Return styled GeoJSON layer for map display.
-        
-        Args:
-            geojson (Dict[str, Any]): A GeoJSON feature/feature-collection to render.
-            layer_name (str): The display name for the layer.
-            
-        Returns:
-            GeoJSON: A styled layer using a green outline/fill with
-            partial opacity, suitable for overlay on an interactive map.
         """
-        style={
+        Return styled GeoJSON layer for map.
+
+        Args:
+            geojson: GeoJSON to render.
+            layer_name: Display name.
+
+        Returns:
+            Styled GeoJSON layer.
+        """
+        style = {
             "color": "#75b671",
             "fill_color": "#75b671",
             "opacity": 1,
@@ -168,14 +167,15 @@ class Bounding_Box(Feature):
 
     @staticmethod
     def check_bbox_size(bbox_area: Union[int, float]) -> None:
-        """Validate the area of the bounding box against min/max thresholds.
+        """
+        Validate bounding box area.
 
         Args:
-            bbox_area (Union[int, float]): Area of the bounding box in square meters.
+            bbox_area: Area in square meters.
 
         Raises:
-            BboxTooLargeError: If bbox_area exceeds :attr:`MAX_AREA`.
-            BboxTooSmallError: If bbox_area is below :attr:`MIN_AREA`.
+            BboxTooLargeError: If exceeds max area.
+            BboxTooSmallError: If below min area.
         """
         if bbox_area > Bounding_Box.MAX_AREA:
             raise BboxTooLargeError()
