@@ -1,25 +1,22 @@
-import os
-import re
-import glob
-import shutil
+import datetime
 import json
 import logging
-import datetime
-from typing import Union, Collection, Optional
+import os
+import re
+import shutil
+from contextlib import contextmanager
 
 # Specific classes/functions from modules
-from typing import List, Union
 from json import JSONEncoder
-from contextlib import contextmanager
-from tqdm.auto import tqdm
+from typing import Collection, List, Optional, Union
 
 # Third-party imports
 import geopandas as gpd
-import pandas as pd
-import geojson
 import numpy as np
-from coastseg import core_utilities
-from coastseg import common
+import pandas as pd
+from tqdm.auto import tqdm
+
+from coastseg import common, core_utilities
 
 # Logger setup
 logger = logging.getLogger(__name__)
@@ -39,7 +36,7 @@ def progress_bar_context(
         **kwargs: Additional keyword arguments passed to tqdm.
 
     Returns:
-        Callable[[str, float], None]: A function to call for updating the progress bar. 
+        Callable[[str, float], None]: A function to call for updating the progress bar.
             Takes a message string and optional update value. If use_progress_bar is False,
             it's a no-op function.
     """
@@ -220,10 +217,10 @@ def join_model_scores_to_geodataframe(
         geodataframe = result if isinstance(result, gpd.GeoDataFrame) else geodataframe
 
     geodataframe["date"] = geodataframe["date"].dt.strftime("%Y-%m-%d %H:%M:%S")
-    geodataframe = common.stringify_datetime_columns(geodataframe)  
-    
+    geodataframe = common.stringify_datetime_columns(geodataframe)
+
     output_path = output_path or geodataframe_path
-    geodataframe.to_file(output_path, driver="GeoJSON") # type: ignore
+    geodataframe.to_file(output_path, driver="GeoJSON")  # type: ignore
     return output_path
 
 
@@ -320,26 +317,29 @@ def load_package_resource(
             )
     # Get the resource location
     resource_location = resources.files(pkg_name).joinpath(resource_name)
-    
+
     # If a file name is provided, update the resource location
     if file_name:
         resource_location = resource_location.joinpath(file_name)
 
     return str(resource_location)
 
+
 def generate_datestring() -> str:
     """
     Generate a datetime string in the format %m-%d-%y__%I_%M_%S
 
     Returns:
-        str: A datetime string in the format %m-%d-%y__%I_%M_%S 
+        str: A datetime string in the format %m-%d-%y__%I_%M_%S
              (e.g., "01-31-22__12_19_45").
     """
     date = datetime.datetime.now()
     return date.strftime("%m-%d-%y__%I_%M_%S")
 
 
-def read_json_file(json_file_path: str, raise_error: bool = False, encoding: str = "utf-8") -> dict:
+def read_json_file(
+    json_file_path: str, raise_error: bool = False, encoding: str = "utf-8"
+) -> dict:
     """
     Reads a JSON file and returns the parsed data as a dictionary.
 
@@ -525,7 +525,6 @@ def move_files(
                     logger.info(f"Deleted source directory {src_dir}")
 
 
-
 def find_parent_directory(
     path: str, directory_name: str, stop_directory: str = ""
 ) -> Optional[str]:
@@ -569,12 +568,12 @@ def config_to_file(config: Union[dict, gpd.GeoDataFrame], filepath: str) -> None
     """
     Save config to config.json or config_gdf.geojson.
 
-    The config type determines the file type: dict saves to config.json, 
+    The config type determines the file type: dict saves to config.json,
     geodataframe saves to config_gdf.geojson.
 
     Args:
         config (Union[dict, gpd.GeoDataFrame]): Data to save to config file.
-        filepath (str): Full path to directory to save config file. 
+        filepath (str): Full path to directory to save config file.
                        NOT INCLUDING THE FILENAME unless it ends with config.json or config_gdf.geojson.
 
     Returns:
@@ -585,20 +584,20 @@ def config_to_file(config: Union[dict, gpd.GeoDataFrame], filepath: str) -> None
     save_path = filepath
     # check if config.json or config_gdf.geojson in the filepath
     if filepath.endswith("config.json"):
-        filename = f"config.json"
+        filename = "config.json"
         if isinstance(config, dict):
             write_to_json(filepath, config)
     elif filepath.endswith("config_gdf.geojson"):
-        filename = f"config_gdf.geojson"
+        filename = "config_gdf.geojson"
         if isinstance(config, gpd.GeoDataFrame):
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
             config.to_file(filepath, driver="GeoJSON")
     elif isinstance(config, dict):
-        filename = f"config.json"
+        filename = "config.json"
         save_path = os.path.abspath(os.path.join(filepath, filename))
         write_to_json(save_path, config)
     elif isinstance(config, gpd.GeoDataFrame):
-        filename = f"config_gdf.geojson"
+        filename = "config_gdf.geojson"
         save_path = os.path.abspath(os.path.join(filepath, filename))
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         config.to_file(save_path, driver="GeoJSON")
@@ -636,6 +635,7 @@ def filter_files(files: List[str], avoid_patterns: List[str]) -> List[str]:
             filtered_files.append(file)
     return filtered_files
 
+
 def get_session_location(
     session_name: str = "", base_path: str = "", raise_error: bool = False
 ) -> str:
@@ -667,6 +667,7 @@ def get_session_location(
 
     return session_path
 
+
 def extract_roi_id(path: str) -> Optional[str]:
     """
     Extract the ROI ID from the path.
@@ -689,7 +690,7 @@ def find_matching_directory_by_id(base_directory: str, roi_id: str) -> Optional[
     """
     Find a directory with a matching ROI ID in the given base directory.
 
-    Loops through all directories in the given base_directory to find a directory 
+    Loops through all directories in the given base_directory to find a directory
     with a matching ROI ID.
 
     Args:
@@ -734,11 +735,11 @@ def create_session_path(session_name: str, ROI_directory_name: str) -> str:
     return session_path
 
 
-def create_directory(file_path: str, name: str) -> str:
+def create_directory(file_path: Union[os.PathLike, str], name: str) -> str:
     """Creates a new directory with the given name at the specified file path.
 
     Args:
-        file_path (str): The file path where the new directory will be created.
+        file_path (os.PathLike): The file path where the new directory will be created.
         name (str): The name of the new directory to be created.
 
     Returns:
@@ -808,6 +809,7 @@ def to_file(data: dict, filepath: str) -> None:
 
     with open(filepath, "w") as fp:
         json.dump(data, fp, cls=DateTimeEncoder)
+
 
 def find_directory_recursively(path: str = ".", name: str = "RGB") -> str:
     """
@@ -955,6 +957,7 @@ def mk_new_dir(name: str, location: str) -> str:
         return new_folder
     else:
         raise Exception("Location provided does not exist.")
+
 
 def load_json_data_from_file(search_location: str, filename: str) -> dict:
     """
