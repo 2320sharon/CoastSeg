@@ -2,30 +2,31 @@ import logging
 import os
 from typing import Optional
 
-from IPython.display import display
-from coastseg import (
-    common,
-    core_utilities,
-    file_utilities,
-    settings_UI,
-    zoo_model,
-    UI_elements,
-)
-from coastseg.tide_correction import compute_tidal_corrections
-from coastseg.upload_feature_widget import FileUploader
 from ipyfilechooser import FileChooser
+from IPython.display import display
 from ipywidgets import (
+    HTML,
     Accordion,
     Button,
     Dropdown,
     FloatText,
     HBox,
-    HTML,
     Layout,
     Output,
     Text,
     VBox,
 )
+
+from coastseg import (
+    UI_elements,
+    common,
+    core_utilities,
+    file_utilities,
+    settings_UI,
+    zoo_model,
+)
+from coastseg.tide_correction import compute_tidal_corrections
+from coastseg.upload_feature_widget import FileUploader
 
 # icons sourced from https://fontawesome.com/v4/icons/
 
@@ -43,7 +44,10 @@ class UI_Models:
     extract_shorelines_view = Output(layout={"border": "1px solid black"})
     tidal_correction_view = Output(layout={"border": "1px solid black"})
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """
+        Initialize UI_Models with default settings and widgets.
+        """
         self.settings_dashboard = settings_UI.Settings_UI()
         self.zoo_model_instance = zoo_model.Zoo_Model()
         instructions = "Upload a GeoJSON file that contains either transects or shorelines.\
@@ -98,50 +102,102 @@ class UI_Models:
             return self.warning_row2
         return self.warning_row1  # default return warning row 1
 
-    def clear_extract_shorelines_btn(
-        self,
-    ):
+    def clear_extract_shorelines_btn(self) -> Button:
+        """
+        Create button to clear extract shorelines output view.
+
+        Returns:
+            Button: Clear button widget.
+        """
         clear_button = Button(
             description="Clear TextBox", style=dict(button_color="#a3adac")
         )
         clear_button.on_click(self.clear_extract_shorelines_view)
         return clear_button
 
-    def clear_tidal_correction_btn(
-        self,
-    ):
+    def clear_tidal_correction_btn(self) -> Button:
+        """
+        Create button to clear tidal correction output view.
+
+        Returns:
+            Button: Clear button widget.
+        """
         clear_button = Button(
             description="Clear TextBox", style=dict(button_color="#a3adac")
         )
         clear_button.on_click(self.clear_tidal_correction_view)
         return clear_button
 
-    def clear_extract_shorelines_view(self, btn):
+    def clear_extract_shorelines_view(self, btn: Button) -> None:
+        """
+        Clear extract shorelines output view.
+
+        Args:
+            btn (Button): Button widget that triggered the event.
+        """
         UI_Models.extract_shorelines_view.clear_output()
 
-    def clear_tidal_correction_view(self, btn):
+    def clear_tidal_correction_view(self, btn: Button) -> None:
+        """
+        Clear tidal correction output view.
+
+        Args:
+            btn (Button): Button widget that triggered the event.
+        """
         UI_Models.tidal_correction_view.clear_output()
 
-    def get_model_instance(self):
+    def get_model_instance(self) -> zoo_model.Zoo_Model:
+        """
+        Get the zoo model instance.
+
+        Returns:
+            zoo_model.Zoo_Model: The zoo model instance.
+        """
         return self.zoo_model_instance
 
-    def set_session_name(self, name: str):
+    def set_session_name(self, name: str) -> None:
+        """
+        Set the session name.
+
+        Args:
+            name (str): Session name to set.
+        """
         self.session_name = str(name).strip()
 
-    def get_session_name(
-        self,
-    ):
+    def get_session_name(self) -> str:
+        """
+        Get the current session name.
+
+        Returns:
+            str: Current session name.
+        """
         return self.session_name
 
-    def set_shoreline_session_name(self, name: str):
+    def set_shoreline_session_name(self, name: str) -> None:
+        """
+        Set the shoreline session name.
+
+        Args:
+            name (str): Shoreline session name to set.
+        """
         self.shoreline_session_name = str(name).strip()
 
-    def get_shoreline_session_name(
-        self,
-    ):
+    def get_shoreline_session_name(self) -> str:
+        """
+        Get the current shoreline session name.
+
+        Returns:
+            str: Current shoreline session name.
+        """
         return self.shoreline_session_name
 
-    def get_shoreline_session_selection(self):
+    def get_shoreline_session_selection(self) -> VBox:
+        """
+        Create widget for shoreline session name selection.
+
+        Returns:
+            VBox: Widget containing session name input and controls.
+        """
         output = Output()
         self.shoreline_session_name_text = Text(
             value="",
@@ -172,7 +228,13 @@ class UI_Models:
         session_name_controls = HBox([self.shoreline_session_name_text, enter_button])
         return VBox([session_name_controls, output])
 
-    def get_session_selection(self):
+    def get_session_selection(self) -> VBox:
+        """
+        Create widget for session name selection.
+
+        Returns:
+            VBox: Widget containing session name input and controls.
+        """
         output = Output()
         self.session_name_text = Text(
             value="",
@@ -200,13 +262,12 @@ class UI_Models:
         session_name_controls = HBox([self.session_name_text, enter_button])
         return VBox([session_name_controls, output])
 
-    def get_adv_model_settings_section(self):
+    def get_adv_model_settings_section(self) -> VBox:
         """
-        Returns a VBox containing the advanced model settings widgets.
-        The advanced model settings include the model implementation, Otsu threshold, and Test Time Augmentation.
+        Create advanced model settings section widget.
 
         Returns:
-            VBox: A VBox widget containing the advanced model settings widgets.
+            VBox: Widget containing advanced model settings.
         """
         # declare settings widgets
         settings = {
@@ -216,15 +277,12 @@ class UI_Models:
         }
         return VBox([widget for widget_name, widget in settings.items()])
 
-    def get_basic_model_settings_section(self):
+    def get_basic_model_settings_section(self) -> VBox:
         """
-        Returns a VBox containing the basic model settings widgets.
-
-        This method creates and returns a VBox widget that contains the basic model settings widgets.
-        The settings include the model input dropdown and the model dropdown.
+        Create basic model settings section widget.
 
         Returns:
-            VBox: A VBox widget containing the basic model settings widgets.
+            VBox: Widget containing basic model settings.
         """
         # declare settings widgets
         settings = {
@@ -234,12 +292,12 @@ class UI_Models:
         # create settings vbox
         return VBox([widget for widget_name, widget in settings.items()])
 
-    def get_model_settings_accordion(self):
+    def get_model_settings_accordion(self) -> Accordion:
         """
-        Returns an Accordion widget containing the basic and advanced model settings sections.
+        Create accordion widget containing model settings sections.
 
         Returns:
-            Accordion: An Accordion widget with the basic and advanced model settings sections.
+            Accordion: Widget with basic and advanced model settings sections.
         """
         # create settings accordion widget
         settings_accordion = Accordion(
@@ -254,7 +312,10 @@ class UI_Models:
 
         return settings_accordion
 
-    def create_dashboard(self):
+    def create_dashboard(self) -> None:
+        """
+        Create and display the main UI dashboard with all widgets and steps.
+        """
         self.file_row = HBox([])
         self.extracted_shoreline_file_row = HBox([])
         self.tidal_correct_file_row = HBox([])
@@ -326,7 +387,13 @@ class UI_Models:
             self.warning_row2,
         )
 
-    def create_tidal_correction_widget(self):
+    def create_tidal_correction_widget(self) -> VBox:
+        """
+        Create tidal correction widget with all necessary controls.
+
+        Returns:
+            VBox: Widget containing tidal correction controls.
+        """
         load_style = dict(button_color="#69add1", description_width="initial")
 
         correct_tides_html = HTML(
@@ -371,7 +438,13 @@ class UI_Models:
         )
 
     @tidal_correction_view.capture(clear_output=True)
-    def tidally_correct_button_clicked(self, button):
+    def tidally_correct_button_clicked(self, button: Button) -> None:
+        """
+        Handle tidal correction button click event.
+
+        Args:
+            button (Button): Button widget that triggered the event.
+        """
         # user must have selected imagery first
         # must select a directory of model outputs
         if self.shoreline_session_directory == "":
@@ -408,7 +481,10 @@ class UI_Models:
             tides_file=tides_file,
         )
 
-    def _create_widgets(self):
+    def _create_widgets(self) -> None:
+        """
+        Create dropdown widgets for model configuration.
+        """
         self.model_implementation = Dropdown(
             options=["ENSEMBLE", "BEST"],
             value="BEST",
@@ -454,7 +530,10 @@ class UI_Models:
         )
         self.model_dropdown.observe(self.handle_model_type, "value")
 
-    def _create_buttons(self):
+    def _create_buttons(self) -> None:
+        """
+        Create action buttons for the UI.
+        """
         # button styles
         load_style = dict(button_color="#69add1", description_width="initial")
         action_style = dict(button_color="#ae3cf0")
@@ -491,10 +570,9 @@ class UI_Models:
             self.select_extracted_shorelines_button_clicked
         )
 
-    def _create_HTML_widgets(self):
-        """create HTML widgets that display the instructions.
-        widgets created: instr_create_ro, instr_save_roi, instr_load_btns
-         instr_download_roi
+    def _create_HTML_widgets(self) -> None:
+        """
+        Create HTML widgets for displaying instructions and step information.
         """
         self.line_widget = HTML(
             value="____________________________________________________"
@@ -574,10 +652,22 @@ class UI_Models:
             layout=Layout(margin="0px 0px 0px 0px"),
         )
 
-    def handle_model_implementation(self, change):
+    def handle_model_implementation(self, change: dict) -> None:
+        """
+        Handle model implementation dropdown change.
+
+        Args:
+            change (dict): Change event dictionary with 'new' value.
+        """
         self.model_dict["implementation"] = change["new"]
 
-    def handle_model_type(self, change):
+    def handle_model_type(self, change: dict) -> None:
+        """
+        Handle model type dropdown change and manage Otsu threshold availability.
+
+        Args:
+            change (dict): Change event dictionary with 'new' value.
+        """
         # 2 class model has not been selected disable otsu threhold
         self.model_dict["model_type"] = change["new"]
         if "2class" not in change["new"]:
@@ -589,19 +679,37 @@ class UI_Models:
         if "2class" in change["new"]:
             self.otsu_radio.disabled = False
 
-    def handle_otsu(self, change):
+    def handle_otsu(self, change: dict) -> None:
+        """
+        Handle Otsu threshold dropdown change.
+
+        Args:
+            change (dict): Change event dictionary with 'new' value.
+        """
         if change["new"] == "Enabled":
             self.model_dict["otsu"] = True
         if change["new"] == "Disabled":
             self.model_dict["otsu"] = False
 
-    def handle_tta(self, change):
+    def handle_tta(self, change: dict) -> None:
+        """
+        Handle Test Time Augmentation dropdown change.
+
+        Args:
+            change (dict): Change event dictionary with 'new' value.
+        """
         if change["new"] == "Enabled":
             self.model_dict["tta"] = True
         if change["new"] == "Disabled":
             self.model_dict["tta"] = False
 
-    def handle_model_input_change(self, change):
+    def handle_model_input_change(self, change: dict) -> None:
+        """
+        Handle model input type change and update available models.
+
+        Args:
+            change (dict): Change event dictionary with 'new' value.
+        """
         if change["new"] == "RGB":
             self.model_dropdown.options = self.RGB_models
         if change["new"] == "MNDWI":
@@ -612,7 +720,13 @@ class UI_Models:
         self.model_dict["img_type"] = change["new"]
 
     @extract_shorelines_view.capture(clear_output=True)
-    def run_model_button_clicked(self, button):
+    def run_model_button_clicked(self, button: Button) -> None:
+        """
+        Handle extract shorelines button click event.
+
+        Args:
+            button (Button): Button widget that triggered the event.
+        """
         # user must have selected imagery first
         if self.model_dict["sample_direc"] is None:
             self.launch_error_box(
@@ -657,10 +771,11 @@ class UI_Models:
 
     @extract_shorelines_view.capture(clear_output=True)
     def select_RGB_callback(self, filechooser: FileChooser) -> None:
-        """Handle the selection of a directory and check for the presence of JPG files.
+        """
+        Handle directory selection for RGB images.
 
         Args:
-            filechooser: The file chooser widget used to select the directory.
+            filechooser (FileChooser): File chooser widget with selected directory.
         """
         from pathlib import Path
 
@@ -684,7 +799,13 @@ class UI_Models:
                 self.save_updated_settings()
 
     @extract_shorelines_view.capture(clear_output=True)
-    def use_select_images_button_clicked(self, button):
+    def use_select_images_button_clicked(self, button: Button) -> None:
+        """
+        Handle select images button click event.
+
+        Args:
+            button (Button): Button widget that triggered the event.
+        """
         # Prompt the user to select a directory of images
         file_chooser = common.create_dir_chooser(
             self.select_RGB_callback, title="Select directory of images"
@@ -696,11 +817,23 @@ class UI_Models:
 
     @tidal_correction_view.capture(clear_output=True)
     def selected_shoreline_session_callback(self, filechooser: FileChooser) -> None:
+        """
+        Handle shoreline session directory selection.
+
+        Args:
+            filechooser (FileChooser): File chooser widget with selected directory.
+        """
         if filechooser.selected:
             self.shoreline_session_directory = os.path.abspath(filechooser.selected)
 
     @tidal_correction_view.capture(clear_output=True)
-    def select_extracted_shorelines_button_clicked(self, button):
+    def select_extracted_shorelines_button_clicked(self, button: Button) -> None:
+        """
+        Handle select extracted shorelines session button click event.
+
+        Args:
+            button (Button): Button widget that triggered the event.
+        """
         # Prompt the user to select a directory of extracted shorelines session
         file_chooser = common.create_dir_chooser(
             self.selected_shoreline_session_callback,
@@ -738,7 +871,13 @@ class UI_Models:
         self.update_displayed_settings()
 
     @extract_shorelines_view.capture(clear_output=True)
-    def save_settings_clicked(self, btn):
+    def save_settings_clicked(self, btn: Button) -> None:
+        """
+        Handle save settings button click event.
+
+        Args:
+            btn (Button): Button widget that triggered the event.
+        """
         try:
             # get the settings from the settings dashboard
             settings = self.settings_dashboard.get_settings()
@@ -780,7 +919,13 @@ class UI_Models:
         return html_settings_accordion
 
     @extract_shorelines_view.capture(clear_output=True)
-    def refresh_settings_btn_clicked(self, btn):
+    def refresh_settings_btn_clicked(self, btn: Button) -> None:
+        """
+        Handle refresh settings button click event.
+
+        Args:
+            btn (Button): Button widget that triggered the event.
+        """
         UI_Models.extract_shorelines_view.clear_output(wait=True)
         # refresh settings in view settings section
         try:
