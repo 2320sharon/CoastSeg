@@ -9,7 +9,7 @@ import re
 from glob import glob
 from itertools import islice
 from time import perf_counter
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 from datetime import timezone
 
 # External dependencies imports
@@ -206,27 +206,18 @@ class MetadataManager:
             logger.info(f"  Image Quality: {np.unique(satdata.get('im_quality', []))}")
 
 
-def get_filepath(filepath_data, sitename, satname):
+def get_filepath(filepath_data: str, sitename: str, satname: str) -> List[str]:
     """
-    Create filepath to the different folders containing the satellite images.
+    Creates filepaths to satellite image folders.
+    Modified from SDS_shoreline.get_filepath by Killian Vos 2018
 
-    Originally by KV WRL 2018
-    Modified by Sharon Batiste 2025
-
-    Arguments:
-    -----------
-    'filepath_data': str
-        filepath to the directory where the images are downloaded. Typically this is coastseg/data
-    'sitename': str
-        name of the site
-    satname: str
-        short name of the satellite mission ('L5','L7','L8','S2')
+    Args:
+        filepath_data (str): Path to the directory where images are downloaded.
+        sitename (str): Name of the site.
+        satname (str): Satellite mission name ('L5', 'L7', 'L8', 'L9', 'S2', 'S1').
 
     Returns:
-    -----------
-    filepath: str or list of str
-        contains the filepath(s) to the folder(s) containing the satellite images
-
+        List[str]: List of filepaths to folders containing satellite images.
     """
     # access the images
     if satname == "L5":
@@ -282,7 +273,17 @@ def get_data_folder(data_path: str = "") -> str:
     return data_path
 
 
-def time_func(func):
+def time_func(func: Callable) -> Callable:
+    """
+    Decorator to measure function execution time.
+
+    Args:
+        func (Callable): Function to time.
+
+    Returns:
+        Callable: Wrapped function that prints execution time.
+    """
+
     def wrapper(*args, **kwargs):
         start = perf_counter()
         result = func(*args, **kwargs)
@@ -302,7 +303,7 @@ def extract_timestamp_and_id(filename: str) -> Optional[Tuple[str, str]]:
         filename (str): The image filename in the format 'YYYYMMDD_LandsatID_rest.tif'.
 
     Returns:
-        tuple[str, str] or None: A tuple containing (timestamp, landsat_id) if parsing is successful, else None.
+        Optional[Tuple[str, str]]: A tuple containing (timestamp, landsat_id) if parsing is successful, else None.
 
     Example:
         >>> extract_timestamp_and_id("20220101_L8_xyz.tif")
@@ -521,7 +522,7 @@ def format_date(date_str: Union[str, datetime.datetime]) -> datetime.datetime:
         raise ValueError(f"Invalid date format: {date_str} not in {date_formats}")
 
 
-def get_metadata(inputs, data_folder_location: str = ""):
+def get_metadata(inputs: dict, data_folder_location: str = "") -> dict:
     """
     Gets the metadata from the downloaded images by parsing .txt files located
     in the \meta subfolder.
@@ -529,21 +530,19 @@ def get_metadata(inputs, data_folder_location: str = ""):
     KV WRL 2018
     modified by Sharon Fitzpatrick 2023
 
-    Arguments:
-    -----------
-    inputs: dict with the following fields
-        'sitename': str
-            name of the site
-        'filepath_data': str
-            filepath to the directory where the images are downloaded
-    data_folder_location: str
-        location of the data folder
+    Args:
+        inputs (dict): Dictionary with 'sitename' and 'filepath' keys.
+        data_folder_location (str): Alternative location of the data folder.
 
     Returns:
-    -----------
-    metadata: dict
-        contains the information about the satellite images that were downloaded:
-        date, filename, georeferencing accuracy and image coordinate reference system
+        dict: Metadata containing image information for each satellite. the keys are the satellite names
+        and the values are dictionaries with the following keys:
+        - filenames: List of image filenames
+        - dates: List of image dates
+        - epsg: List of EPSG codes
+        - acc_georef: List of georeferencing accuracy values
+        - im_quality: List of image quality values
+        - im_dimensions: List of image dimensions
 
     """
     # Construct the directory path containing the images
@@ -616,7 +615,13 @@ def get_metadata(inputs, data_folder_location: str = ""):
     return metadata
 
 
-def log_contents_of_shoreline_dict(extracted_shorelines_dict):
+def log_contents_of_shoreline_dict(extracted_shorelines_dict: dict) -> None:
+    """
+    Logs summary statistics of extracted shorelines dictionary.
+
+    Args:
+        extracted_shorelines_dict (dict): Dictionary containing extracted shoreline data.
+    """
     # Check and log 'reference shoreline' if it exists
     shorelines_array = extracted_shorelines_dict.get("shorelines", np.array([]))
     if isinstance(shorelines_array, np.ndarray):
@@ -989,19 +994,45 @@ def convert_linestrings_to_multipoints(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFram
     return gdf
 
 
-def transform_gdf_to_crs(gdf, crs=4326):
-    """Convert the GeoDataFrame to the specified CRS."""
+def transform_gdf_to_crs(gdf: gpd.GeoDataFrame, crs: int = 4326) -> gpd.GeoDataFrame:
+    """
+    Converts the GeoDataFrame to the specified CRS.
+
+    Args:
+        gdf (gpd.GeoDataFrame): Input GeoDataFrame.
+        crs (int): Target CRS code. Defaults to 4326.
+
+    Returns:
+        gpd.GeoDataFrame: Transformed GeoDataFrame.
+    """
     return gdf.to_crs(crs)
 
 
-def select_and_stringify(gdf, row_number):
-    """Select a single shoreline and stringify its datetime columns."""
+def select_and_stringify(gdf: gpd.GeoDataFrame, row_number: int) -> gpd.GeoDataFrame:
+    """
+    Selects a single shoreline and stringifies its datetime columns.
+
+    Args:
+        gdf (gpd.GeoDataFrame): Input GeoDataFrame.
+        row_number (int): Row index to select.
+
+    Returns:
+        gpd.GeoDataFrame: Selected shoreline with stringified datetime columns.
+    """
     single_shoreline = gdf.iloc[[row_number]]
     return common.stringify_datetime_columns(single_shoreline)
 
 
-def convert_gdf_to_json(gdf):
-    """Convert a GeoDataFrame to a JSON representation."""
+def convert_gdf_to_json(gdf: gpd.GeoDataFrame) -> dict:
+    """
+    Converts a GeoDataFrame to a JSON representation.
+
+    Args:
+        gdf (gpd.GeoDataFrame): Input GeoDataFrame.
+
+    Returns:
+        dict: JSON representation of the GeoDataFrame.
+    """
     return json.loads(gdf.to_json())
 
 
@@ -1035,20 +1066,19 @@ def style_layer(
     )
 
 
-def read_from_dict(d: dict, keys_of_interest: list | set | tuple):
+def read_from_dict(d: dict, keys_of_interest: Union[list, set, tuple]):
     """
-    Function to extract the value from the first matching key in a dictionary.
+    Extracts the value from the first matching key in a dictionary.
 
-    Parameters:
-    d (dict): The dictionary from which to extract the value.
-    keys_of_interest (list | set | tuple): Iterable of keys to look for in the dictionary.
-    The function returns the value of the first matching key it finds.
+    Args:
+        d (dict): The dictionary from which to extract the value.
+        keys_of_interest (Union[list, set, tuple]): Iterable of keys to look for.
 
     Returns:
-    The value from the dictionary corresponding to the first key found in keys_of_interest,
-    or None if no matching keys are found.
+        The value corresponding to the first matching key.
+
     Raises:
-    KeyError if the keys_of_interest were not in d
+        KeyError: If none of the keys were found in the dictionary.
     """
     for key in keys_of_interest:
         if key in d:
@@ -1056,7 +1086,19 @@ def read_from_dict(d: dict, keys_of_interest: list | set | tuple):
     raise KeyError(f"{keys_of_interest} were not in {d}")
 
 
-def remove_small_objects_and_binarize(merged_labels, min_size):
+def remove_small_objects_and_binarize(
+    merged_labels: np.ndarray, min_size: int
+) -> np.ndarray:
+    """
+    Removes small objects from image and returns binarized result.
+
+    Args:
+        merged_labels (np.ndarray): Input label array.
+        min_size (int): Minimum object size to keep.
+
+    Returns:
+        np.ndarray: Filtered binary image.
+    """
     # Ensure the image is binary
     binary_image = merged_labels > 0
 
@@ -1328,17 +1370,15 @@ def process_satellite(
     return output
 
 
-def get_cloud_cover_combined(cloud_mask: np.ndarray):
+def get_cloud_cover_combined(cloud_mask: np.ndarray) -> float:
     """
-    Calculate the cloud cover percentage of a cloud_mask.
-    Note: The way that cloud_mask is created in SDS_preprocess.preprocess_single() means that it will contain 1's where no data pixels were detected.
-    TLDR the cloud mask is combined with the no data mask. No idea why.
+    Calculates cloud cover percentage from a cloud mask.
 
-    Parameters:
-    cloud_mask (numpy.ndarray): A 2D numpy array with 0s (clear) and 1s (cloudy) representing the cloud mask.
+    Args:
+        cloud_mask (np.ndarray): 2D array with 0s (clear) and 1s (cloudy).
 
     Returns:
-    float: The percentage of cloud_cover_combined in the cloud_mask.
+        float: Cloud cover percentage (0-1).
     """
     # Convert cloud_mask to integer and calculate the sum of all elements (number of cloudy pixels)
     num_cloudy_pixels = sum(sum(cloud_mask.astype(int)))
@@ -1653,14 +1693,16 @@ def load_image_labels(npz_file: str) -> np.ndarray:
     return data["grey_label"]
 
 
-def merge_classes(im_labels: np.ndarray, classes_to_merge: list) -> np.ndarray:
+def merge_classes(im_labels: np.ndarray, classes_to_merge: List[int]) -> np.ndarray:
     """
-    Merge the specified classes in the given numpy array of class labels by creating a new numpy array with 1 values
-    for the merged classes and 0 values for all other classes.
+    Merges specified classes into a binary mask.
 
-    :param im_labels: a numpy array of class labels.
-    :param classes_to_merge: a list of class labels to merge.
-    :return: an integer numpy array with 1 values for the merged classes and 0 values for all other classes.
+    Args:
+        im_labels (np.ndarray): Array of class labels.
+        classes_to_merge (List[int]): List of class indices to merge.
+
+    Returns:
+        np.ndarray: Binary array with 1s for merged classes, 0s elsewhere.
     """
     # Create an integer numpy array with 1 values for the merged classes and 0 values for all other classes
     updated_labels = np.zeros(shape=(im_labels.shape[0], im_labels.shape[1]), dtype=int)
@@ -1860,22 +1902,20 @@ def extract_shorelines_with_dask(
     return combine_satellite_data(shoreline_dict)
 
 
-def get_min_shoreline_length(satname: str, default_min_length_sl: float) -> int:
+def get_min_shoreline_length(satname: str, default_min_length_sl: float) -> float:
     """
-    Given a satellite name and a default minimum shoreline length, returns the minimum shoreline length
-    for the specified satellite.
+    Gets minimum shoreline length for specified satellite.
 
     If the satellite name is "L7", the function returns a minimum shoreline length of 200, as this
     satellite has diagonal bands that require a shorter minimum length. For all other satellite names,
     the function returns the default minimum shoreline length.
 
     Args:
-    - satname (str): A string representing the name of the satellite to retrieve the minimum shoreline length for.
-    - default_min_length_sl (float): A float representing the default minimum shoreline length to be returned if
-                                      the satellite name is not "L7".
+        satname (str): Satellite name to retrieve minimum shoreline length for.
+        default_min_length_sl (float): Default minimum shoreline length.
 
     Returns:
-    - An integer representing the minimum shoreline length for the specified satellite.
+        float: Minimum shoreline length for the specified satellite.
 
     Example usage:
     >>> get_min_shoreline_length("L5", 500)
@@ -1886,8 +1926,7 @@ def get_min_shoreline_length(satname: str, default_min_length_sl: float) -> int:
     # reduce min shoreline length for L7 because of the diagonal bands
     if satname == "L7":
         return 200
-    else:
-        return default_min_length_sl
+    return default_min_length_sl
 
 
 def load_extracted_shoreline_from_files(
