@@ -1,17 +1,13 @@
-import os
 import copy
 import logging
-from typing import Callable, Dict, List, Any, Union
+import os
+from typing import Any, Callable, List
 
 # Third-party imports
 import geopandas as gpd
-import pandas as pd
 
 # Internal dependencies imports
-from coastseg import shoreline
-from coastseg import transects
-from coastseg import shoreline_extraction_area
-
+from coastseg import shoreline, shoreline_extraction_area, transects
 
 logger = logging.getLogger(__name__)
 
@@ -34,22 +30,12 @@ def edit_geojson_files(
     **kwargs: Any,
 ) -> None:
     """
-    Apply a filter function to GeoDataFrame objects loaded from GeoJSON files.
-
-    Loads GeoDataFrame objects from the specified GeoJSON files, applies the provided
-    filter function with the given keyword arguments, and writes the results back to the files.
+    Apply filter function to GeoJSON files.
 
     Args:
-        filepaths (List[str]): A list of strings representing the locations of the GeoJSON files to be edited.
-        filter_function (Callable[..., gpd.GeoDataFrame]): A function that takes a 
-            GeoDataFrame and keyword arguments, applies some filtering or editing based on the kwargs,
-            and returns the modified GeoDataFrame.
-        **kwargs (Any): Additional keyword arguments to be passed to the filter function.
-            Each keyword argument should correspond to a column name in the GeoDataFrame 
-            with the values to filter in the given column.
-
-    Returns:
-        None
+        filepaths: List of GeoJSON file paths.
+        filter_function: Function to apply to GeoDataFrames.
+        **kwargs: Keyword arguments for filter function.
     """
     for filepath in filepaths:
         if os.path.exists(filepath):
@@ -62,22 +48,12 @@ def edit_gdf_file(
     **kwargs: Any,
 ) -> None:
     """
-    Apply a filter function to a GeoDataFrame object loaded from a GeoJSON file.
-
-    Loads a GeoDataFrame object from the specified GeoJSON file, applies the provided
-    filter function with the given keyword arguments, and writes the result back to the file.
+    Apply filter function to GeoDataFrame from file.
 
     Args:
-        filepath (str): A string representing the path to the GeoJSON file.
-        filter_function (Callable[..., gpd.GeoDataFrame]): A function that takes a 
-            GeoDataFrame and keyword arguments, applies some filtering or editing based on the kwargs,
-            and returns the modified GeoDataFrame.
-        **kwargs (Any): Additional keyword arguments to be passed to the filter function.
-            Each keyword argument should correspond to a column name in the GeoDataFrame 
-            with the values to filter in the given column.
-
-    Returns:
-        None
+        filepath: Path to GeoJSON file.
+        filter_function: Function to apply to GeoDataFrame.
+        **kwargs: Keyword arguments for filter function.
     """
     gdf = read_gpd_file(filepath)
     new_gdf = filter_function(gdf, **kwargs)
@@ -88,25 +64,19 @@ def create_geofeature_geodataframe(
     geofeature_path: str, roi_gdf: gpd.GeoDataFrame, epsg_code: str, feature_type: str
 ) -> gpd.GeoDataFrame:
     """
-    Create geofeatures (shoreline or transects) as a GeoDataFrame.
-
-    If the geofeature file exists at the provided path, it is read into a GeoDataFrame.
-    If the GeoDataFrame is not empty, geofeatures are extracted using the appropriate class
-    (Shoreline or Transects) and a deep copy of the resulting GeoDataFrame is made.
-    If the geofeature file does not exist, geofeatures are created based on the ROI GeoDataFrame.
-    The resulting GeoDataFrame is then converted to the specified EPSG code.
+    Create geofeatures GeoDataFrame from file or ROI.
 
     Args:
-        geofeature_path (str): Path to the geofeature file.
-        roi_gdf (gpd.GeoDataFrame): GeoDataFrame representing the region of interest.
-        epsg_code (str): EPSG code for the desired coordinate reference system.
-        feature_type (str): Type of geofeature (e.g., 'shoreline' or 'transect').
+        geofeature_path: Path to geofeature file.
+        roi_gdf: ROI GeoDataFrame.
+        epsg_code: EPSG code for CRS.
+        feature_type: Type of geofeature.
 
     Returns:
-        gpd.GeoDataFrame: Geofeatures as a GeoDataFrame in the specified EPSG code.
+        Geofeatures GeoDataFrame.
 
     Raises:
-        Exception: If the geofeature file is empty or no features intersect the ROI.
+        Exception: If no features intersect ROI.
     """
     feature_type = (
         feature_type.lower()
@@ -119,7 +89,9 @@ def create_geofeature_geodataframe(
         # if a geofeature file is not given load features from ROI
         geofeature_gdf = load_geofeatures_from_roi(roi_gdf, feature_type)
 
-    logger.info(f"{feature_type}_gdf: length {len(geofeature_gdf)} sample {geofeature_gdf.head(1)}")
+    logger.info(
+        f"{feature_type}_gdf: length {len(geofeature_gdf)} sample {geofeature_gdf.head(1)}"
+    )
     if geofeature_gdf.empty:
         raise Exception(
             f"None of the {feature_type}s intersected the ROI. Try a different {feature_type}"
@@ -133,24 +105,22 @@ def load_geofeatures_from_roi(
     roi_gdf: gpd.GeoDataFrame, feature_type: str
 ) -> gpd.GeoDataFrame:
     """
-    Load geographic features (transects or shorelines) that exist within a Region Of Interest (ROI).
-
-    Given a Region Of Interest (ROI), this function attempts to load any geographic features 
-    (transects or shorelines) that exist in that region. If none exist, an exception is raised 
-    advising the user to upload their own file.
+    Load geofeatures from ROI.
 
     Args:
-        roi_gdf (gpd.GeoDataFrame): GeoDataFrame representing the region of interest.
-        feature_type (str): Type of the geographic feature (e.g., 'shoreline', 'transect').
+        roi_gdf: ROI GeoDataFrame.
+        feature_type: Type of geofeature.
 
     Returns:
-        gpd.GeoDataFrame: Geographic features as a GeoDataFrame.
+        Geofeatures GeoDataFrame.
 
     Raises:
-        ValueError: If the feature_type is unsupported.
-        Exception: If no geographic features were found in the given ROI.
+        ValueError: If feature_type unsupported.
+        Exception: If no features in ROI.
     """
-    feature_type = feature_type.lower()  # Convert to lower case for case insensitive comparison
+    feature_type = (
+        feature_type.lower()
+    )  # Convert to lower case for case insensitive comparison
 
     if feature_type in FEATURE_TYPE_MAP:
         feature_object = FEATURE_TYPE_MAP[feature_type](bbox=roi_gdf)
@@ -173,16 +143,16 @@ def load_geofeatures_from_roi(
 
 def read_gpd_file(filename: str) -> gpd.GeoDataFrame:
     """
-    Read and return a GeoDataFrame from a geospatial file.
+    Read GeoDataFrame from file.
 
     Args:
-        filename (str): Path to the geospatial file to read.
+        filename: Path to geospatial file.
 
     Returns:
-        gpd.GeoDataFrame: The GeoDataFrame loaded from the file.
+        GeoDataFrame.
 
     Raises:
-        FileNotFoundError: If the file does not exist at the specified path.
+        FileNotFoundError: If file does not exist.
     """
     if os.path.exists(filename):
         logger.info(f"Opening \n {filename}")
@@ -195,20 +165,17 @@ def load_geodataframe_from_file(
     feature_path: str, feature_type: str
 ) -> gpd.GeoDataFrame:
     """
-    Load a geographic feature from a file into a GeoDataFrame.
-
-    The file is read into a GeoDataFrame. Can read both geojson files and config_gdf.geojson files.
-    If loading from a config file fails, the original file is returned.
+    Load GeoDataFrame from file.
 
     Args:
-        feature_path (str): Path to the feature file.
-        feature_type (str): Type of the geographic feature (e.g., 'shoreline', 'transect', 'rois', 'bbox').
+        feature_path: Path to feature file.
+        feature_type: Type of feature. Example: 'shoreline', 'rois', 'transects', 'bbox'.
 
     Returns:
-        gpd.GeoDataFrame: Geographic feature as a GeoDataFrame.
+        GeoDataFrame.
 
     Raises:
-        ValueError: If the feature file is empty.
+        ValueError: If file is empty.
     """
     logger.info(f"Attempting to load {feature_type} from a file")
     original_feature_gdf = read_gpd_file(feature_path)
@@ -220,8 +187,7 @@ def load_geodataframe_from_file(
     except ValueError as e:
         # if it isn't a config file then just ignore the error
         logger.info(f"This probably wasn't a config : {feature_path} \n {e}")
-        feature_gdf = original_feature_gdf # if this wasn't a config then just return the original file
-
+        feature_gdf = original_feature_gdf  # if this wasn't a config then just return the original file
 
     if feature_gdf.empty:
         raise ValueError(f"Empty {feature_type} file provided: {feature_path}")
@@ -230,20 +196,17 @@ def load_geodataframe_from_file(
 
 def load_feature_from_file(feature_path: str, feature_type: str) -> gpd.GeoDataFrame:
     """
-    Load a geographic feature from a file and return as a GeoDataFrame.
-
-    Loads a GeoDataFrame from the file, creates the appropriate feature object,
-    and returns a deep copy of the resulting GeoDataFrame.
+    Load feature from file as GeoDataFrame.
 
     Args:
-        feature_path (str): Path to the feature file.
-        feature_type (str): Type of the geographic feature (e.g., 'shoreline', 'transect').
+        feature_path: Path to feature file.
+        feature_type: Type of feature.
 
     Returns:
-        gpd.GeoDataFrame: Geographic feature as a GeoDataFrame.
+        Feature GeoDataFrame.
 
     Raises:
-        ValueError: If the feature file is empty or feature_type is unsupported.
+        ValueError: If file empty or feature_type unsupported.
     """
     gdf = load_geodataframe_from_file(feature_path, feature_type)
     feature = create_feature(feature_type, gdf)
@@ -253,19 +216,21 @@ def load_feature_from_file(feature_path: str, feature_type: str) -> gpd.GeoDataF
 
 def create_feature(feature_type: str, gdf: gpd.GeoDataFrame) -> Any:
     """
-    Create a feature object from a GeoDataFrame based on the feature type.
+    Create feature object from GeoDataFrame.
 
     Args:
-        feature_type (str): Type of the geographic feature (e.g., 'shoreline', 'transect', 'roi').
-        gdf (gpd.GeoDataFrame): GeoDataFrame containing the feature data.
+        feature_type: Type of feature.
+        gdf: GeoDataFrame.
 
     Returns:
-        Any: Feature object of the appropriate type (Shoreline, Transects, etc.).
+        Feature object.
 
     Raises:
-        ValueError: If the feature_type is unsupported.
+        ValueError: If feature_type unsupported.
     """
-    feature_type = feature_type.lower()  # Convert to lower case for case insensitive comparison
+    feature_type = (
+        feature_type.lower()
+    )  # Convert to lower case for case insensitive comparison
     if feature_type in FEATURE_TYPE_MAP:
         if "transect" in feature_type:
             feature_object = FEATURE_TYPE_MAP[feature_type](transects=gdf)
@@ -287,19 +252,19 @@ def extract_feature_from_geodataframe(
     gdf: gpd.GeoDataFrame, feature_type: str, type_column: str = "type"
 ) -> gpd.GeoDataFrame:
     """
-    Extract a GeoDataFrame of features of a given type from a larger GeoDataFrame.
+    Extract features of type from GeoDataFrame.
 
     Args:
-        gdf (gpd.GeoDataFrame): The GeoDataFrame containing the features to extract.
-        feature_type (str): The type of feature to extract. Typically one of the following: 
+        gdf: GeoDataFrame to extract from.
+        feature_type: Type of feature to extract.Typically one of the following:
             'shoreline', 'rois', 'transects', 'bbox'.
-        type_column (str): The name of the column containing feature types. Defaults to 'type'.
+        type_column: Column name for types.
 
     Returns:
-        gpd.GeoDataFrame: A new GeoDataFrame containing only the features of the specified type.
+        Filtered GeoDataFrame.
 
     Raises:
-        ValueError: If the feature_type or the type_column do not exist in the GeoDataFrame.
+        ValueError: If type_column missing or feature_type invalid.
     """
     # Convert column names to lower case for case-insensitive matching
     gdf.columns = gdf.columns.str.lower()
