@@ -22,7 +22,7 @@ from typing import (
     Union,
     Sequence,
 )
-from sysconfig import get_python_version
+from pathlib import Path
 
 # Third-party imports
 from pyproj import CRS
@@ -126,7 +126,7 @@ def authenticate_and_initialize(
         )
     try:
         if (
-            force or not ee.data._credentials
+            force or not ee.data._credentials  # type: ignore[reportPrivateUsage]
         ):  # pyright: ignore[reportPrivateImportUsage]
             ee.Authenticate(force=force, **auth_args)
         print(f"kwargs passed to ee.Initialize {kwargs}")
@@ -158,7 +158,9 @@ def authenticate_and_initialize(
             )
 
 
-def merge_tide_corrected_with_raw_timeseries(session_path, tide_timeseries):
+def merge_tide_corrected_with_raw_timeseries(
+    session_path: str, tide_timeseries: pd.DataFrame
+) -> pd.DataFrame:
     """
     Merges tide-corrected timeseries data with raw timeseries data to add columns such as classifier scores, thresholds, and other relevant information to the tide-corrected timeseries data.
 
@@ -252,9 +254,9 @@ def delete_unmatched_rows(
 
 def filter_extract_dict(
     gdf: gpd.GeoDataFrame,
-    extracted_shorelines_dict: Dict[str, Union[List[np.ndarray], np.ndarray]],
+    extracted_shorelines_dict: Dict[Hashable, Any],
     output_crs: Optional[Union[str, int, CRS]],
-) -> Dict[str, Union[List[np.ndarray], np.ndarray]]:
+) -> Dict[Hashable, Any]:
     """
     Filters and updates the extracted shorelines dictionary based on the selected indexes from a GeoDataFrame.
 
@@ -282,32 +284,32 @@ def filter_extract_dict(
 
     # Check if any shorelines were removed from the gdf that are still in the extracted_shorelines_dict
     extracted_shorelines_dict = delete_unmatched_rows(
-        extracted_shorelines_dict, dates_list=dates, sat_list=sats
+        extracted_shorelines_dict, dates_list=dates.tolist(), sat_list=sats.tolist()
     )
     return extracted_shorelines_dict
 
 
-def arr_to_LineString(coords):
+def arr_to_LineString(coords: List[Tuple[float, float]]) -> LineString:
     """
     Makes a LineString geometry from a list of (x, y) coordinate tuples.
 
     Args:
-        coords (list): List of (x, y) tuples.
+        coords (List[Tuple[float, float]]): List of (x, y) tuples.
 
     Returns:
-        shapely.geometry.LineString: LineString geometry created from the input coordinates.
+        LineString: LineString geometry created from the input coordinates.
     """
     points = [shapely.geometry.Point(xy) for xy in coords]
     line = shapely.geometry.LineString(points)
     return line
 
 
-def LineString_to_arr(line):
+def LineString_to_arr(line: LineString) -> np.ndarray:
     """
     Converts a LineString geometry to a NumPy array of (x, y) tuples.
 
     Args:
-        line (shapely.geometry.LineString): The LineString geometry to convert.
+        line (LineString): The LineString geometry to convert.
 
     Returns:
         np.ndarray: Array of (x, y) tuples.
@@ -377,14 +379,18 @@ def ref_poly_filter(
     return shorelines_gdf_filter
 
 
-def merge_dataframes(df1, df2, columns_to_merge_on=set(["transect_id", "dates"])):
+def merge_dataframes(
+    df1: pd.DataFrame,
+    df2: pd.DataFrame,
+    columns_to_merge_on: Set[str] = {"transect_id", "dates"},
+) -> pd.DataFrame:
     """
     Merges two DataFrames based on column names provided in columns_to_merge_on (default: "transect_id", "dates").
 
     Args:
         df1 (pd.DataFrame): First DataFrame.
         df2 (pd.DataFrame): Second DataFrame.
-        columns_to_merge_on (Collection): Column names to merge on.
+        columns_to_merge_on (Set[str]): Column names to merge on.
 
     Returns:
         pd.DataFrame: Merged DataFrame with duplicates dropped.
@@ -410,13 +416,15 @@ def update_config(config_json: dict, roi_settings: dict) -> dict:
     return config_json
 
 
-def update_downloaded_configs(roi_settings: dict, roi_ids: list = None):
+def update_downloaded_configs(
+    roi_settings: Dict[str, Any], roi_ids: Optional[List[str]] = None
+) -> None:
     """
     Update the downloaded configuration files for the specified ROI(s).
 
     Args:
-        roi_settings (dict, optional): Dictionary containing the ROI settings. ROI settings should contain the ROI IDs as the keys and a dictionary of settings as the values. Each ROI ID should have the following keys: "dates", "sitename", "polygon", "roi_id", "sat_list", "landsat_collection", "filepath"
-        roi_ids (list, optional): List of ROI IDs to update. Defaults to None.
+        roi_settings (Dict[str, Any]): Dictionary containing the ROI settings. ROI settings should contain the ROI IDs as the keys and a dictionary of settings as the values. Each ROI ID should have the following keys: "dates", "sitename", "polygon", "roi_id", "sat_list", "landsat_collection", "filepath"
+        roi_ids (Optional[List[str]]): List of ROI IDs to update. Defaults to None.
     """
     if not isinstance(roi_settings, dict):
         raise ValueError("Invalid roi_settings provided.")
@@ -488,18 +496,23 @@ def extract_roi_settings(
     return roi_settings
 
 
-def update_roi_settings(roi_settings, key, value, add_if_missing=False):
+def update_roi_settings(
+    roi_settings: Dict[str, Dict[str, Any]],
+    key: str,
+    value: Any,
+    add_if_missing: bool = False,
+) -> Dict[str, Dict[str, Any]]:
     """
     Updates a specific key in all ROI settings dictionaries. Optionally adds the key if it's missing.
 
     Args:
-        roi_settings (dict): Dictionary of ROI settings (dict of dicts).
+        roi_settings (Dict[str, Dict[str, Any]]): Dictionary of ROI settings (dict of dicts).
         key (str): The key to update in each ROI's settings.
         value (Any): The value to assign to the key.
         add_if_missing (bool): If True, adds the key even if it doesn't exist. Default is False.
 
     Returns:
-        dict: The updated ROI settings dictionary.
+        Dict[str, Dict[str, Any]]: The updated ROI settings dictionary.
     """
     for settings in roi_settings.values():
         if add_if_missing or key in settings:
@@ -507,16 +520,16 @@ def update_roi_settings(roi_settings, key, value, add_if_missing=False):
     return roi_settings
 
 
-def process_roi_settings(json_data, data_path) -> dict:
+def process_roi_settings(json_data: Dict[str, Any], data_path: str) -> Dict[str, Any]:
     """
     Process the ROI settings from the given JSON data and update the filepath to be the data_path.
 
     Args:
-        json_data (dict): The JSON data containing ROI settings.
+        json_data (Dict[str, Any]): The JSON data containing ROI settings.
         data_path (str): The path to the data directory.
 
     Returns:
-        dict: A dictionary mapping ROI IDs to their extracted settings with updated filepath.
+        Dict[str, Any]: A dictionary mapping ROI IDs to their extracted settings with updated filepath.
     """
     roi_ids = json_data.get("roi_ids", [])
     roi_settings = extract_roi_settings(json_data, roi_ids=roi_ids)
@@ -524,16 +537,18 @@ def process_roi_settings(json_data, data_path) -> dict:
     return roi_settings
 
 
-def get_missing_roi_dirs(roi_settings: dict, roi_ids: list = None) -> dict:
+def get_missing_roi_dirs(
+    roi_settings: Dict[str, Any], roi_ids: Optional[List[str]] = None
+) -> Dict[str, str]:
     """
     Get the missing ROI directories based on the provided ROI settings and data path.
 
     Args:
-        roi_settings (dict): A dictionary containing ROI settings.
-        roi_ids (list, optional): A list of ROI IDs to check. If not provided, all ROIs in roi_settings are checked. Defaults to None.
+        roi_settings (Dict[str, Any]): A dictionary containing ROI settings.
+        roi_ids (Optional[List[str]]): A list of ROI IDs to check. If not provided, all ROIs in roi_settings are checked. Defaults to None.
 
     Returns:
-        dict: A dictionary containing the missing ROI directories, where the key is the ROI ID and the value is the sitename.
+        Dict[str, str]: A dictionary containing the missing ROI directories, where the key is the ROI ID and the value is the sitename.
     """
     missing_directories = {}
     if roi_settings == {}:
@@ -694,15 +709,17 @@ def transform_data_to_nested_arrays(
     return transformed_dict
 
 
-def process_data_input(data):
+def process_data_input(
+    data: Union[Dict[str, Any], str],
+) -> Optional[Dict[str, np.ndarray]]:
     """
     Process the data input and transform it to nested arrays.
 
     Args:
-        data (dict or str): The data input to process. If data is a string, it is assumed to be the full path to the JSON file.
+        data (Union[Dict[str, Any], str]): The data input to process. If data is a string, it is assumed to be the full path to the JSON file.
 
     Returns:
-        dict: The processed data as nested arrays.
+        Optional[Dict[str, np.ndarray]]: The processed data as nested arrays, or None if file not found.
     """
     # Determine if data is a dictionary or a file path
     if isinstance(data, dict):
@@ -722,7 +739,7 @@ def process_data_input(data):
 
 
 def update_extracted_shorelines_dict_transects_dict(
-    session_path: str, filename: str, dates_list: list, sat_list: list
+    session_path: str, filename: str, dates_list: List[datetime], sat_list: List[str]
 ) -> None:
     """
     Updates the extracted shorelines and transects dictionaries by removing selected indexes.
@@ -731,11 +748,8 @@ def update_extracted_shorelines_dict_transects_dict(
     Args:
         session_path (str): The path to the session directory.
         filename (str): The name of the JSON file containing the extracted shorelines data.
-        dates_list (list): A list of dates to filter the extracted shorelines data.
-        sat_list (list): A list of satellite identifiers to filter the extracted shorelines data.
-
-    Returns:
-        None
+        dates_list (List[datetime]): A list of dates to filter the extracted shorelines data.
+        sat_list (List[str]): A list of satellite identifiers to filter the extracted shorelines data.
     """
     json_file = os.path.join(session_path, filename)
     if os.path.exists(json_file) and os.path.isfile(json_file):
@@ -778,16 +792,18 @@ def update_extracted_shorelines_dict_transects_dict(
             file_utilities.to_file(extracted_shorelines_dict, json_file)
 
 
-def delete_selected_indexes(input_dict, selected_indexes):
+def delete_selected_indexes(
+    input_dict: Dict[str, Any], selected_indexes: List[int]
+) -> Dict[str, Any]:
     """
     Delete the selected indexes from the input dictionary.
 
     Args:
-        input_dict (dict): The dictionary to modify.
-        selected_indexes (list): The indexes to delete.
+        input_dict (Dict[str, Any]): The dictionary to modify.
+        selected_indexes (List[int]): The indexes to delete.
 
     Returns:
-        dict: The modified dictionary with selected indexes removed.
+        Dict[str, Any]: The modified dictionary with selected indexes removed.
     """
     if not selected_indexes:
         return input_dict
@@ -1001,18 +1017,20 @@ def get_selected_indexes(
     return selected_indexes
 
 
-def save_new_config(path: str, roi_ids: list, destination: str) -> dict:
+def save_new_config(
+    path: str, roi_ids: Union[List[str], str, None], destination: str
+) -> None:
     """
     Save a new config file to a path.
 
     Args:
         path (str): The path to read the original config file from.
-        roi_ids (list): A list of roi_ids to include in the new config file.
+        roi_ids (Union[List[str], str, None]): The ROI IDs to include in the new config file.
         destination (str): The path to save the new config file to.
-
-    Returns:
-        dict: The new configuration dictionary that was saved.
     """
+    if not roi_ids:
+        raise ValueError(f"No roi_ids provided cannot create new config file at {path}")
+
     with open(path) as f:
         config = json.load(f)
 
@@ -1029,7 +1047,7 @@ def save_new_config(path: str, roi_ids: list, destination: str) -> dict:
         json.dump(new_config, f)
 
 
-def filter_images_by_roi(roi_settings: dict) -> None:
+def filter_images_by_roi(roi_settings: Dict[str, Any]) -> None:
     """
     Filters images in specified locations based on their Regions of Interest (ROI).
 
@@ -1041,16 +1059,13 @@ def filter_images_by_roi(roi_settings: dict) -> None:
     This function assumes the ROI coordinates are in EPSG:4326.
 
     Args:
-        roi_settings (dict): A dictionary containing the settings for a Region of Interest (ROI). Each dictionary must have the following structure:
+        roi_settings (Dict[str, Any]): A dictionary containing the settings for a Region of Interest (ROI). Each dictionary must have the following structure:
             {
                 'roi_id': <int>,
                 'sitename': <str>,
                 'filepath': <str>,  # Base filepath for the ROI
                 'polygon': <list>,  # List of coordinates representing the ROI polygon (in EPSG:4326)
             }
-
-    Returns:
-        None
 
     Raises:
         KeyError: If a required key ('sitename', 'filepath', 'polygon') is missing in any of the dictionaries in roi_settings.
@@ -1195,8 +1210,16 @@ def get_roi_area(gdf: gpd.GeoDataFrame) -> float:
     return projected_gdf.area.iloc[0] / 1e6
 
 
-def get_satellite_name(filename: str):
-    """Returns the satellite name in the jpg name. Does not work tiffs"""
+def get_satellite_name(filename: str) -> Optional[str]:
+    """
+    Returns the satellite name in the jpg filename. Does not work with tiffs.
+
+    Args:
+        filename (str): The filename to extract the satellite name from.
+
+    Returns:
+        Optional[str]: The satellite name if found, None otherwise.
+    """
     try:
         return filename.split("_")[2].split(".")[0]
     except IndexError:
@@ -1206,7 +1229,7 @@ def get_satellite_name(filename: str):
 
 def filter_images(
     min_area: float, max_area: float, directory: str, output_directory: str = ""
-) -> list:
+) -> List[str]:
     """
     Filters images in a given directory based on a range of acceptable areas and moves the filtered out
     images to a specified output directory.
@@ -1219,13 +1242,12 @@ def filter_images(
         min_area (float): The minimum acceptable area in square kilometers.
         max_area (float): The maximum acceptable area in square kilometers.
         directory (str): The path to the directory containing the images to be filtered.
-        output_directory (str, optional): The path to the directory where the bad images will be moved.
+        output_directory (str): The path to the directory where the bad images will be moved.
                                          If not provided, a new directory named 'bad' will be created
                                          inside the given directory.
 
     Returns:
-        None: This function doesn't return anything; it moves the filtered out images to the specified
-              output directory.
+        List[str]: List of bad files that were moved.
 
     Raises:
         FileNotFoundError: If the specified directory doesn't exist or doesn't contain any .jpg files.
@@ -1298,20 +1320,21 @@ def calculate_image_area(filepath: str, pixel_size: int) -> float:  #
 
 def validate_geometry_types(
     gdf: gpd.GeoDataFrame,
-    valid_types: set,
+    valid_types: Set[str],
     feature_type: str = "Feature",
-    help_message: str = None,
+    help_message: Optional[str] = None,
 ) -> None:
     """
     Check if all geometries in a GeoDataFrame are of the given valid types.
 
     Args:
         gdf (gpd.GeoDataFrame): The GeoDataFrame containing the geometries to check.
-        valid_types (set): A set of valid geometry types.
-        feature_type (str): The name of the feature
+        valid_types (Set[str]): A set of valid geometry types.
+        feature_type (str): The name of the feature.
+        help_message (Optional[str]): Additional help message for errors.
 
     Raises:
-        ValueError: If any geometry in the GeoDataFrame is not of a type in valid_types.
+        InvalidGeometryType: If any geometry in the GeoDataFrame is not of a type in valid_types.
     """
     # if the geodataframe is empty or does not contain a geometry column, return
     if not hasattr(gdf, "geometry"):
@@ -1353,7 +1376,7 @@ def get_roi_polygon(
     return None
 
 
-def get_cert_path_from_config(config_file="certifications.json"):
+def get_cert_path_from_config(config_file: str = "certifications.json") -> str:
     """
     Get the certification path from the given configuration file.
 
@@ -1390,7 +1413,7 @@ def get_cert_path_from_config(config_file="certifications.json"):
     return ""
 
 
-def get_response(url, stream=True):
+def get_response(url: str, stream: bool = True):
     """
     Get the response from the given URL with or without a certification path.
 
@@ -1421,9 +1444,18 @@ def get_response(url, stream=True):
 
 
 def extract_date_from_filename(filename: str) -> str:
-    """Extracts the first instance date string "YYYY-MM-DD-HH-MM-SS" from a filename.
-    - The date string is expected to be in the format "YYYY-MM-DD-HH-MM-SS".
-    - Example 2024-05-28-22-18-07 would be extracted from "2024-05-28-22-18-07_S2_ID_1_datetime11-04-24__04_30_52_ms.tif"
+    """
+    Extracts the first instance date string "YYYY-MM-DD-HH-MM-SS" from a filename.
+
+    Args:
+        filename (str): The filename to extract the date from.
+
+    Returns:
+        str: The extracted date string in "YYYY-MM-DD-HH-MM-SS" format, or empty string if not found.
+
+    Example:
+        >>> extract_date_from_filename("2024-05-28-22-18-07_S2_ID_1_datetime11-04-24__04_30_52_ms.tif")
+        "2024-05-28-22-18-07"
     """
     pattern = r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}"
     match = re.match(pattern, filename)
@@ -1436,35 +1468,28 @@ def extract_date_from_filename(filename: str) -> str:
 def get_filtered_dates_dict(
     directory: str,
     file_type: str,
-) -> dict:
+) -> Dict[str, Set[str]]:
     """
-    Scans the directory for files with the given file_type and extracts the date from the filename and returns a dictionary with the satellite name as the key and a set of dates as the value.
+    Scans the directory for files with the given file_type and extracts the date from the filename.
 
-
-    Parameters:
-    -----------
-    directory : str
-        The directory where the files are located.
-
-    file_type : str
-        The filetype of the files to be included.
-        Ex. 'jpg'
-
+    Args:
+        directory (str): The directory where the files are located.
+        file_type (str): The filetype of the files to be included (e.g., 'jpg').
 
     Returns:
-    --------
-    dict
-        a dictionary where each key is a satellite name and each value is a set of the dates in the format "YYYY-MM-DD-HH-MM-SS" that represents the time the scene was captured.
+        Dict[str, Set[str]]: A dictionary where each key is a satellite name and each value is a set of dates
+            in the format "YYYY-MM-DD-HH-MM-SS" representing when the scene was captured.
 
     Example:
+        >>> get_filtered_dates_dict("/path/to/files", "jpg")
         {
-        "L5":{'2014-12-19-18-22-40',},
-        "L7":{},
-        "L8":{'2014-12-19-18-22-40',},
-        "L9":{},
-        "S2":{},
-    }
-
+            "L5":{'2014-12-19-18-22-40',},
+            "L7":{},
+            "L8":{'2014-12-19-18-22-40',},
+            "L9":{},
+            "S2":{},
+            "S1":{}
+        }
     """
     satellites = {
         "L5": set(),
@@ -1615,7 +1640,19 @@ def edit_metadata_by_dates(
     return metadata
 
 
-def create_unique_ids(data, prefix_length: int = 3):
+def create_unique_ids(
+    data: gpd.GeoDataFrame, prefix_length: int = 3
+) -> gpd.GeoDataFrame:
+    """
+    Creates unique IDs for a GeoDataFrame if not all IDs are unique.
+
+    Args:
+        data (gpd.GeoDataFrame): The GeoDataFrame to process.
+        prefix_length (int): Length of the prefix for generated IDs.
+
+    Returns:
+        gpd.GeoDataFrame: The GeoDataFrame with unique IDs.
+    """
     # if not all the ids in data are unique
     if not check_unique_ids(data):
         # generate unique IDs with a matching prefix with the given length
@@ -1660,20 +1697,29 @@ def extract_feature_from_geodataframe(
     return feature_gdf
 
 
-def random_prefix(length):
-    """Generate a random string of the given length."""
+def random_prefix(length: int) -> str:
+    """
+    Generates a random prefix string of specified length.
+
+    Args:
+        length (int): The length of the prefix to generate.
+
+    Returns:
+        str: A random prefix string.
+    """
     return "".join(random.choice(string.ascii_lowercase) for _ in range(length))
 
 
-def generate_ids(num_ids, prefix_length):
-    """Generate a list of sequential IDs with a random prefix.
+def generate_ids(num_ids: int, prefix_length: int) -> List[str]:
+    """
+    Generate a list of sequential IDs with a random prefix.
 
     Args:
         num_ids (int): The number of IDs to generate.
         prefix_length (int): The length of the random prefix for the IDs.
 
     Returns:
-        list: A list of IDs.
+        List[str]: A list of IDs.
     """
     prefix = random_prefix(prefix_length)
     return [prefix + str(i) for i in range(1, num_ids + 1)]
@@ -2701,27 +2747,6 @@ def get_transect_settings(settings: dict) -> dict:
     return transect_settings
 
 
-def create_directory_in_google_drive(path: str, name: str) -> str:
-    """
-    Creates a new directory with the provided name in the given path.
-    Raises FileNotFoundError if the given path does not exist.
-
-    Parameters:
-    path (str): path to the directory where the new directory will be created
-    name (str): name of the new directory
-
-    Returns:
-    new_path (str): path to the newly created directory
-    """
-    new_path = os.path.join(path, name)
-    if os.path.exists(path):
-        if not os.path.isdir(new_path):
-            os.mkdir(new_path)
-    else:
-        raise FileNotFoundError(new_path)
-    return new_path
-
-
 def is_in_google_colab() -> bool:
     """
     Returns True if the code is running in Google Colab, False otherwise.
@@ -2757,6 +2782,7 @@ def get_ids_with_invalid_area(
     Raises:
         TypeError: If the provided geometry is not a GeoDataFrame.
     """
+    rows_drop = set()
     if isinstance(geometry, gpd.GeoDataFrame):
         geometry = json.loads(geometry.to_json())
     if isinstance(geometry, dict):
@@ -2766,56 +2792,36 @@ def get_ids_with_invalid_area(
                 roi_area = get_area(feature["geometry"])
                 if roi_area >= max_area or roi_area <= min_area:
                     rows_drop.add(i)
-            return rows_drop
     else:
         raise TypeError("Must be GeoDataFrame")
+    return rows_drop
 
 
-def load_cross_distances_from_file(dir_path):
-    transect_dict = None
-    glob_str = os.path.join(dir_path, "*transects_cross_distances.json*")
-    for file in glob.glob(glob_str):
-        if os.path.basename(file) == "transects_cross_distances.json":
-            transect_dict = file_utilities.load_data_from_json(file)
-
-    if transect_dict is None:
-        logger.warning(
-            f"No transect cross shore distances could be loaded from {dir_path}"
-        )
-        return None
-
-    # convert lists to np.array for each transect
-    for key in transect_dict.keys():
-        tmp = np.array(transect_dict[key])
-        transect_dict[key] = tmp
-    logger.info(f"Loaded transect cross shore distances from: {dir_path}")
-    return transect_dict
-
-
-def mount_google_drive(name: str = "CoastSeg") -> None:
+def load_cross_distances_from_file(dir_path: str) -> Optional[dict]:
     """
-    If the user is running in Google Colab, the Google Drive will be mounted to the root directory
-    "/content/drive/MyDrive" and a new directory will be created with the provided name.
+    Load transect cross-shore distances from 'transects_cross_distances.json'
+    in the given directory. Converts each list of distances into a NumPy array.
 
-    Parameters:
-    name (str): The name of the directory to be created. Default is 'CoastSeg'.
+    Args:
+        dir_path (str): Directory path containing the JSON file.
 
     Returns:
-    None
+        Optional[dict]: Mapping of transect keys to NumPy arrays of distances,
+        or None if the file is missing or cannot be loaded.
     """
-    if is_in_google_colab():
-        from google.colab import drive
+    file_path = Path(dir_path) / "transects_cross_distances.json"
+    if not file_path.is_file():
+        logger.warning(f"No transect cross-shore distances found in {dir_path}")
+        return None
 
-        # default location google drive is mounted to
-        root_dir = "/content/drive/MyDrive"
-        # mount google drive to default home directory
-        drive.mount("/content/drive", force_remount=True)
-        # create directory with provided name in google drive
-        new_path = create_directory_in_google_drive(root_dir, name)
-        # change working directory to directory with name
-        os.chdir(new_path)
-    else:
-        print("Not running in Google Colab.")
+    try:
+        transect_dict = file_utilities.load_data_from_json(file_path)
+        transect_dict = {k: np.array(v) for k, v in transect_dict.items()}
+        logger.info(f"Loaded transect cross-shore distances from: {dir_path}")
+        return transect_dict
+    except Exception as e:
+        logger.warning(f"Failed to load transect distances from {file_path}: {e}")
+        return None
 
 
 def create_hover_box(
@@ -2983,12 +2989,17 @@ def clear_row(row: HBox):
     row.children = []
 
 
-def download_url(url: str, save_path: str, filename: str = None, chunk_size: int = 128):
-    """Downloads the data from the given url to the save_path location.
+def download_url(
+    url: str, save_path: str, filename: Optional[str] = None, chunk_size: int = 128
+) -> None:
+    """
+    Downloads a file from a URL and saves it to the specified path.
+
     Args:
-        url (str): url to data to download
-        save_path (str): directory to save data
-        chunk_size (int, optional):  Defaults to 128.
+        url (str): The URL to download from.
+        save_path (str): The directory path to save the file.
+        filename (Optional[str]): The filename to save as. If None, extracts from URL.
+        chunk_size (int): The chunk size for downloading in bytes.
     """
     logger.info(f"download url: {url}")
     # get a response from the url
@@ -3029,12 +3040,15 @@ def download_url(url: str, save_path: str, filename: str = None, chunk_size: int
                     pbar.update(len(chunk))
 
 
-def get_center_point(coords: list) -> tuple:
-    """returns the center point of rectangle specified by points coords
+def get_center_point(coords: List[Tuple[float, float]]) -> Tuple[float, float]:
+    """
+    Returns the center point of rectangle specified by points coords.
+
     Args:
-        coords list[tuple(float,float)]: lat,lon coordinates
+        coords (List[Tuple[float, float]]): Lat, lon coordinates.
+
     Returns:
-        tuple[float]: (center x coordinate, center y coordinate)
+        Tuple[float, float]: (center x coordinate, center y coordinate).
     """
     x1, y1 = coords[0][0], coords[0][1]
     x2, y2 = coords[2][0], coords[2][1]
@@ -3715,7 +3729,6 @@ def rename_jpgs(src_path: str) -> None:
     Args:
         src_path (str): full path to the data directory in coastseg
     """
-    files_renamed = False
     for folder in os.listdir(src_path):
         folder_path = src_path + os.sep + folder
         # Split the folder name at the first _
@@ -3725,7 +3738,6 @@ def rename_jpgs(src_path: str) -> None:
         # Append folder id to basename of jpg if not already there
         for jpg in jpgs:
             if folder_id not in jpg:
-                files_renamed = True
                 base, ext = os.path.splitext(jpg)
                 new_name = folder_path + os.sep + base + "_" + folder_id + ext
                 old_name = folder_path + os.sep + jpg
@@ -3801,7 +3813,7 @@ def were_rois_downloaded(roi_settings: dict, roi_ids: list) -> bool:
     # print correct message depending on whether ROIs were downloaded
     if is_downloaded:
         logger.info("Located previously downloaded ROI data.")
-    elif is_downloaded == False:
+    elif not is_downloaded:
         print(
             "Did not locate previously downloaded ROI data. To download the imagery for your ROIs click Download Imagery"
         )
@@ -3939,11 +3951,21 @@ def scale(matrix: np.ndarray, rows: int, cols: int) -> np.ndarray:
     return np.array(tmp).reshape((rows, cols))
 
 
-def rescale_array(dat, mn, mx):
+def rescale_array(dat: np.ndarray, mn: float, mx: float) -> np.ndarray:
     """
-    rescales an input dat between mn and mx
-    Code from doodleverse_utils by Daniel Buscombe
-    source: https://github.com/Doodleverse/doodleverse_utils
+    Rescales an input array between mn and mx.
+
+    Args:
+        dat (np.ndarray): Input array to rescale.
+        mn (float): Minimum value for rescaling.
+        mx (float): Maximum value for rescaling.
+
+    Returns:
+        np.ndarray: Rescaled array.
+
+    Note:
+        Code from doodleverse_utils by Daniel Buscombe
+        Source: https://github.com/Doodleverse/doodleverse_utils
     """
     m = min(dat.flatten())
     M = max(dat.flatten())
