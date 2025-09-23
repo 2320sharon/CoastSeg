@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Set, Union
+from typing import Any, Dict, List, Union, Collection
 
 import ipywidgets as widgets
 from ipyfilechooser import FileChooser
@@ -18,7 +18,7 @@ class FileUploader:
         self,
         title: str = "Upload a GeoJSON File",
         instructions: str = "",
-        dropdown_options: Set[str] = set(),
+        dropdown_options: Collection[str] = set(),
         filter_pattern: str = "*.geojson",
         file_selection_title: str = "",
         starting_directory: str = "",
