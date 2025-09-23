@@ -6,33 +6,39 @@ import json
 import logging
 import os
 import re
+from datetime import timezone
 from glob import glob
 from itertools import islice
 from time import perf_counter
 from typing import Callable, Dict, List, Optional, Tuple, Union
-from datetime import timezone
 
 # External dependencies imports
 import dask
-import pytz
 import geopandas as gpd
+import matplotlib
 import numpy as np
 import pandas as pd
+import pytz
 from ipyleaflet import GeoJSON
-import matplotlib
 
 matplotlib.use("Agg")  # Use a non-GUI backend
-from skimage import measure, morphology
-from shapely.geometry import LineString, MultiPoint
-from tqdm.auto import tqdm
+from coastsat import SDS_preprocess, SDS_shoreline, SDS_tools, SDS_transects
 from osgeo import gdal
+from shapely.geometry import LineString, MultiPoint
+from skimage import measure, morphology
+from tqdm.auto import tqdm
 
 # Local project imports
-from coastseg import common, exceptions, file_utilities, geodata_processing, plotting
-from coastseg import core_utilities
-from coastseg.model_info import ModelInfo
+from coastseg import (
+    common,
+    core_utilities,
+    exceptions,
+    file_utilities,
+    geodata_processing,
+    plotting,
+)
 from coastseg.intersections import split_line
-from coastsat import SDS_preprocess, SDS_shoreline, SDS_tools, SDS_transects
+from coastseg.model_info import ModelInfo
 
 gdal.UseExceptions()
 
@@ -51,6 +57,8 @@ class SegmentationFilter:
 
     def __init__(self, session_path: str):
         """
+        Initializes SegmentationFilter with session path.
+
         Args:
             session_path (str): Path to the saved session directory containing segmentation results.
         """
@@ -107,6 +115,8 @@ class MetadataManager:
 
     def __init__(self, shoreline_settings: dict):
         """
+        Initializes MetadataManager with shoreline settings.
+
         Args:
             shoreline_settings (dict): Configuration for shoreline extraction.
                 Requires 'inputs' key with 'filepath' and 'sitename'.
@@ -123,8 +133,7 @@ class MetadataManager:
 
     def load_metadata(self) -> dict:
         """
-        Loads the metadata from the session specified in the shoreline settings, then
-        filters it based on the available RBG files.
+        Loads and filters metadata based on available RGB files.
 
         Returns:
             dict: Filtered metadata grouped by satellite.
@@ -136,10 +145,15 @@ class MetadataManager:
         filepath = inputs.get("filepath")
         if not filepath:
             raise ValueError("The 'filepath' key in 'inputs' is missing or None.")
+
         filepath_data = get_data_folder(filepath)
         metadata = get_metadata(inputs, filepath_data)
 
         sitename = inputs.get("sitename")
+        if filepath_data is None or sitename is None:
+            raise ValueError(
+                "Both 'filepath_data' and 'sitename' must be provided and not None."
+            )
         rgb_dir = os.path.join(
             filepath_data, sitename, "jpg_files", "preprocessed", "RGB"
         )
@@ -422,6 +436,15 @@ def parse_date_from_filename(filename: str) -> datetime.datetime:
 
 
 def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
+    """
+    Reads metadata from a .txt file.
+
+    Args:
+        filepath (str): Path to the metadata file.
+
+    Returns:
+        Dict[str, Union[str, int, float]]: Metadata dictionary.
+    """
     metadata_keys = [
         "filename",
         "epsg",
@@ -524,15 +547,11 @@ def format_date(date_str: Union[str, datetime.datetime]) -> datetime.datetime:
 
 def get_metadata(inputs: dict, data_folder_location: str = "") -> dict:
     """
-    Gets the metadata from the downloaded images by parsing .txt files located
-    in the \meta subfolder.
-
-    KV WRL 2018
-    modified by Sharon Fitzpatrick 2023
+    Gets metadata from downloaded images by parsing .txt files in meta subfolder.
 
     Args:
-        inputs (dict): Dictionary with 'sitename' and 'filepath' keys.
-        data_folder_location (str): Alternative location of the data folder.
+        inputs (dict): Dictionary with 'sitename', 'filepath', 'sat_list', 'dates' keys.
+        data_folder_location (str): Alternative data folder location.
 
     Returns:
         dict: Metadata containing image information for each satellite. the keys are the satellite names
@@ -597,7 +616,7 @@ def get_metadata(inputs: dict, data_folder_location: str = "") -> dict:
                 metadata[satname]["acc_georef"].append(meta_info["acc_georef"])
                 metadata[satname]["epsg"].append(meta_info["epsg"])
                 metadata[satname]["dates"].append(
-                    parse_date_from_filename(meta_info["filename"])
+                    parse_date_from_filename(meta_info["filename"])  # type: ignore
                 )
                 metadata[satname]["im_quality"].append(meta_info["im_quality"])
                 # if the metadata file didn't contain im_height or im_width set this as an empty list
@@ -630,33 +649,32 @@ def log_contents_of_shoreline_dict(extracted_shorelines_dict: dict) -> None:
     # ------------------------------------------------
 
     logger.info(
-        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('dates',[]))} of dates: {list(islice(extracted_shorelines_dict.get('dates',[]),3))}"
+        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('dates', []))} of dates: {list(islice(extracted_shorelines_dict.get('dates', []), 3))}"
     )
     logger.info(
-        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('satname',[]))} of satname: {np.unique(extracted_shorelines_dict.get('satname',[]))}"
+        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('satname', []))} of satname: {np.unique(extracted_shorelines_dict.get('satname', []))}"
     )
     logger.info(
-        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('geoaccuracy',[]))} of geoaccuracy: {np.unique(extracted_shorelines_dict.get('geoaccuracy',[]))}"
+        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('geoaccuracy', []))} of geoaccuracy: {np.unique(extracted_shorelines_dict.get('geoaccuracy', []))}"
     )
     logger.info(
-        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('cloud_cover',[]))} of cloud_cover: {np.unique(extracted_shorelines_dict.get('cloud_cover',[]))}"
+        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('cloud_cover', []))} of cloud_cover: {np.unique(extracted_shorelines_dict.get('cloud_cover', []))}"
     )
     logger.info(
-        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('filename',[]))} of filename[:3]: {list(islice(extracted_shorelines_dict.get('filename',[]),3))}"
+        f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('filename', []))} of filename[:3]: {list(islice(extracted_shorelines_dict.get('filename', []), 3))}"
     )
 
 
-# preprocess_single
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(
-    fn,
-    satname,
-    cloud_mask_issue,
-    pan_off,
-    collection="C02",
-    do_cloud_mask=True,
-    s2cloudless_prob=60,
-):
+    fn: Union[str, List[str]],
+    satname: str,
+    cloud_mask_issue: bool,
+    pan_off: bool,
+    collection: str = "C02",
+    do_cloud_mask: bool = True,
+    s2cloudless_prob: float = 60,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Reads the image and outputs the pansharpened/down-sampled multispectral bands,
     the georeferencing vector of the image (coordinates of the upper left pixel),
@@ -669,40 +687,35 @@ def preprocess_single(
 
     Arguments:
     -----------
-    fn: str or list of str
-        filename of the .TIF file containing the image. For L7, L8 and S2 this
-        is a list of filenames, one filename for each band at different
-        resolution (30m and 15m for Landsat 7-8, 10m, 20m, 60m for Sentinel-2)
-    satname: str
-        name of the satellite mission (e.g., 'L5')
-    cloud_mask_issue: boolean
-        True if there is an issue with the cloud mask and sand pixels are being masked on the images
-    pan_off : boolean
-        if True, disable panchromatic sharpening and ignore pan band
-    collection: str
-        Landsat collection 'C02'
-    do_cloud_mask: boolean
-        if True, apply the cloud mask to the image. If False, the cloud mask is not applied.
-    s2cloudless_prob: float [0,100)
-            threshold to identify cloud pixels in the s2cloudless probability mask
+    KV WRL 2018, modified by Sharon Fitzpatrick Batiste 2025.
+
+    Args:
+        fn: Filename of .TIF file. For L7, L8, S2, list of filenames for different resolutions.
+        satname: Satellite mission name (e.g., 'L5').
+        cloud_mask_issue: True if cloud mask issue masks sand pixels mistakenly.
+        pan_off: If True, disable panchromatic sharpening.
+        collection: Landsat collection 'C02'.
+        do_cloud_mask: If True, apply cloud mask.
+        s2cloudless_prob: Threshold for S2 cloud pixels [0,100).
+                threshold to identify cloud pixels in the s2cloudless probability mask
 
     Returns:
-    -----------
-    im_ms: np.array
-        3D array containing the pansharpened/down-sampled bands (B,G,R,NIR,SWIR1)
-    georef: np.array
-        vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale] defining the
-        coordinates of the top-left pixel of the image
-    cloud_mask: np.array
-        2D cloud mask with True where cloud pixels are
-    im_extra : np.array
-        2D array containing the 20m resolution SWIR band for Sentinel-2 and the 15m resolution
-        panchromatic band for Landsat 7 and Landsat 8. This field is empty for Landsat 5.
-    im_QA: np.array
-        2D array containing the QA band, from which the cloud_mask can be computed.
-    im_nodata: np.array
-        2D array with True where no data values (-inf) are located
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]: Tuple of (im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata).
 
+        im_ms: np.array
+            3D array containing the pansharpened/down-sampled bands (B,G,R,NIR,SWIR1)
+        georef: np.array
+            vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale] defining the
+            coordinates of the top-left pixel of the image
+        cloud_mask: np.array
+            2D cloud mask with True where cloud pixels are
+        im_extra : np.array
+            2D array containing the 20m resolution SWIR band for Sentinel-2 and the 15m resolution
+            panchromatic band for Landsat 7 and Landsat 8. This field is empty for Landsat 5.
+        im_QA: np.array
+            2D array containing the QA band, from which the cloud_mask can be computed.
+        im_nodata: np.array
+            2D array with True where no data values (-inf) are located
     """
     if isinstance(fn, list):
         fn_to_split = fn[0]
@@ -711,7 +724,10 @@ def preprocess_single(
     # split by os.sep and only get the filename at the end then split again to remove file extension
     fn_to_split = fn_to_split.split(os.sep)[-1].split(".")[0]
     # search for the year the tif was taken with regex and convert to int
-    year = int(re.search("[0-9]+", fn_to_split).group(0))
+    match = re.search("[0-9]+", fn_to_split)
+    if not match:
+        raise ValueError(f"Could not find a year in filename: {fn_to_split}")
+    year = int(match.group(0))
     # after 2022 everything is automatically from Collection 2
     if collection == "C01" and year >= 2022:
         collection = "C02"
@@ -823,7 +839,9 @@ def preprocess_single(
                     im_ms_ps = SDS_preprocess.pansharpen(
                         im_ms[:, :, [0, 1, 2, 3, 4]], im_pan, cloud_mask
                     )
-                except:  # if pansharpening fails, keep downsampled bands (for long runs)
+                except (
+                    Exception
+                ):  # if pansharpening fails, keep downsampled bands (for long runs)
                     print("\npansharpening of image %s failed." % fn[0])
                     im_ms_ps = im_ms[:, :, [1, 2, 3]]
                     # add downsampled Blue and SWIR1 bands
@@ -840,7 +858,9 @@ def preprocess_single(
                     im_ms_ps = SDS_preprocess.pansharpen(
                         im_ms[:, :, [0, 1, 2, 3, 4]], im_pan, cloud_mask
                     )
-                except:  # if pansharpening fails, keep downsampled bands (for long runs)
+                except (
+                    Exception
+                ):  # if pansharpening fails, keep downsampled bands (for long runs)
                     print("\npansharpening of image %s failed." % fn[0])
                     im_ms_ps = im_ms[:, :, [0, 1, 2]]
                     # add downsampled NIR and SWIR1 bands
@@ -918,7 +938,7 @@ def preprocess_single(
             )
             # compute cloud mask using s2cloudless probability band
             cloud_mask_s2cloudless = SDS_preprocess.create_s2cloudless_mask(
-                cloud_prob, s2cloudless_prob
+                cloud_prob, s2cloudless_prob  # type: ignore
             )
             # combine both cloud masks
             cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
@@ -943,18 +963,20 @@ def preprocess_single(
 
 
 def check_percent_no_data_allowed(
-    percent_no_data_allowed: float, cloud_mask: np.ndarray, im_nodata: np.ndarray
+    percent_no_data_allowed: Optional[float],
+    cloud_mask: np.ndarray,
+    im_nodata: np.ndarray,
 ) -> bool:
     """
-    Checks if the percentage of no data pixels in the image exceeds the allowed percentage.
+    Checks if percentage of no data pixels exceeds allowed threshold.
 
     Args:
-        settings (dict): A dictionary containing settings for the shoreline extraction.
-        cloud_mask (numpy.ndarray): A binary mask indicating cloud cover in the image.
-        im_nodata (numpy.ndarray): A binary mask indicating no data pixels in the image.
+        percent_no_data_allowed (float): Maximum allowed percentage of no data pixels if not None.
+        cloud_mask (np.ndarray): Binary mask for cloud cover.
+        im_nodata (np.ndarray): Binary mask for no data pixels.
 
     Returns:
-        bool: True if the percentage of no data pixels is less than or equal to the allowed percentage, False otherwise.
+        bool: True if no data percentage is within limit, False otherwise.
     """
     if percent_no_data_allowed is not None:
         num_total_pixels = cloud_mask.shape[0] * cloud_mask.shape[1]
@@ -969,14 +991,13 @@ def check_percent_no_data_allowed(
 
 def convert_linestrings_to_multipoints(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
-    Convert LineString geometries in a GeoDataFrame to MultiPoint geometries.
+    Converts LineString geometries in GeoDataFrame to MultiPoint geometries.
 
     Args:
-    - gdf (gpd.GeoDataFrame): The input GeoDataFrame.
+        gdf (gpd.GeoDataFrame): Input GeoDataFrame with LineString geometries.
 
     Returns:
-    - gpd.GeoDataFrame: A new GeoDataFrame with MultiPoint geometries. If the input GeoDataFrame
-                        already contains MultiPoints, the original GeoDataFrame is returned.
+        gpd.GeoDataFrame: GeoDataFrame with MultiPoint geometries.
     """
 
     # Check if the gdf already contains MultiPoints
@@ -989,23 +1010,9 @@ def convert_linestrings_to_multipoints(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFram
         return linestring
 
     # Convert each LineString to a MultiPoint
-    gdf["geometry"] = gdf["geometry"].apply(linestring_to_multipoint)
+    gdf["geometry"] = gdf["geometry"].map(linestring_to_multipoint)
 
     return gdf
-
-
-def transform_gdf_to_crs(gdf: gpd.GeoDataFrame, crs: int = 4326) -> gpd.GeoDataFrame:
-    """
-    Converts the GeoDataFrame to the specified CRS.
-
-    Args:
-        gdf (gpd.GeoDataFrame): Input GeoDataFrame.
-        crs (int): Target CRS code. Defaults to 4326.
-
-    Returns:
-        gpd.GeoDataFrame: Transformed GeoDataFrame.
-    """
-    return gdf.to_crs(crs)
 
 
 def select_and_stringify(gdf: gpd.GeoDataFrame, row_number: int) -> gpd.GeoDataFrame:
@@ -1025,7 +1032,7 @@ def select_and_stringify(gdf: gpd.GeoDataFrame, row_number: int) -> gpd.GeoDataF
 
 def convert_gdf_to_json(gdf: gpd.GeoDataFrame) -> dict:
     """
-    Converts a GeoDataFrame to a JSON representation.
+    Converts GeoDataFrame to JSON dictionary.
 
     Args:
         gdf (gpd.GeoDataFrame): Input GeoDataFrame.
@@ -1039,14 +1046,17 @@ def convert_gdf_to_json(gdf: gpd.GeoDataFrame) -> dict:
 def style_layer(
     geojson: dict, layer_name: str, color: str, style_dict: dict = {}
 ) -> GeoJSON:
-    """Return styled GeoJson object with layer name
+    """
+    Returns styled GeoJSON object with layer name.
+
     Args:
-        geojson (dict): geojson dictionary to be styled
-        layer_name(str): name of the GeoJSON layer
-        color(str): hex code or name of color render shorelines
-        style_dict (dict, optional): Additional style attributes to be merged with the default style.
+        geojson (dict): GeoJSON dictionary to be styled.
+        layer_name (str): Name of the GeoJSON layer.
+        color (str): Hex code or name of color to render shorelines.
+        style_dict (dict): Additional style attributes to merge with default style.
+
     Returns:
-        "ipyleaflet.GeoJSON": shoreline as GeoJSON layer styled with color
+        GeoJSON: Shoreline as GeoJSON layer styled with color.
     """
     assert geojson != {}, "ERROR.\n Empty geojson cannot be drawn onto  map"
     # Default style dictionary
@@ -1068,17 +1078,17 @@ def style_layer(
 
 def read_from_dict(d: dict, keys_of_interest: Union[list, set, tuple]):
     """
-    Extracts the value from the first matching key in a dictionary.
+    Extracts value from first matching key in dictionary.
 
     Args:
-        d (dict): The dictionary from which to extract the value.
-        keys_of_interest (Union[list, set, tuple]): Iterable of keys to look for.
+        d (dict): Dictionary to extract from.
+        keys_of_interest (Union[list, set, tuple]): Keys to look for.
 
     Returns:
-        The value corresponding to the first matching key.
+        Value corresponding to first matching key.
 
     Raises:
-        KeyError: If none of the keys were found in the dictionary.
+        KeyError: If none of the keys are found.
     """
     for key in keys_of_interest:
         if key in d:
@@ -1115,17 +1125,18 @@ def compute_transects_from_roi(
     transects_gdf: gpd.GeoDataFrame,
     settings: dict,
 ) -> dict:
-    """Computes the intersection between the 2D shorelines and the shore-normal.
-        transects. It returns time-series of cross-shore distance along each transect.
+    """
+    Computes intersection between 2D shorelines and shore-normal transects.
+
+    Returns time-series of cross-shore distance along each transect.
+
     Args:
-        extracted_shorelines (dict): contains the extracted shorelines and corresponding metadata
-        transects_gdf (gpd.GeoDataFrame): transects in ROI with crs = output_crs in settings
-        settings (dict): settings dict with keys
-                    'along_dist': int
-                        alongshore distance considered calculate the intersection
+        extracted_shorelines (dict): Extracted shorelines and corresponding metadata.
+        transects_gdf (gpd.GeoDataFrame): Transects located within the ROI with output CRS.
+        settings (dict): Settings with 'along_dist' key for alongshore distance.
+
     Returns:
-        dict:  time-series of cross-shore distance along each of the transects.
-               Not tidally corrected.
+        dict: Time-series of cross-shore distance along each transect (not tidally corrected).
     """
     # create dict of numpy arrays of transect start and end points
 
@@ -1139,20 +1150,13 @@ def compute_transects_from_roi(
 
 def combine_satellite_data(satellite_data: dict) -> dict:
     """
-    Function to merge the satellite_data dictionary, which has one key per satellite mission
-    into a dictionnary containing all the shorelines and dates ordered chronologically.
+    Merges satellite data into chronologically ordered dictionary.
 
-    Arguments:
-    -----------
-    satellite_data: dict
-        contains the extracted shorelines and corresponding dates, organised by
-        satellite mission
+    Args:
+        satellite_data: Extracted shorelines and dates by satellite.
 
     Returns:
-    -----------
-    merged_satelllite_data: dict
-        contains the extracted shorelines in a single list sorted by date
-
+        dict: Merged shorelines sorted by date.
     """
     # Initialize merged_satellite_data dict
     merged_satellite_data = {
@@ -1468,11 +1472,9 @@ def process_satellite_image(
     )
 
     # if percentage of no data pixels are greater than allowed, skip
-    percent_no_data_allowed = settings.get(
-        "percent_no_data", None
-    )  # @todo I think this should be 1.0 (aka 100%)  if nothing is set
+    percent_no_data_allowed = settings.get("percent_no_data", 1.0)
     if not check_percent_no_data_allowed(
-        percent_no_data_allowed, cloud_mask, im_nodata
+        percent_no_data_allowed, cloud_mask, im_nodata  # type: ignore
     ):
         logger.info(
             f"percent_no_data_allowed > {settings.get('percent_no_data', None)}: {filename}"
@@ -1509,8 +1511,10 @@ def process_satellite_image(
     land_mask = load_merged_image_labels(npz_file, class_indices=class_indices)
     all_labels = load_image_labels(npz_file)
 
-    min_beach_area = settings["min_beach_area"]
-    land_mask = remove_small_objects_and_binarize(land_mask, min_beach_area)
+    min_beach_area = settings.get("min_beach_area", None)
+    if min_beach_area is None:
+        raise ValueError("min_beach_area must be defined in settings")
+    land_mask = remove_small_objects_and_binarize(land_mask, int(min_beach_area))
 
     # get the shoreline from the image
     shoreline = find_shoreline(
@@ -1785,7 +1789,7 @@ def find_shoreline(
     georef: float,
     im_labels: np.ndarray,
     reference_shoreline_buffer: np.ndarray,
-) -> np.ndarray:
+) -> Optional[np.ndarray]:
     """
     Finds the shoreline in an image.
 
@@ -1823,10 +1827,10 @@ def extract_shorelines_with_dask(
     session_path: str,
     metadata: dict,
     settings: dict,
-    class_indices: list = None,
-    class_mapping: dict = None,
+    class_indices: Optional[list] = None,
+    class_mapping: Optional[dict] = None,
     save_location: str = "",
-    shoreline_extraction_area: gpd.GeoDataFrame = None,
+    shoreline_extraction_area: Optional[gpd.GeoDataFrame] = None,
     **kwargs: dict,
 ) -> dict:
     """
@@ -1872,7 +1876,7 @@ def extract_shorelines_with_dask(
         )
         if not satellite_dict:
             shoreline_dict[satname] = {}
-        elif not satname in satellite_dict.keys():
+        elif satname not in satellite_dict.keys():
             shoreline_dict[satname] = {}
         else:
             shoreline_dict[satname] = satellite_dict[satname]
@@ -1887,16 +1891,16 @@ def extract_shorelines_with_dask(
             logger.info(f"No shorelines found for {satname}")
         else:
             logger.info(
-                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('dates',[]))} of dates[:3] {list(islice(shoreline_dict[satname].get('dates',[]),3))}"
+                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('dates', []))} of dates[:3] {list(islice(shoreline_dict[satname].get('dates', []), 3))}"
             )
             logger.info(
-                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('geoaccuracy',[]))} of geoaccuracy: {np.unique(shoreline_dict[satname].get('geoaccuracy',[]))}"
+                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('geoaccuracy', []))} of geoaccuracy: {np.unique(shoreline_dict[satname].get('geoaccuracy', []))}"
             )
             logger.info(
-                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('cloud_cover',[]))} of cloud_cover: {np.unique(shoreline_dict[satname].get('cloud_cover',[]))}"
+                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('cloud_cover', []))} of cloud_cover: {np.unique(shoreline_dict[satname].get('cloud_cover', []))}"
             )
             logger.info(
-                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('filename',[]))} of filename[:3]{list(islice(shoreline_dict[satname].get('filename',[]),3))}"
+                f"result_dict['{satname}'] length {len(shoreline_dict[satname].get('filename', []))} of filename[:3]{list(islice(shoreline_dict[satname].get('filename', []), 3))}"
             )
     # combine the extracted shorelines for each satellite
     return combine_satellite_data(shoreline_dict)
@@ -1978,7 +1982,7 @@ def load_extracted_shoreline_from_files(
         del extracted_shorelines
         return None
 
-    return extracted_shorelines
+    return extracted_shorelines  # noqa: F821
 
 
 class Extracted_Shoreline:
@@ -1987,9 +1991,10 @@ class Extracted_Shoreline:
     LAYER_NAME = "extracted_shoreline"
     FILE_NAME = "extracted_shorelines.geojson"
 
-    def __init__(
-        self,
-    ):
+    def __init__(self):
+        """
+        Initialize Extracted_Shoreline instance.
+        """
         # gdf: geodataframe containing extracted shoreline for ROI_id
         self.gdf = gpd.GeoDataFrame()
         # Use roi id to identify which ROI extracted shorelines derive from
@@ -2047,7 +2052,7 @@ class Extracted_Shoreline:
         }
 
         Returns:
-            The ROI ID as a string, or None if the sitename field is not present or is not in the expected format.
+            ROI ID string, or None if not found.
         """
         if self.shoreline_settings is None:
             return None
@@ -2060,14 +2065,11 @@ class Extracted_Shoreline:
         self, dates: list[datetime.datetime], satellites: list[str]
     ) -> None:
         """
-        Removes selected shorelines based on the provided dates and satellites.
+        Removes selected shorelines based on dates and satellites.
 
         Args:
-            dates (list[datetime.datetime]): A list of dates to filter the shorelines.
-            satellites (list[str]): A list of satellites to filter the shorelines.
-
-        Returns:
-            None
+            dates (list[datetime.datetime]): Dates to filter shorelines.
+            satellites (list[str]): Satellites to filter shorelines.
         """
         if hasattr(self, "dictionary"):
             self._remove_from_dict(dates, satellites)
@@ -2079,14 +2081,14 @@ class Extracted_Shoreline:
         self, dates: list["datetime.datetime"], satellites: list[str]
     ) -> dict:
         """
-        Remove selected indexes from the dictionary based on the dates and satellites passed in for a specific region of interest.
+        Remove selected indexes from dictionary based on dates and satellites.
 
         Args:
-            dates (list['datetime.datetime']): The list of dates to filter.
-            satellites (list[str]): The list of satellites to filter.
+            dates (list[datetime.datetime]): Dates to filter.
+            satellites (list[str]): Satellites to filter.
 
         Returns:
-            dict: The updated dictionary for the specified region of interest.
+            dict: Updated dictionary.
         """
         selected_indexes = common.get_selected_indexes(
             self.dictionary, dates, satellites
@@ -2100,14 +2102,14 @@ class Extracted_Shoreline:
         self, dates: list["datetime.datetime"], satellites: list[str]
     ) -> gpd.GeoDataFrame:
         """
-        Remove rows from the GeoDataFrame based on the specified dates and satellites.
+        Remove rows from GeoDataFrame based on dates and satellites.
 
         Args:
-            dates (list[datetime.datetime]): A list of datetime objects representing the dates to filter.
-            satellites (list[str]): A list of satellite names to filter.
+            dates (list[datetime.datetime]): Dates to filter.
+            satellites (list[str]): Satellites to filter.
 
         Returns:
-            gpd.GeoDataFrame: The updated GeoDataFrame after removing the matching rows.
+            gpd.GeoDataFrame: Updated GeoDataFrame.
         """
         if all(isinstance(date, datetime.date) for date in dates):
             dates = [date.strftime("%Y-%m-%d %H:%M:%S") for date in dates]
@@ -2121,23 +2123,23 @@ class Extracted_Shoreline:
 
     def load_extracted_shorelines(
         self,
-        extracted_shoreline_dict: dict = None,
-        shoreline_settings: dict = None,
-        extracted_shorelines_gdf: gpd.GeoDataFrame = None,
-    ):
-        """Loads extracted shorelines into the Extracted_Shoreline class.
-        Intializes the class with the extracted shorelines dictionary, shoreline settings, and the extracted shorelines geodataframe
+        extracted_shoreline_dict: Optional[dict] = None,
+        shoreline_settings: Optional[dict] = None,
+        extracted_shorelines_gdf: Optional[gpd.GeoDataFrame] = None,
+    ) -> "Extracted_Shoreline":
+        """
+        Loads extracted shorelines into Extracted_Shoreline class.
 
         Args:
-            extracted_shoreline_dict (dict, optional): A dictionary containing the extracted shorelines. Defaults to None.
-            shoreline_settings (dict, optional): A dictionary containing the shoreline settings. Defaults to None.
-            extracted_shorelines_gdf (GeoDataFrame, optional): The extracted shorelines in a GeoDataFrame. Defaults to None.
+            extracted_shoreline_dict (dict): Dictionary of extracted shorelines.
+            shoreline_settings (dict): Shoreline settings dictionary.
+            extracted_shorelines_gdf (gpd.GeoDataFrame): Extracted shorelines GeoDataFrame.
 
         Returns:
-            object: The Extracted_Shoreline class with the extracted shorelines loaded.
+            Extracted_Shoreline: Instance with loaded shorelines.
 
         Raises:
-            ValueError: If the input arguments are invalid.
+            ValueError: If input arguments are invalid.
         """
 
         if not isinstance(extracted_shoreline_dict, dict):
@@ -2181,20 +2183,18 @@ class Extracted_Shoreline:
         shoreline_extraction_area: Optional[gpd.GeoDataFrame] = None,
     ) -> "Extracted_Shoreline":
         """
-        Extracts shorelines for a specified region of interest (ROI) and returns an Extracted_Shoreline class instance.
+        Extracts shorelines for ROI and returns Extracted_Shoreline instance.
 
         Args:
-        - roi_id (str): The ID of the region of interest for which shorelines need to be extracted.
-        - shoreline (GeoDataFrame): A GeoDataFrame of shoreline features.
-        - roi_settings (dict): A dictionary of region of interest settings.
-        - settings (dict): A dictionary of extraction settings.
-        - output_directory (Optional[str]): The path to the directory where the extracted shorelines will be saved.
-           - detection figures will be saved in a subfolder called 'jpg_files' within the output_directory.
-           - extract_shoreline reports will be saved within the output_directory.
-        - shoreline_extraction_area (gpd.GeoDataFrame, optional): A GeoDataFrame containing the area to extract shorelines from. Not required.
+            roi_id (str): ROI ID for shoreline extraction.
+            shoreline (gpd.GeoDataFrame): Shoreline features GeoDataFrame.
+            roi_settings (dict): ROI settings dictionary.
+            settings (dict): Extraction settings dictionary.
+            output_directory (Optional[str]): Directory to save extracted shorelines. The shoreline figures and
+            shoreline_extraction_area (Optional[gpd.GeoDataFrame]): Area to extract shorelines from.
 
         Returns:
-        - object: The Extracted_Shoreline class instance.
+            Extracted_Shoreline: Instance with extracted shorelines.
         """
         # validate input parameters are not empty and are of the correct type
         self._validate_input_params(roi_id, shoreline, roi_settings, settings)
@@ -2237,39 +2237,41 @@ class Extracted_Shoreline:
         **kwargs: dict,
     ) -> "Extracted_Shoreline":
         """
-        Extracts shorelines for a specified region of interest (ROI) from a saved session and returns an Extracted_Shoreline class instance.
+        Extracts shorelines for ROI from saved session.
 
         Args:
-        - self: The object instance.
-        - roi_id (str): The ID of the region of interest for which shorelines need to be extracted.
-        - shoreline (GeoDataFrame): A GeoDataFrame of shoreline features.
-        - roi_settings (dict): Dictionary containing settings for the ROI. It must have the following keys:
-            {
-                "dates": ["2018-12-01", "2019-03-01"],
-                "sat_list": ["L8", "L9", "S2"],
-                "roi_id": "lyw1",
-                "polygon": [
-                [
-                    [-73.94584118213996, 40.57245559853209],
-                    [-73.94584118213996, 40.52844804565595],
-                    [-73.87282173497694, 40.52844804565595],
-                    [-73.87282173497694, 40.57245559853209],
-                    [-73.94584118213996, 40.57245559853209]
-                ]
-                ],
-                "landsat_collection": "C02",
-                "sitename": "ID_lyw1_datetime01-18-24__12_26_51",
-                "filepath": "C:\\CoastSeg\\data",
-            },
-        - settings (dict): A dictionary of extraction settings.
-        - session_path (str): The path of the saved session from which the shoreline extraction needs to be resumed.
-        - new_session_path (str) :The path of the new session where the extreacted shorelines extraction will be saved
-            - detection figures will be saved in a subfolder called 'jpg_files' within the new_session_path.
-            - extract_shoreline reports will be saved within the new_session_path.
-        - apply_segmentation_filter (bool): Whether to apply the segmentation filter to the session. Defaults to True.
-        - shoreline_extraction_area (gpd.GeoDataFrame, optional): A GeoDataFrame containing the area to extract shorelines from. Defaults to None.
+            model_info (ModelInfo): Model information.
+            roi_id (str): ROI ID for shoreline extraction.
+            shoreline (GeoDataFrame): Shoreline features
+            roi_settings (dict): ROI settings. It must have the following keys:
+                {
+                    "dates": ["2018-12-01", "2019-03-01"],
+                    "sat_list": ["L8", "L9", "S2"],
+                    "roi_id": "lyw1",
+                    "polygon": [
+                    [
+                        [-73.94584118213996, 40.57245559853209],
+                        [-73.94584118213996, 40.52844804565595],
+                        [-73.87282173497694, 40.52844804565595],
+                        [-73.87282173497694, 40.57245559853209],
+                        [-73.94584118213996, 40.57245559853209]
+                    ]
+                    ],
+                    "landsat_collection": "C02",
+                    "sitename": "ID_lyw1_datetime01-18-24__12_26_51",
+                    "filepath": "C:\\CoastSeg\\data",
+                },
+            settings (dict): Extraction settings.
+            session_path (str): Path to saved session from which the shoreline extraction needs to be resumed.
+            new_session_path (str): The path of the new session where the extracted shorelines extraction will be saved
+                - detection figures will be saved in a subfolder called 'jpg_files' within the new_session_path.
+                - extract_shoreline reports will be saved within the new_session_path.
+            shoreline_extraction_area (gpd.GeoDataFrame): Area to extract shorelines from.
+            apply_segmentation_filter (bool): Whether to apply segmentation filter.
+            **kwargs (dict): Additional arguments.
+
         Returns:
-        - object: The Extracted_Shoreline class instance.
+            Extracted_Shoreline: Instance with extracted shorelines.
         """
         # validate input parameters are not empty and are of the correct type
         self._validate_input_params(roi_id, shoreline, roi_settings, settings)
@@ -2314,9 +2316,9 @@ class Extracted_Shoreline:
         # The metadata may be empty if there are no jpg files in at the location given by
         # shoreline_settings['inputs']['filepath'] (this is typically CoastSeg/data/ROI_id/jpg_files/RGB)
         if not metadata:
-            logger.warning(f"Metadata was empty after filtering for session jpg files.")
+            logger.warning("Metadata was empty after filtering for session jpg files.")
             print(
-                f"Metadata was empty after filtering for session jpg files. Check the RGB folders in the folder loaded"
+                "Metadata was empty after filtering for session jpg files. Check the RGB folders in the folder loaded"
             )
             self.dictionary = {}
             return self
@@ -2342,8 +2344,8 @@ class Extracted_Shoreline:
             shoreline_extraction_area=shoreline_extraction_area,
         )
         if extracted_shorelines_dict == {}:
-            logger.error(f"Failed to extract any shorelines.")
-            raise Exception(f"Failed to extract any shorelines.")
+            logger.error("Failed to extract any shorelines.")
+            raise Exception("Failed to extract any shorelines.")
 
         # postprocessing by removing duplicates and removing in inaccurate georeferencing (set threshold to 10 m)
         extracted_shorelines_dict = SDS_tools.remove_duplicates(
@@ -2381,17 +2383,16 @@ class Extracted_Shoreline:
         settings: dict,
     ) -> None:
         """
-        Validates that the input parameters for shoreline extraction are not empty and are of the correct type.
+        Validates input parameters for shoreline extraction.
 
         Args:
-        - self: The object instance.
-        - roi_id (str): The ID of the region of interest for which shorelines need to be extracted.
-        - shoreline (GeoDataFrame): A GeoDataFrame of shoreline features.
-        - roi_settings (dict): A dictionary of region of interest settings.
-        - settings (dict): A dictionary of extraction settings.
+            roi_id (str): ROI ID.
+            shoreline (gpd.GeoDataFrame): Shoreline features GeoDataFrame.
+            roi_settings (dict): ROI settings dictionary.
+            settings (dict): Extraction settings dictionary.
 
         Raises:
-        - ValueError: If any of the input parameters are empty or not of the correct type.
+            ValueError: If parameters are invalid or empty.
         """
         if not isinstance(roi_id, str):
             raise ValueError(f"ROI id must be string. not {type(roi_id)}")
@@ -2422,9 +2423,11 @@ class Extracted_Shoreline:
         shoreline_extraction_area: gpd.GeoDataFrame = None,
     ) -> dict:
         """
-        Extracts shorelines for a specified region of interest (ROI).
+        Extracts shorelines for specified ROI.
+
         Args:
-            shoreline_gdf (gpd.GeoDataFrame): GeoDataFrame containing the shoreline data.
+
+            shoreline_gdf (gpd.GeoDataFrame): Shoreline data GeoDataFrame.
             roi_settings (dict): Dictionary containing settings for the ROI. It must have the following keys:
             {
                 "dates": ["2018-12-01", "2019-03-01"],
@@ -2443,17 +2446,18 @@ class Extracted_Shoreline:
                 "sitename": "ID_lyw1_datetime01-18-24__12_26_51",
                 "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
             },
-            settings (dict): Dictionary containing general settings.
-
+            settings (dict): General settings dictionary.
             session_path (str, optional): Path to the session. Defaults to None.
             class_indices (list, optional): List of class indices. Defaults to None.
             class_mapping (dict, optional): Dictionary mapping class indices to class labels. Defaults to None.
-            output_directory (str): The path to the directory where the extracted shorelines will be saved.
+            output_directory (str):  Directory to save extracted shorelines.
                 - detection figures will be saved in a subfolder called 'jpg_files' within the output_directory.
                 - extract_shoreline reports will be saved within the output_directory.
             shoreline_extraction_area (gpd.GeoDataFrame, optional): A GeoDataFrame containing the area to extract shorelines from. Defaults to None.
+
+
         Returns:
-            dict: Dictionary containing the extracted shorelines for the specified ROI.
+            dict: Extracted shorelines for ROI.
         """
         # project shorelines's crs from map's crs to output crs given in settings
         # create a reference shoreline as a numpy array containing lat, lon, and mean sea level for each point
@@ -2480,10 +2484,10 @@ class Extracted_Shoreline:
             metadata = common.filter_metadata_with_dates(
                 metadata, RGB_directory, file_type="jpg"
             )
-        except FileNotFoundError as e:
-            logger.warning(f"No RGB files existed so no metadata.")
+        except FileNotFoundError:
+            logger.warning("No RGB files existed so no metadata.")
             print(
-                f"No shorelines were extracted because no RGB files were found at {os.path.join(filepath_data,sitename)}"
+                f"No shorelines were extracted because no RGB files were found at {os.path.join(filepath_data, sitename)}"
             )
             return {}
 
@@ -2492,22 +2496,22 @@ class Extracted_Shoreline:
                 logger.warning(f"metadata['{satname}'] is empty")
             else:
                 logger.info(
-                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('epsg',[]))} of epsg: {np.unique(metadata[satname].get('epsg',[]))}"
+                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('epsg', []))} of epsg: {np.unique(metadata[satname].get('epsg', []))}"
                 )
                 logger.info(
-                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('dates',[]))} of dates Sample first five: {list(islice(metadata[satname].get('dates',[]),5))}"
+                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('dates', []))} of dates Sample first five: {list(islice(metadata[satname].get('dates', []), 5))}"
                 )
                 logger.info(
-                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('filenames',[]))} of filenames Sample first five: {list(islice(metadata[satname].get('filenames',[]),5))}"
+                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('filenames', []))} of filenames Sample first five: {list(islice(metadata[satname].get('filenames', []), 5))}"
                 )
                 logger.info(
-                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('im_dimensions',[]))} of im_dimensions: {np.unique(metadata[satname].get('im_dimensions',[]))}"
+                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('im_dimensions', []))} of im_dimensions: {np.unique(metadata[satname].get('im_dimensions', []))}"
                 )
                 logger.info(
-                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('acc_georef',[]))} of acc_georef: {np.unique(metadata[satname].get('acc_georef',[]))}"
+                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('acc_georef', []))} of acc_georef: {np.unique(metadata[satname].get('acc_georef', []))}"
                 )
                 logger.info(
-                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('im_quality',[]))} of im_quality: {np.unique(metadata[satname].get('im_quality',[]))}"
+                    f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('im_quality', []))} of im_quality: {np.unique(metadata[satname].get('im_quality', []))}"
                 )
 
         # extract shorelines with coastsat's models
@@ -2617,18 +2621,16 @@ class Extracted_Shoreline:
     def create_geodataframe(
         self, input_crs: str, output_crs: str = None, geomtype: str = "lines"
     ) -> gpd.GeoDataFrame:
-        """Creates a geodataframe with the crs specified by input_crs. Converts geodataframe crs
-        to output_crs if provided.
-
-        Converts the internal dictionary of extracted shorelines to a geodataframe and returns it.
+        """
+        Creates GeoDataFrame from extracted shorelines dictionary.
 
         Args:
-            input_crs (str ): coordinate reference system string. Format 'EPSG:4326'.
-            output_crs (str, optional): coordinate reference system string. Defaults to None.
+            input_crs (str): Input CRS string (e.g., 'EPSG:4326').
+            output_crs (str): Output CRS string. Defaults to None.
+            geomtype (str): Geometry type. Defaults to "lines".
+
         Returns:
-            gpd.GeoDataFrame: geodataframe with columns = ['geometery','date','satname','geoaccuracy','cloud_cover']
-            converted to output_crs if provided otherwise geodataframe's crs will be
-            input_crs
+            gpd.GeoDataFrame: GeoDataFrame with columns ['geometry', 'date', 'satname', 'geoaccuracy', 'cloud_cover'].
         """
         extract_shoreline_gdf = SDS_tools.output_to_gdf(self.dictionary, geomtype)
         if not extract_shoreline_gdf.crs:
@@ -2640,15 +2642,16 @@ class Extracted_Shoreline:
     def to_file(
         self, filepath: str, filename: str, data: Union[gpd.GeoDataFrame, dict]
     ):
-        """Save geopandas dataframe to file, or save data to file with to_file().
+        """
+        Saves GeoDataFrame or dict to file.
 
         Args:
-            filepath (str): The directory where the file should be saved.
-            filename (str): The name of the file to be saved.
-            data (Any): The data to be saved to file.
+            filepath (str): Directory to save file.
+            filename (str): File name.
+            data (Union[gpd.GeoDataFrame, dict]): Data to save.
 
         Raises:
-            ValueError: Raised when data is not a geopandas dataframe and cannot be saved with tofile()
+            ValueError: If data type is unsupported.
         """
         file_location = os.path.abspath(os.path.join(filepath, filename))
 
@@ -2663,7 +2666,12 @@ class Extracted_Shoreline:
                 file_utilities.to_file(data, file_location)
 
     def get_layer_name(self) -> list:
-        """returns name of extracted shoreline layer"""
+        """
+        Returns name of extracted shoreline layer.
+
+        Returns:
+            list: Layer name.
+        """
         layer_name = "extracted_shoreline"
         return layer_name
 
@@ -2671,22 +2679,21 @@ class Extracted_Shoreline:
         self, gdf, row_number: int = 0, map_crs: int = 4326, style: dict = {}
     ) -> dict:
         """
-        Returns a single shoreline feature as a GeoJSON object with a specified style.
+        Returns single shoreline feature as styled GeoJSON.
 
         Args:
-        - gdf: The input GeoDataFrame.
-        - row_number (int): The index of the shoreline feature to select from the GeoDataFrame.
-        - map_crs (int): The desired coordinate reference system.
-        - style (dict) default {} :
-            Additional style attributes to be merged with the default style.
+            gdf: Input GeoDataFrame.
+            row_number (int): Index of shoreline feature.
+            map_crs (int): Desired CRS.
+            style (dict): Additional style attributes.
 
         Returns:
-        - dict: A styled GeoJSON feature.
+            dict: Styled GeoJSON feature.
         """
         if gdf.empty:
             return []
 
-        projected_gdf = transform_gdf_to_crs(gdf, map_crs)
+        projected_gdf = gdf.to_crs(map_crs)
         single_shoreline = select_and_stringify(projected_gdf, row_number)
         features_json = convert_gdf_to_json(single_shoreline)
         layer_name = self.get_layer_name()
@@ -2705,14 +2712,14 @@ def get_reference_shoreline(
     shoreline_gdf: gpd.GeoDataFrame, output_crs: str
 ) -> np.ndarray:
     """
-    Converts a GeoDataFrame of shoreline features into a numpy array of latitudes, longitudes, and zeroes representing the mean sea level.
+    Converts GeoDataFrame shoreline to numpy array with lat, lon, and mean sea level.
 
     Args:
-    - shoreline_gdf (GeoDataFrame): A GeoDataFrame of shoreline features.
-    - output_crs (str): The output CRS to which the shoreline features need to be projected.
+        shoreline_gdf (gpd.GeoDataFrame): Shoreline features GeoDataFrame.
+        output_crs (str): Output CRS for projection.
 
     Returns:
-    - np.ndarray: A numpy array of latitudes, longitudes, and zeroes representing the mean sea level.
+        np.ndarray: Array of [lat, lon, 0] for mean sea level.
     """
     # project shorelines's espg from map's espg to output espg given in settings
     reprojected_shorlines = shoreline_gdf.to_crs(output_crs)
@@ -2728,12 +2735,12 @@ def get_reference_shoreline(
 
 
 def make_coastsat_compatible(feature: gpd.GeoDataFrame) -> list:
-    """Return the feature as an np.array in the form:
+    """Converts GeoDataFrame feature to CoastSat compatible format:
         [([lat,lon],[lat,lon],[lat,lon]),([lat,lon],[lat,lon],[lat,lon])...])
     Args:
-        feature (gpd.GeoDataFrame): clipped portion of shoreline within a roi
+        feature (gpd.GeoDataFrame): Clipped portion of shoreline within a roi
     Returns:
-        list: shorelines in form:
+        list: Shorelines as list of coordinate tuples.
             [([lat,lon],[lat,lon],[lat,lon]),([lat,lon],[lat,lon],[lat,lon])...])
     """
     features = []
@@ -2748,6 +2755,15 @@ def make_coastsat_compatible(feature: gpd.GeoDataFrame) -> list:
 
 
 def is_list_empty(main_list: list) -> bool:
+    """
+    Checks if all arrays in list are empty.
+
+    Args:
+        main_list (list): List of numpy arrays.
+
+    Returns:
+        bool: True if all arrays are empty.
+    """
     all_empty = True
     for np_array in main_list:
         if len(np_array) != 0:
