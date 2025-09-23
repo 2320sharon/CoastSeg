@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Collection, List, Union
+from typing import Any, Collection, Dict, List, Optional, Union
 
 import ee
 from coastsat.SDS_download import filter_collection_by_coverage
@@ -9,28 +9,28 @@ logger = logging.getLogger(__name__)
 
 
 def get_collection_by_tier(
-    polygon: list[list[float]],
+    polygon: List[List[List[float]]],
     start_date: Union[str, datetime],
     end_date: Union[str, datetime],
     satellite: str,
     tier: int,
     max_cloud_cover: float = 95,
-    months_list: list[int] = None,
-) -> Union[ee.ImageCollection, None]:
+    months_list: Optional[List[int]] = None,
+) -> Optional[Any]:
     """
-    This function takes the required parameters and returns an ImageCollection from
-    the specified satellite and tier filtered by the given polygon, date range, and cloud cover.
+    Retrieves filtered Earth Engine ImageCollection for given satellite and tier.
 
     Args:
-    polygon (List[List[float]]): The polygon to filter the ImageCollection by.
-    start_date (Union[str, datetime]): The start date to filter the ImageCollection by.
-    end_date (Union[str, datetime]): The end date to filter the ImageCollection by.
-    satellite (str): The satellite to select the ImageCollection from.
-    tier (int): The tier of the satellite data.
-    max_cloud_cover (float): The maximum cloud cover percentage for the entire scene (not just the roi) to filter the ImageCollection by.
+        polygon: Polygon coordinates as list of lists of floats.
+        start_date: Start date as string or datetime.
+        end_date: End date as string or datetime.
+        satellite: Satellite name.
+        tier: Data tier.
+        max_cloud_cover: Maximum cloud cover percentage.
+        months_list: List of months to include.
 
     Returns:
-        ee.ImageCollection or None: The filtered ImageCollection, or None if inputs are invalid or not available for the given tier/satellite.
+        Filtered ImageCollection or None if invalid.
 
     Example:
         >>> collection = get_collection_by_tier(polygon, '2020-01-01', '2020-12-31', 'L8', 1, 50, [6,7,8])
@@ -90,9 +90,9 @@ def get_collection_by_tier(
     month_filters = [filter_by_month(month) for month in months_list]
     month_filter = ee.Filter.Or(month_filters)  # type: ignore
     collection = (
-        ee.ImageCollection(collection_name)
-        .filterBounds(ee.Geometry.Polygon(polygon))
-        .filterDate(ee.Date(start_date), ee.Date(end_date))
+        ee.ImageCollection(collection_name)  # type: ignore
+        .filterBounds(ee.Geometry.Polygon(polygon))  # type: ignore
+        .filterDate(ee.Date(start_date), ee.Date(end_date))  # type: ignore
     )
 
     # Apply cloud cover filter only if available
@@ -108,17 +108,17 @@ def get_collection_by_tier(
 
 
 def count_images_in_ee_collection(
-    polygon: list[list[float]],
+    polygon: List[List[List[float]]],
     start_date: Union[str, datetime],
     end_date: Union[str, datetime],
     max_cloud_cover: float = 95,
     satellites: Collection[str] = ("L5", "L7", "L8", "L9", "S2", "S1"),
-    tiers: list[int] = None,
-    months_list: list[int] = None,
+    tiers: Optional[List[int]] = None,
+    months_list: Optional[List[int]] = None,
     min_roi_coverage: float = 0.0,
-) -> dict:
+) -> Dict[str, int]:
     """
-    Counts the number of images in specified satellite collections over a given area and time period.
+    Counts images in Earth Engine collections for given satellites and parameters.
 
     Args:
         polygon (list[list[float]]): Vertices of a polygon in [lon, lat] coordinates.
@@ -131,11 +131,11 @@ def count_images_in_ee_collection(
         min_roi_coverage (float, optional): Minimum percentage of ROI that must be covered by imagery. Defaults to 0.0.
 
     Returns:
-        dict: Dictionary mapping satellite names to image counts.
+        Dictionary mapping satellite names to image counts.
 
     Raises:
-        ValueError: If start_date or end_date are not strings or datetime objects, or if end_date is not after start_date.
-        Exception: If Earth Engine is not initialized.
+        ValueError: If dates are invalid or end before start.
+        Exception: If Earth Engine not initialized.
 
     Example:
         >>> polygon = [[[151.2957545, -33.7390216],
@@ -143,9 +143,7 @@ def count_images_in_ee_collection(
         ... [151.312234, -33.7012561],
         ... [151.2957545, -33.7012561],
         ... [151.2957545, -33.7390216]]]
-        >>> start_date = '2017-12-01'
-        >>> end_date = '2018-01-01'
-        >>> count_images_in_ee_collection(polygon, start_date, end_date)
+        >>> count_images_in_ee_collection(polygon, '2017-12-01', '2018-01-01')
         {'L5': 10, 'L7': 15, 'L8': 20, 'L9': 5, 'S2': 30, 'S1': 25}
     """
     if months_list is None:
@@ -169,7 +167,7 @@ def count_images_in_ee_collection(
 
     # Check if EE was initialized or not
     try:
-        ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
+        ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")  # type: ignore
     except Exception as e:
         raise Exception(
             f"Earth Engine not initialized. Please run ee.Initialize(project='gee project id') before calling this function.{e}"
@@ -196,10 +194,10 @@ def count_images_in_ee_collection(
             if collection:
                 collection = filter_collection_by_coverage(
                     collection,
-                    ee.Geometry.Polygon(polygon),
+                    ee.Geometry.Polygon(polygon),  # type: ignore
                     min_roi_coverage=min_roi_coverage,
                 )
-                images_in_tier_count += collection.size().getInfo()
+                images_in_tier_count += collection.size().getInfo()  # type: ignore
         image_counts[satellite] = images_in_tier_count
 
     return image_counts
