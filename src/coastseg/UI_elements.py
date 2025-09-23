@@ -2,12 +2,12 @@
 
 # Standard Python imports
 import os
-from typing import Optional, Union, Callable, Tuple, Any, Dict
+from typing import Callable, Tuple, Union
 
 # External Python imports
 import ipywidgets as widgets
-from IPython.display import display, clear_output
 from ipyfilechooser import FileChooser
+from IPython.display import clear_output, display
 
 
 class TidesSelector(widgets.VBox):
