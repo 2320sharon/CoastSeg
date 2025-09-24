@@ -7,7 +7,6 @@ from geopandas import GeoDataFrame
 
 from coastseg import exception_handler
 from coastseg.bbox import Bounding_Box
-from coastseg.coastseg_map import CoastSeg_Map
 from coastseg.exceptions import Object_Not_Found
 from coastseg.roi import ROI
 from coastseg.shoreline import Shoreline
@@ -46,7 +45,9 @@ def merge_rectangles(gdf: GeoDataFrame) -> GeoDataFrame:
 
 
 def create_shoreline(
-    coastsegmap: CoastSeg_Map, gdf: Optional[GeoDataFrame] = None, **kwargs
+    coastsegmap: "CoastSeg_Map",
+    gdf: Optional[GeoDataFrame] = None,
+    **kwargs,
 ) -> Shoreline:
     """
     Creates Shoreline object from GeoDataFrame or CoastSeg_Map.
@@ -88,7 +89,9 @@ def create_shoreline(
 
 
 def create_transects(
-    coastsegmap: CoastSeg_Map, gdf: Optional[GeoDataFrame] = None, **kwargs
+    coastsegmap: "CoastSeg_Map",
+    gdf: Optional[GeoDataFrame] = None,
+    **kwargs,
 ) -> Transects:
     """
     Creates Transects object from GeoDataFrame or CoastSeg_Map.
@@ -129,7 +132,9 @@ def create_transects(
 
 
 def create_bbox(
-    coastsegmap: CoastSeg_Map, gdf: Optional[GeoDataFrame] = None, **kwargs
+    coastsegmap: "CoastSeg_Map",
+    gdf: Optional[GeoDataFrame] = None,
+    **kwargs,
 ) -> Bounding_Box:
     """
     Creates Bounding_Box object from GeoDataFrame.
@@ -154,7 +159,9 @@ def create_bbox(
 
 
 def create_shoreline_extraction_area(
-    coastsegmap: CoastSeg_Map, gdf: Optional[GeoDataFrame] = None, **kwargs
+    coastsegmap: "CoastSeg_Map",
+    gdf: Optional[GeoDataFrame] = None,
+    **kwargs,
 ) -> Shoreline_Extraction_Area:
     """
     Creates Shoreline_Extraction_Area object from GeoDataFrame.
@@ -182,7 +189,7 @@ def create_shoreline_extraction_area(
 
 
 def create_rois(
-    coastsegmap: CoastSeg_Map, gdf: Optional[GeoDataFrame] = None, **kwargs
+    coastsegmap: "CoastSeg_Map", gdf: Optional[GeoDataFrame] = None, **kwargs
 ) -> ROI:
     """
     Creates ROI object from GeoDataFrame or CoastSeg_Map.
@@ -278,7 +285,7 @@ class Factory:
 
     @staticmethod
     def make_feature(
-        coastsegmap: CoastSeg_Map,
+        coastsegmap: "CoastSeg_Map",
         feature_name: str,
         gdf: Optional[GeoDataFrame] = None,
         **kwargs,
