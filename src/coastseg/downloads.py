@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_collection_by_tier(
-    polygon: List[List[List[float]]],
+    polygon: List[List[float]],
     start_date: Union[str, datetime],
     end_date: Union[str, datetime],
     satellite: str,
@@ -108,7 +108,7 @@ def get_collection_by_tier(
 
 
 def count_images_in_ee_collection(
-    polygon: List[List[List[float]]],
+    polygon: List[List[float]],
     start_date: Union[str, datetime],
     end_date: Union[str, datetime],
     max_cloud_cover: float = 95,
