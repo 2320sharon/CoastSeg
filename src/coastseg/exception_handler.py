@@ -2,9 +2,9 @@
 import logging
 import traceback
 from typing import Collection, Optional, Union
-from ipywidgets import HBox
 
 import geopandas as gpd
+from ipywidgets import HBox
 
 # internal python imports
 from coastseg import common, exceptions
@@ -282,7 +282,7 @@ def check_selected_set(selected_set: set):
         raise Exception(EMPTY_SELECTED_ROIS)
 
 
-def check_if_gdf_empty(feature, feature_type: str, message: str = ""):
+def check_if_gdf_empty(feature: gpd.GeoDataFrame, feature_type: str, message: str = ""):
     """
     Check if a given GeoDataFrame is empty and raise an exception if it is.
 
@@ -294,7 +294,7 @@ def check_if_gdf_empty(feature, feature_type: str, message: str = ""):
     Raises:
     Object_Not_Found: If the GeoDataFrame is empty.
     """
-    if feature.empty == True:
+    if feature.empty:
         logger.error(f"{feature_type} {feature} is empty")
         raise exceptions.Object_Not_Found(feature_type, message)
 
@@ -329,7 +329,12 @@ def check_if_dirs_missing(missing_dirs: dict, location: str = "/data"):
         )
 
 
-def handle_exception(error: Exception, row: HBox, title: str = None, msg: str = None):
+def handle_exception(
+    error: Exception,
+    row: Optional[HBox],
+    title: Optional[str] = None,
+    msg: Optional[str] = None,
+):
     """
     Handle exceptions by logging and displaying them in a user interface.
 
@@ -342,6 +347,8 @@ def handle_exception(error: Exception, row: HBox, title: str = None, msg: str = 
     Returns:
     None
     """
+    if row is None:
+        return
 
     logger.error(f"{traceback.format_exc()}")
     if isinstance(error, exceptions.WarningMissingDirsException):
@@ -385,7 +392,7 @@ def handle_bbox_error(
     None
     """
     logger.error(f"Bounding Box Error{error_msg}")
-    launch_error_box(row, title="Error", msg=error_msg)
+    launch_error_box(row, title="Error", msg=str(error_msg))
 
 
 def launch_error_box(
