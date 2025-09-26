@@ -18,18 +18,13 @@ Example:
 """
 
 # Standard library imports
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 
 # External dependencies imports
 import geopandas as gpd
 from ipyleaflet import GeoJSON
-from shapely.geometry import shape
 
-from coastseg.common import preprocess_geodataframe, validate_geometry_types
 from coastseg.feature import Feature
-
-# Internal dependencies imports
-from .exceptions import BboxTooLargeError, BboxTooSmallError
 
 __all__ = ["Bounding_Box"]
 
@@ -76,74 +71,21 @@ class Bounding_Box(Feature):
         Raises:
             Exception: If rectangle type invalid.
         """
-        self.gdf: Optional[gpd.GeoDataFrame] = None
-        self.filename: str = filename
+        super().__init__(filename)
         if isinstance(rectangle, gpd.GeoDataFrame):
-            self.gdf = self._initialize_from_gdf(rectangle)
+            gdf = rectangle
         elif isinstance(rectangle, dict):
-            self.gdf = self.create_geodataframe(rectangle)
+            gdf = self.gdf_from_mapping(rectangle, crs=Feature.DEFAULT_CRS)
         else:
-            raise Exception(
-                "Invalid rectangle provided to BBox must be either a geodataframe or dict"
-            )
+            raise TypeError("rectangle must be GeoDataFrame or GeoJSON-like dict")
 
-    def __str__(self) -> str:
-        """Return string representation."""
-        return f"BBox: geodataframe {self.gdf}"
-
-    def __repr__(self) -> str:
-        """Return string representation."""
-        return f"BBox: geodataframe {self.gdf}"
-
-    def _initialize_from_gdf(self, bbox_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-        """
-        Clean and validate GeoDataFrame as bounding box.
-
-        Args:
-            bbox_gdf: Input GeoDataFrame.
-
-        Returns:
-            Cleaned GeoDataFrame in EPSG:4326.
-        """
-        # clean the geodataframe
-        bbox_gdf = preprocess_geodataframe(
-            bbox_gdf,
-            columns_to_keep=["geometry"],
-            create_ids=False,
-            output_crs="EPSG:4326",
+        self.gdf = self.clean_gdf(
+            self.ensure_crs(gdf),
+            columns_to_keep=("geometry",),
+            output_crs=self.DEFAULT_CRS,
+            geometry_types=("Polygon", "MultiPolygon"),
+            feature_type="Bounding Box",
         )
-        validate_geometry_types(
-            bbox_gdf, set(["Polygon", "MultiPolygon"]), feature_type="Bounding Box"
-        )
-        return bbox_gdf
-
-    def create_geodataframe(
-        self, rectangle: Dict[str, Any], crs: str = "EPSG:4326"
-    ) -> gpd.GeoDataFrame:
-        """
-        Create GeoDataFrame from GeoJSON mapping.
-
-        Args:
-            rectangle: GeoJSON dict of geometry.
-            crs: Input CRS. Defaults to "EPSG:4326".
-
-        Returns:
-            GeoDataFrame in EPSG:4326.
-        """
-        geom = [shape(rectangle)]
-        geojson_bbox = gpd.GeoDataFrame({"geometry": geom})
-        geojson_bbox.set_crs(crs, inplace=True)
-        # clean the geodataframe
-        geojson_bbox = preprocess_geodataframe(
-            geojson_bbox,
-            columns_to_keep=["geometry"],
-            create_ids=False,
-            output_crs="EPSG:4326",
-        )
-        validate_geometry_types(
-            geojson_bbox, set(["Polygon", "MultiPolygon"]), feature_type="Bounding Box"
-        )
-        return geojson_bbox
 
     def style_layer(self, geojson: Dict[str, Any], layer_name: str) -> GeoJSON:
         """
@@ -177,7 +119,12 @@ class Bounding_Box(Feature):
             BboxTooLargeError: If exceeds max area.
             BboxTooSmallError: If below min area.
         """
-        if bbox_area > Bounding_Box.MAX_AREA:
-            raise BboxTooLargeError()
-        elif bbox_area < Bounding_Box.MIN_AREA:
-            raise BboxTooSmallError()
+        from .exceptions import BboxTooLargeError, BboxTooSmallError
+
+        Feature.check_size(
+            bbox_area,
+            min_area=Bounding_Box.MIN_AREA,
+            max_area=Bounding_Box.MAX_AREA,
+            too_small_exc=BboxTooSmallError,
+            too_large_exc=BboxTooLargeError,
+        )
