@@ -9,48 +9,58 @@ import re
 import shutil
 import string
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import (
-    Iterable,
-    Hashable,
     Any,
     Callable,
     Dict,
+    Hashable,
+    Iterable,
     List,
     Optional,
+    Sequence,
     Set,
     Tuple,
     Union,
-    Sequence,
 )
-from pathlib import Path
 
-# Third-party imports
-from pyproj import CRS
+import ee
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import requests
 import shapely
-import ee
-from area import area
 from ipyfilechooser import FileChooser
-from ipywidgets import HTML, HBox, Layout, ToggleButton, VBox, Button
+from ipywidgets import HTML, HBox, Layout, ToggleButton, VBox
 from PIL import Image
+from pyproj import CRS, Transformer
 from requests.exceptions import SSLError
 from shapely import geometry
-from shapely.geometry import LineString, MultiPoint, Point, Polygon
+
+# Third-party imports
+from shapely.geometry import LineString, MultiPoint, Point, Polygon, shape
+from shapely.ops import transform
 from tqdm.auto import tqdm
 
 # Internal dependencies imports
-from coastseg import exceptions, file_utilities
+from coastseg import core_utilities, exceptions, file_utilities
 from coastseg.exceptions import InvalidGeometryType
 from coastseg.validation import find_satellite_in_filename
-from coastseg import core_utilities
 
 # widget icons from https://fontawesome.com/icons/angle-down?s=solid&f=classic
 
 # Logger setup
 logger = logging.getLogger(__name__)
+
+
+def get_area(polygon: dict) -> float:
+    """Calculates the area of the geojson polygon in square meters using the appropriate UTM zone for accurate measurement."""
+    g = shape(polygon)  # Polygon in EPSG:4326
+    cx, cy = g.representative_point().xy
+    zone = int(math.floor((cx[0] + 180) / 6) + 1)
+    epsg = (32600 if cy[0] >= 0 else 32700) + zone
+    tf = Transformer.from_crs(4326, epsg, always_xy=True).transform
+    return round(transform(tf, g).area, 3)
 
 
 def initialize_gee(
@@ -271,7 +281,9 @@ def filter_extract_dict(
     sats = np.array(gdf.satname)
     dates = np.array(pd.to_datetime(gdf["date"]).dt.tz_localize("UTC"))
     selected_indexes = get_selected_indexes(
-        extracted_shorelines_dict, dates_list=dates, sat_list=sats  # type: ignore
+        extracted_shorelines_dict,
+        dates_list=dates,
+        sat_list=sats,  # type: ignore
     )
     # convert gdf to the output epsg otherwise output dict will not be in correct crs
     projected_gdf = gdf.to_crs(output_crs)  # type: ignore
@@ -760,7 +772,9 @@ def update_extracted_shorelines_dict_transects_dict(
         if extracted_shorelines_dict is not None:
             # Get the indexes of the selected items in the extracted_shorelines_dict
             selected_indexes = get_selected_indexes(
-                extracted_shorelines_dict, dates_list, sat_list  # type: ignore
+                extracted_shorelines_dict,
+                dates_list,
+                sat_list,  # type: ignore
             )
             # attempt to delete the selected indexes from the "transect_cross_distances.json"
             transect_cross_distances_path = os.path.join(
@@ -2757,46 +2771,6 @@ def is_in_google_colab() -> bool:
         return False
 
 
-def get_ids_with_invalid_area(
-    geometry: gpd.GeoDataFrame, max_area: float = 98000000, min_area: float = 0
-) -> set:
-    """
-    Get the indices of geometries with areas outside the specified range.
-
-    This function checks the areas of each geometry in a given GeoDataFrame. If the area
-    is either greater than `max_area` or less than `min_area`, the index of that geometry
-    is added to the set of invalid geometries.
-
-    Note:
-        - The provided GeoDataFrame is assumed to be in CRS EPSG:4326.
-        - Returned areas are in meters squared.
-
-    Args:
-        geometry (gpd.GeoDataFrame): The GeoDataFrame containing the geometries to check.
-        max_area (float, optional): The maximum allowable area for a valid geometry. Defaults to 98000000.
-        min_area (float, optional): The minimum allowable area for a valid geometry. Defaults to 0.
-
-    Returns:
-        set: A set of indices corresponding to the geometries with areas outside the specified range.
-
-    Raises:
-        TypeError: If the provided geometry is not a GeoDataFrame.
-    """
-    rows_drop = set()
-    if isinstance(geometry, gpd.GeoDataFrame):
-        geometry = json.loads(geometry.to_json())
-    if isinstance(geometry, dict):
-        if "features" in geometry.keys():
-            rows_drop = set()
-            for i, feature in enumerate(geometry["features"]):
-                roi_area = get_area(feature["geometry"])
-                if roi_area >= max_area or roi_area <= min_area:
-                    rows_drop.add(i)
-    else:
-        raise TypeError("Must be GeoDataFrame")
-    return rows_drop
-
-
 def load_cross_distances_from_file(dir_path: str) -> Optional[dict]:
     """
     Load transect cross-shore distances from 'transects_cross_distances.json'
@@ -3119,11 +3093,6 @@ def extract_roi_by_id(
     return single_roi
 
 
-def get_area(polygon: dict) -> float:
-    "Calculates the area of the geojson polygon using the same method as geojson.io"
-    return round(area(polygon), 3)
-
-
 def extract_roi_data(json_data: dict, roi_id: str, fields_of_interest: list = None):
     """
     Extracts the specified fields for a specific ROI from a JSON data dictionary.
@@ -3407,7 +3376,7 @@ def save_extracted_shoreline_figures(settings: dict, save_path: str):
 
     if os.path.exists(extracted_shoreline_figure_path):
         dst_path = os.path.join(save_path, "jpg_files", "detection")
-        logger.info(f"Moving extracted shoreline figures to : {dst_path }")
+        logger.info(f"Moving extracted shoreline figures to : {dst_path}")
         file_utilities.move_files(
             extracted_shoreline_figure_path, dst_path, delete_src=True
         )
