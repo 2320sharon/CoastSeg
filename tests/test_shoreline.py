@@ -1,58 +1,9 @@
-import os
-import pytest
-from unittest.mock import MagicMock
 import geopandas as gpd
-from shapely.geometry import Polygon, LineString
-from coastseg.shoreline import Shoreline, ShorelineServices
+import pytest
+from shapely.geometry import Polygon
 
 from coastseg import exceptions
-
-from unittest.mock import MagicMock
-
-# def test_create_geodataframe(valid_bbox_gdf:gpd.GeoDataFrame,):
-
-#     # Mock services
-#     services = ShorelineServices()
-#     services.download_service = MagicMock()
-#     services.preprocess_service = MagicMock()
-#     services.create_ids_service = MagicMock()
-
-#     # Mock data
-#     bbox_data = valid_bbox_gdf
-
-#     shoreline_files_data = ['file1.geojson', 'file2.geojson']
-
-#     shoreline = Shoreline(bbox=bbox_data, services=services)
-
-#     # Test with a known bounding box and a known set of shoreline files
-#     gdf = shoreline.create_geodataframe(bbox_data, shoreline_files_data)
-#     services.preprocess_service.assert_called()
-#     services.create_ids_service.assert_called()
-#     assert isinstance(gdf, gpd.GeoDataFrame)
-
-#     # Test with an empty list of shoreline files
-#     with pytest.raises(FileNotFoundError):
-#         gdf = shoreline.create_geodataframe(bbox_data, [])
-
-#     # Test with an empty GeoDataFrame
-#     empty_bbox_data = gpd.GeoDataFrame()
-#     gdf = shoreline.create_geodataframe(empty_bbox_data, shoreline_files_data)
-#     assert gdf.empty
-
-
-# def test_ShorelineServices():
-#     # Create a mock object for ShorelineServices
-#     mock_services = MagicMock(ShorelineServices)
-
-#     # Now you can set return values for the mock object's methods
-#     mock_services.download_service.return_value = "download_service"
-#     mock_services.preprocess_service.return_value = "preprocess_service"
-#     mock_services.create_ids_service.return_value = "create_unique_ids_service"
-
-#     # Now you can use the mock object in your tests
-#     assert mock_services.download_service('a', 'b', 'c') == "download_service"
-#     assert mock_services.preprocess_service('test') == "preprocess_service"
-#     assert mock_services.create_ids_service('test') == "create_unique_ids_service"
+from coastseg.shoreline import Shoreline
 
 
 def test_shoreline_initialization():
@@ -130,6 +81,7 @@ def test_initialize_shorelines_with_wrong_CRS(valid_shoreline_gdf):
     assert not any(actual_shoreline.gdf["id"].duplicated()) == True
     assert actual_shoreline.gdf.crs.to_string() == "EPSG:4326"
 
+
 def test_intersecting_files(box_no_shorelines_transects):
     """
     Test case to verify the behavior of get_intersecting_shoreline_files
@@ -141,7 +93,8 @@ def test_intersecting_files(box_no_shorelines_transects):
     """
     sl = Shoreline()
     assert sl.get_intersecting_shoreline_files(box_no_shorelines_transects) == []
-    
+
+
 def test_intersecting_files_valid_bbox(valid_bbox_gdf):
     """
     Test case to check if the get_intersecting_shoreline_files method returns a non-empty list
@@ -149,6 +102,7 @@ def test_intersecting_files_valid_bbox(valid_bbox_gdf):
     """
     sl = Shoreline()
     assert sl.get_intersecting_shoreline_files(valid_bbox_gdf) != []
+
 
 # 3. load shorelines from a shorelines geodataframe with empty ids
 def test_initialize_shorelines_with_empty_id_column(valid_shoreline_gdf):
