@@ -7,76 +7,6 @@ from coastseg.shoreline_extraction_area import Shoreline_Extraction_Area
 from coastseg.exceptions import InvalidGeometryType
 
 
-# Test fixtures for reusable components
-@pytest.fixture
-def valid_polygon_gdf():
-    """Create a valid polygon GeoDataFrame for testing."""
-    polygon = Polygon(
-        [(-122.5, 37.5), (-122.4, 37.5), (-122.4, 37.6), (-122.5, 37.6), (-122.5, 37.5)]
-    )
-    return gpd.GeoDataFrame({"geometry": [polygon]}, crs="EPSG:4326")
-
-
-@pytest.fixture
-def multi_polygon_gdf():
-    """Create a GeoDataFrame with multiple polygons."""
-    polygon1 = Polygon(
-        [(-122.5, 37.5), (-122.4, 37.5), (-122.4, 37.6), (-122.5, 37.6), (-122.5, 37.5)]
-    )
-    polygon2 = Polygon(
-        [(-122.3, 37.7), (-122.2, 37.7), (-122.2, 37.8), (-122.3, 37.8), (-122.3, 37.7)]
-    )
-    return gpd.GeoDataFrame({"geometry": [polygon1, polygon2]}, crs="EPSG:4326")
-
-
-@pytest.fixture
-def invalid_geometry_gdf():
-    """Create a GeoDataFrame with invalid geometry types (LineString)."""
-    line = LineString([(-122.5, 37.5), (-122.4, 37.6)])
-    return gpd.GeoDataFrame({"geometry": [line]}, crs="EPSG:4326")
-
-
-@pytest.fixture
-def different_crs_gdf():
-    """Create a polygon GeoDataFrame with a different CRS."""
-    polygon = Polygon(
-        [
-            (-13655000, 4540000),
-            (-13645000, 4540000),
-            (-13645000, 4550000),
-            (-13655000, 4550000),
-            (-13655000, 4540000),
-        ]
-    )
-    return gpd.GeoDataFrame({"geometry": [polygon]}, crs="EPSG:3857")  # Web Mercator
-
-
-@pytest.fixture
-def sample_geojson_dict():
-    """Sample GeoJSON dictionary for testing style_layer method."""
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [
-                        [
-                            [-122.5, 37.5],
-                            [-122.4, 37.5],
-                            [-122.4, 37.6],
-                            [-122.5, 37.6],
-                            [-122.5, 37.5],
-                        ]
-                    ],
-                },
-                "properties": {},
-            }
-        ],
-    }
-
-
 class TestShorelineExtractionAreaInit:
     """Test initialization of Shoreline_Extraction_Area."""
 
@@ -93,9 +23,9 @@ class TestShorelineExtractionAreaInit:
         # Check default filename
         assert area.filename == "shoreline_extraction_area.geojson"
 
-    def test_init_with_valid_gdf(self, valid_polygon_gdf):
+    def test_init_with_valid_gdf(self, valid_bbox_gdf):
         """Test creating instance with valid polygon GeoDataFrame."""
-        area = Shoreline_Extraction_Area(gdf=valid_polygon_gdf)
+        area = Shoreline_Extraction_Area(gdf=valid_bbox_gdf)
 
         assert isinstance(area, Shoreline_Extraction_Area)
         assert not area.gdf.empty
@@ -113,20 +43,18 @@ class TestShorelineExtractionAreaInit:
         assert area.filename == custom_filename
         assert area.gdf.empty
 
-    def test_init_with_gdf_and_filename(self, valid_polygon_gdf):
+    def test_init_with_gdf_and_filename(self, valid_bbox_gdf):
         """Test creating instance with both GDF and custom filename."""
         custom_filename = "test_area.geojson"
-        area = Shoreline_Extraction_Area(
-            gdf=valid_polygon_gdf, filename=custom_filename
-        )
+        area = Shoreline_Extraction_Area(gdf=valid_bbox_gdf, filename=custom_filename)
 
         assert area.filename == custom_filename
         assert not area.gdf.empty
         assert len(area.gdf) == 1
 
-    def test_init_with_different_crs_gdf(self, different_crs_gdf):
+    def test_init_with_different_crs_gdf(self, different_crs_polygon_gdf):
         """Test creating instance with GDF in different CRS gets converted."""
-        area = Shoreline_Extraction_Area(gdf=different_crs_gdf)
+        area = Shoreline_Extraction_Area(gdf=different_crs_polygon_gdf)
 
         # Check CRS was converted to default EPSG:4326
         assert area.gdf.crs.to_string() == "EPSG:4326"
@@ -141,10 +69,10 @@ class TestShorelineExtractionAreaInit:
         assert len(area.gdf) == 2
         assert all(geom.geom_type == "Polygon" for geom in area.gdf.geometry)
 
-    def test_init_with_invalid_geometry_raises_error(self, invalid_geometry_gdf):
+    def test_init_with_invalid_geometry_raises_error(self, linestring_gdf):
         """Test that invalid geometry types raise InvalidGeometryType error."""
         with pytest.raises(InvalidGeometryType):
-            Shoreline_Extraction_Area(gdf=invalid_geometry_gdf)
+            Shoreline_Extraction_Area(gdf=linestring_gdf)
 
     def test_init_with_empty_gdf(self):
         """Test creating instance with empty GeoDataFrame."""
@@ -158,12 +86,12 @@ class TestShorelineExtractionAreaInit:
 class TestShorelineExtractionAreaStyleLayer:
     """Test style_layer method of Shoreline_Extraction_Area."""
 
-    def test_style_layer_with_geojson_dict(self, sample_geojson_dict):
+    def test_style_layer_with_geojson_dict(self, sample_polygon_geojson):
         """Test style_layer with GeoJSON dictionary."""
         area = Shoreline_Extraction_Area()
         layer_name = "test_layer"
 
-        result = area.style_layer(sample_geojson_dict, layer_name)
+        result = area.style_layer(sample_polygon_geojson, layer_name)
 
         # Check return type is GeoJSON layer
         assert isinstance(result, GeoJSON)
@@ -175,9 +103,9 @@ class TestShorelineExtractionAreaStyleLayer:
         assert result.style["fillOpacity"] == 0.1
         assert result.style["weight"] == 3
 
-    def test_style_layer_with_gdf(self, valid_polygon_gdf):
+    def test_style_layer_with_gdf(self, valid_bbox_gdf):
         """Test style_layer with GeoDataFrame."""
-        area = Shoreline_Extraction_Area(gdf=valid_polygon_gdf)
+        area = Shoreline_Extraction_Area(gdf=valid_bbox_gdf)
         layer_name = "gdf_layer"
 
         result = area.style_layer(area.gdf, layer_name)
@@ -188,9 +116,9 @@ class TestShorelineExtractionAreaStyleLayer:
         assert result.style["color"] == "#cb42f5"
         assert result.style["opacity"] == 1
 
-    def test_style_layer_inherits_from_parent(self, valid_polygon_gdf):
+    def test_style_layer_inherits_from_parent(self, valid_bbox_gdf):
         """Test that style_layer calls parent class with correct parameters."""
-        area = Shoreline_Extraction_Area(gdf=valid_polygon_gdf)
+        area = Shoreline_Extraction_Area(gdf=valid_bbox_gdf)
         layer_name = "test_inheritance"
 
         result = area.style_layer(area.gdf, layer_name)
@@ -228,12 +156,12 @@ class TestShorelineExtractionAreaProperties:
         assert area.DEFAULT_CRS == "EPSG:4326"
         assert area.FILE_EXT == ".geojson"
 
-    def test_gdf_columns_after_initialization(self, valid_polygon_gdf):
+    def test_gdf_columns_after_initialization(self, valid_bbox_gdf):
         """Test that only geometry column is kept after cleaning."""
         # Add extra column to test cleaning
-        valid_polygon_gdf["extra_column"] = "test_value"
+        valid_bbox_gdf["extra_column"] = "test_value"
 
-        area = Shoreline_Extraction_Area(gdf=valid_polygon_gdf)
+        area = Shoreline_Extraction_Area(gdf=valid_bbox_gdf)
 
         # Only geometry column should remain
         assert list(area.gdf.columns) == ["geometry"]

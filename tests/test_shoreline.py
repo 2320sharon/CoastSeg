@@ -1,6 +1,7 @@
 import geopandas as gpd
 import pytest
-from shapely.geometry import Polygon
+
+# Geometry classes now used from shared fixtures in conftest.py
 
 from coastseg import exceptions
 from coastseg.shoreline import Shoreline
@@ -13,23 +14,10 @@ def test_shoreline_initialization():
 
 
 # Test that when shoreline is not a linestring an error is thrown
-def test_shoreline_wrong_geometry():
-    polygon_gdf = gpd.GeoDataFrame(
-        geometry=[
-            Polygon(
-                [
-                    (-122.66944064253451, 36.96768728778939),
-                    (-122.66944064253451, 34.10377172691159),
-                    (-117.75040020737816, 34.10377172691159),
-                    (-117.75040020737816, 36.96768728778939),
-                    (-122.66944064253451, 36.96768728778939),
-                ]
-            )
-        ],
-        crs="epsg:4326",
-    )
+def test_shoreline_wrong_geometry(large_polygon_gdf):
+    """Test that creating Shoreline with Polygon geometry raises InvalidGeometryType error."""
     with pytest.raises(exceptions.InvalidGeometryType):
-        Shoreline(shoreline=polygon_gdf)
+        Shoreline(shoreline=large_polygon_gdf)
 
 
 # 1. load shorelines from a shorelines geodataframe with a CRS 4326 with no id

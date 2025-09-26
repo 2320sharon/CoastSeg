@@ -9,8 +9,8 @@ from coastseg.transects import Transects, load_intersecting_transects
 from coastseg.exceptions import InvalidGeometryType
 
 
-def test_load_intersecting_transects():
-    rectangle = gpd.GeoDataFrame(geometry=[Polygon([(0, 0), (1, 1), (1, 0)])])
+def test_load_intersecting_transects(triangle_polygon_gdf):
+    rectangle = triangle_polygon_gdf
     file_path = pkg_resources.resource_filename("coastseg", "transects")
     transect_dir = file_path
     transect_files = os.listdir(transect_dir)

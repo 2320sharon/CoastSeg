@@ -4,93 +4,46 @@ from coastseg import roi
 from coastseg import exceptions
 import geopandas as gpd
 import pyproj
-from shapely.geometry import Polygon, LineString
+
+# Geometry classes now used from shared fixtures in conftest.py
 
 
 # Test that when ROI's area is too large an error is thrown
-def test_ROI_too_large():
-    rectangle = gpd.GeoDataFrame(
-        geometry=[
-            Polygon(
-                [
-                    (-122.66944064253451, 36.96768728778939),
-                    (-122.66944064253451, 34.10377172691159),
-                    (-117.75040020737816, 34.10377172691159),
-                    (-117.75040020737816, 36.96768728778939),
-                    (-122.66944064253451, 36.96768728778939),
-                ]
-            )
-        ],
-        crs="epsg:4326",
-    )
+def test_ROI_too_large(large_polygon_gdf):
+    """Test that creating ROI with a polygon that is too large raises InvalidSize error."""
     with pytest.raises(exceptions.InvalidSize):
-        roi.ROI(rois_gdf=rectangle)
+        roi.ROI(rois_gdf=large_polygon_gdf)
 
 
 # Test that when ROI is not a polygon an error is thrown
-def test_ROI_wrong_geometry():
-    line = gpd.GeoDataFrame(
-        geometry=[
-            LineString(
-                [
-                    (-120.83849150866949, 35.43786191889319),
-                    (-120.93431712689429, 35.40749430666743),
-                ]
-            )
-        ],
-        crs="epsg:4326",
-    )
+def test_ROI_wrong_geometry(simple_linestring_gdf):
+    """Test that creating ROI with LineString geometry raises InvalidGeometryType error."""
     with pytest.raises(exceptions.InvalidGeometryType):
-        roi.ROI(rois_gdf=line)
+        roi.ROI(rois_gdf=simple_linestring_gdf)
 
 
 # create ROIs from geodataframe with a different CRS
-def test_initialize_from_roi_gdf_different_crs():
+def test_initialize_from_roi_gdf_different_crs(standard_polygon_gdf):
+    """Test creating ROI from GeoDataFrame with different CRS gets converted to EPSG:4326."""
     CRS = "epsg:2033"
-    rectangle = gpd.GeoDataFrame(
-        geometry=[
-            Polygon(
-                [
-                    (-121.12083854611063, 35.56544740627308),
-                    (-121.12083854611063, 35.53742390816822),
-                    (-121.08749373817861, 35.53742390816822),
-                    (-121.08749373817861, 35.56544740627308),
-                    (-121.12083854611063, 35.56544740627308),
-                ]
-            )
-        ],
-        crs="epsg:4326",
-    )
+    rectangle = standard_polygon_gdf.copy()
     rectangle.to_crs(CRS, inplace=True)
     rois = roi.ROI(rois_gdf=rectangle)
     assert hasattr(rois, "gdf")
     assert isinstance(rois.gdf, gpd.GeoDataFrame)
-    assert rois.gdf.empty == False
+    assert not rois.gdf.empty
     assert isinstance(rois.gdf.crs, pyproj.CRS)
     assert rois.gdf.crs == "epsg:4326"
 
 
 # create ROIs from geodataframe with CRS 4326 (default CRS for map)
-def test_initialize_from_roi_gdf():
+def test_initialize_from_roi_gdf(standard_polygon_gdf):
+    """Test creating ROI from GeoDataFrame with EPSG:4326 CRS."""
     CRS = "epsg:4326"
-    rectangle = gpd.GeoDataFrame(
-        geometry=[
-            Polygon(
-                [
-                    (-121.12083854611063, 35.56544740627308),
-                    (-121.12083854611063, 35.53742390816822),
-                    (-121.08749373817861, 35.53742390816822),
-                    (-121.08749373817861, 35.56544740627308),
-                    (-121.12083854611063, 35.56544740627308),
-                ]
-            )
-        ],
-        crs=CRS,
-    )
-    rois = roi.ROI(rois_gdf=rectangle)
+    rois = roi.ROI(rois_gdf=standard_polygon_gdf)
     assert hasattr(rois, "gdf")
     assert isinstance(rois.gdf, gpd.GeoDataFrame)
-    assert rois.gdf.empty == False
+    assert not rois.gdf.empty
     assert isinstance(rois.gdf.crs, pyproj.CRS)
     assert rois.gdf.crs == CRS
 
