@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC
-from typing import Any, Dict, Iterable, List, Optional, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Type, Union
 
 import geopandas as gpd
 import pandas as pd
@@ -41,6 +41,12 @@ class Feature(ABC):
 
     # ------- minimal, readable repr/str shared by children -------
     def __repr__(self) -> str:  # one method covers both; readable + stable
+        """
+        Return a string representation of the Feature.
+
+        Returns:
+            String representation including CRS, columns, dtypes, and preview.
+        """
         crs = getattr(self.gdf, "crs", None)
         head = self.gdf.head().to_string() if not self.gdf.empty else "<empty>"
         dtypes = (
@@ -63,7 +69,16 @@ class Feature(ABC):
     def gdf_from_mapping(
         mapping: Dict[str, Any], crs: str = DEFAULT_CRS
     ) -> gpd.GeoDataFrame:
-        """Create a GeoDataFrame from a GeoJSON-like mapping dictionary."""
+        """
+        Create a GeoDataFrame from a GeoJSON-like mapping dictionary.
+
+        Args:
+            mapping: GeoJSON-like dictionary with geometry.
+            crs: Coordinate reference system.
+
+        Returns:
+            GeoDataFrame with the geometry.
+        """
         from shapely.geometry import shape
 
         gdf = gpd.GeoDataFrame({"geometry": [shape(mapping)]}, crs=crs)
@@ -75,17 +90,40 @@ class Feature(ABC):
 
     @staticmethod
     def ensure_crs(gdf: gpd.GeoDataFrame, crs: str = DEFAULT_CRS) -> gpd.GeoDataFrame:
+        """
+        Ensure the GeoDataFrame has the specified CRS.
+
+        Args:
+            gdf: Input GeoDataFrame.
+            crs: Target CRS.
+
+        Returns:
+            GeoDataFrame with the specified CRS.
+        """
         return gdf.to_crs(crs) if getattr(gdf, "crs", None) else gdf.set_crs(crs)
 
-    # ------- style & geojson helpers -------
     @staticmethod
     def to_geojson(data: Union[Dict[str, Any], gpd.GeoDataFrame]) -> Dict[str, Any]:
+        """
+        Convert data to GeoJSON format.
+
+        Args:
+            data: Dictionary or GeoDataFrame to convert.
+
+        Returns:
+            GeoJSON dictionary.
+        """
         if isinstance(data, dict):
             return data
         return json.loads(data.to_json())
 
-    # ---- ids + removal are common across classes ----
     def ids(self) -> list[str]:
+        """
+        Get list of feature IDs.
+
+        Returns:
+            List of string IDs.
+        """
         return (
             []
             if self.gdf.empty or "id" not in self.gdf.columns
@@ -93,17 +131,16 @@ class Feature(ABC):
         )
 
     def remove_by_id(
-        self, ids_to_drop: Union[List[str], set, tuple, str, int]
+        self, ids_to_drop: Union[List[str], Set[str], Tuple[str, ...], str, int]
     ) -> gpd.GeoDataFrame:
         """
         Remove features by their IDs.
 
         Args:
-            ids_to_drop (Union[List[str], Set[str], Tuple[str, ...], str, int]):
-                IDs of features to remove. Can be a single ID or collection of IDs.
+            ids_to_drop: IDs of features to remove. Can be a single ID or collection of IDs.
 
         Returns:
-            gpd.GeoDataFrame: Updated GeoDataFrame with specified features removed.
+            Updated GeoDataFrame with specified features removed.
 
         Note:
             Returns the original GeoDataFrame unchanged if it's empty, has no 'id' column,
@@ -124,13 +161,25 @@ class Feature(ABC):
         ignore_index: bool = True,
         drop_all_na: bool = True,
     ) -> gpd.GeoDataFrame:
+        """
+        Concatenate GeoDataFrames, optionally dropping all-NaN columns.
+
+        Args:
+            gdfs: List of GeoDataFrames to concatenate.
+            ignore_index: Whether to ignore index in concatenation.
+            drop_all_na: Whether to drop columns that are all NaN.
+
+        Returns:
+            Concatenated GeoDataFrame.
+        """
         if drop_all_na:
             gdfs = [df.dropna(axis=1, how="all") for df in gdfs]
         return (
-            pd.concat(gdfs, ignore_index=ignore_index) if gdfs else gpd.GeoDataFrame()
+            gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=ignore_index))
+            if gdfs
+            else gpd.GeoDataFrame()
         )
 
-    # read→preprocess→validate→(optional) clip; perfect for Shoreline.get_clipped_shoreline
     @classmethod
     def read_masked_clean(
         cls,
@@ -142,6 +191,20 @@ class Feature(ABC):
         feature_type: str = "feature",
         output_crs: str = DEFAULT_CRS,
     ) -> gpd.GeoDataFrame:
+        """
+        Read GeoDataFrame from file, preprocess, validate, and optionally clip.
+
+        Args:
+            path: Path to the file.
+            mask: Optional mask GeoDataFrame for clipping.
+            columns_to_keep: Columns to keep in preprocessing.
+            geometry_types: Allowed geometry types.
+            feature_type: Type of feature for validation.
+            output_crs: Output CRS.
+
+        Returns:
+            Processed GeoDataFrame.
+        """
         gdf = gpd.read_file(path, mask=mask)
         gdf = cls.clean_gdf(
             gdf,
@@ -152,7 +215,6 @@ class Feature(ABC):
         )
         return gpd.clip(gdf, mask) if mask is not None else gdf
 
-    # ------- single entry point for cleaning/validating -------
     @staticmethod
     def clean_gdf(
         gdf: gpd.GeoDataFrame,
@@ -166,6 +228,23 @@ class Feature(ABC):
         ids_as_str: bool = False,
         help_message: Optional[str] = None,
     ) -> gpd.GeoDataFrame:
+        """
+        Clean and preprocess a GeoDataFrame.
+
+        Args:
+            gdf: Input GeoDataFrame.
+            columns_to_keep: Columns to retain.
+            output_crs: Output CRS.
+            create_ids_flag: Whether to create IDs.
+            geometry_types: Allowed geometry types.
+            feature_type: Feature type for validation.
+            unique_ids: Whether to make IDs unique.
+            ids_as_str: Whether to convert IDs to strings.
+            help_message: Help message for validation.
+
+        Returns:
+            Cleaned GeoDataFrame.
+        """
         gdf = preprocess_geodataframe(
             gdf,
             columns_to_keep=list(columns_to_keep),
@@ -193,6 +272,21 @@ class Feature(ABC):
         style: Optional[Dict[str, Any]] = None,
         hover_style: Optional[Dict[str, Any]] = None,
     ) -> GeoJSON:
+        """
+        Create a styled GeoJSON layer.
+
+        Args:
+            data: Data to convert to GeoJSON.
+            layer_name: Name of the layer.
+            style: Style dictionary.
+            hover_style: Hover style dictionary.
+
+        Returns:
+            GeoJSON layer.
+
+        Raises:
+            ValueError: If GeoJSON is empty.
+        """
         if style is None:
             style = {
                 "color": "#555555",
@@ -209,7 +303,6 @@ class Feature(ABC):
             data=geojson, name=layer_name, style=style, hover_style=hover_style
         )
 
-    # ------- generic area validator (children supply limits/exceptions) -------
     @staticmethod
     def check_size(
         area_m2: Union[int, float],
@@ -219,6 +312,16 @@ class Feature(ABC):
         too_small_exc: Optional[Type[Exception]] = None,
         too_large_exc: Optional[Type[Exception]] = None,
     ) -> None:
+        """
+        Check if area is within specified limits and raise exceptions if not.
+
+        Args:
+            area_m2: Area in square meters.
+            min_area: Minimum allowed area.
+            max_area: Maximum allowed area.
+            too_small_exc: Exception to raise if too small.
+            too_large_exc: Exception to raise if too large.
+        """
         if max_area is not None and area_m2 > max_area and too_large_exc:
             raise too_large_exc()
         if min_area is not None and area_m2 < min_area and too_small_exc:
