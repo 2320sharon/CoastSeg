@@ -1,8 +1,8 @@
 # Standard library imports
-import collections
 import datetime
 import logging
-from typing import Any, Collection, Dict, Iterable, List, Optional, Union
+from collections.abc import Iterable
+from typing import Any, Collection, Dict, List, Optional, Union, cast
 
 # External dependencies imports
 import geopandas as gpd
@@ -12,12 +12,42 @@ from shapely import geometry
 
 # Internal dependencies imports
 from coastseg import common, exceptions
-from coastseg.common import validate_geometry_types
 from coastseg.feature import Feature
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["ROI"]
+
+
+def get_ids_with_invalid_area(
+    geometry: gpd.GeoDataFrame, max_area: float = 98000000, min_area: float = 0
+) -> List[str]:
+    """
+    Get indices of geometries with areas outside the specified range.
+
+    Assumes GeoDataFrame is in EPSG:4326. Areas returned in meters squared.
+
+    Args:
+        geometry: GeoDataFrame with geometries to check.
+        max_area: Maximum allowable area.
+        min_area: Minimum allowable area.
+
+    Returns:
+        Set of indices for invalid geometries.
+
+    Raises:
+        TypeError: If geometry is not a GeoDataFrame.
+    """
+    if not isinstance(geometry, gpd.GeoDataFrame):
+        raise TypeError("Must be GeoDataFrame")
+
+    # Project to UTM for accurate area calculation
+    projected = geometry.to_crs(geometry.estimate_utm_crs())
+    areas = projected.area
+
+    # Get indices where area is invalid
+    invalid = (areas > max_area) | (areas < min_area)
+    return geometry.index[invalid].tolist()
 
 
 class ROI(Feature):
@@ -60,32 +90,11 @@ class ROI(Feature):
         self.filename = filename or "rois.geojson"
 
         if rois_gdf is not None:
-            self._initialize_from_roi_gdf(rois_gdf)
+            self.gdf = self._initialize_from_roi_gdf(rois_gdf)
         else:
-            self._initialize_from_bbox_and_shoreline(
+            self.gdf = self._initialize_from_bbox_and_shoreline(
                 bbox, shoreline, square_len_lg, square_len_sm
             )
-
-    def __str__(self):
-        """
-        Returns string representation of the ROI object.
-        """
-        # Get column names and their data types
-        col_info = self.gdf.dtypes.apply(lambda x: x.name).to_string()
-        # Get first 5 rows as a string
-        first_rows = self.gdf.head().to_string()
-        # Get CRS information
-        crs_info = f"CRS: {self.gdf.crs}" if self.gdf.crs else "CRS: None"
-        extracted_shoreline_info = ""
-        for key in self.extracted_shorelines.keys():
-            if hasattr(self.extracted_shorelines[key], "gdf") and (
-                isinstance(self.extracted_shorelines[key].gdf, gpd.GeoDataFrame)
-            ):
-                if not self.extracted_shorelines[key].gdf.empty:
-                    extracted_shoreline_info.join(
-                        f"ROI ID {key}:\n{len(self.extracted_shorelines[key].gdf)}\n"
-                    )
-        return f"ROI:\nROI IDs: {self.get_ids()}\nROI IDs with extracted shorelines: {extracted_shoreline_info}\nROI IDs with shoreline transect intersections: {list(self.cross_shore_distances.keys())}\n gdf:\n{crs_info}\nColumns and Data Types:\n{col_info}\n\nFirst 5 Rows:\n{first_rows}"
 
     def __repr__(self):
         """
@@ -107,6 +116,8 @@ class ROI(Feature):
                         f"ROI ID {key}:\n{len(self.extracted_shorelines[key].gdf)}\n"
                     )
         return f"ROI:\nROI IDs: {self.get_ids()}\nROI IDs with extracted shorelines: {extracted_shoreline_info}\nROI IDs with shoreline transect intersections: {list(self.cross_shore_distances.keys())}\n gdf:\n{crs_info}\nColumns and Data Types:\n{col_info}\n\nFirst 5 Rows:\n{first_rows}"
+
+    __str__ = __repr__
 
     def remove_by_id(
         self, ids_to_drop: Union[Collection[Union[str, int]], str, int]
@@ -137,47 +148,48 @@ class ROI(Feature):
 
         return self.gdf
 
-    def _initialize_from_roi_gdf(self, rois_gdf: gpd.GeoDataFrame) -> None:
+    def _initialize_from_roi_gdf(self, rois_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
         Initializes gdf from a GeoDataFrame of ROIs.
 
         Args:
             rois_gdf: GeoDataFrame of ROIs.
 
+        Returns:
+            GeoDataFrame of cleaned ROIs.
+
         Raises:
             InvalidSize: If ROIs have invalid size.
         """
-        # make sure to perform a CRS check here too
-        rois_gdf = common.preprocess_geodataframe(
-            rois_gdf,
-            columns_to_keep=["id", "geometry"],
-            create_ids=True,
-            output_crs="EPSG:4326",
+        gdf = self.clean_gdf(
+            self.ensure_crs(rois_gdf),
+            columns_to_keep=("id", "geometry"),
+            output_crs=self.DEFAULT_CRS,
+            create_ids_flag=True,
+            geometry_types=("Polygon", "MultiPolygon"),
+            feature_type="ROI",
+            unique_ids=True,
+            ids_as_str=True,
         )
-        validate_geometry_types(
-            rois_gdf, set(["Polygon", "MultiPolygon"]), feature_type="ROI"
-        )
-        # make sure all the ids  are unique
-        rois_gdf = common.create_unique_ids(rois_gdf, prefix_length=3)
-        # convert the ids to strings
-        rois_gdf["id"] = rois_gdf["id"].astype(str)
+        # ensure all the provided ROIS are a valid size and drop any that aren't
+        gdf = self.validate_ROI_sizes(gdf)
+        return gdf
 
-        # get row ids of ROIs with area that's too large
-        drop_ids = common.get_ids_with_invalid_area(
-            rois_gdf, max_area=ROI.MAX_SIZE, min_area=ROI.MIN_SIZE
+    def validate_ROI_sizes(self, gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+        drop_index = get_ids_with_invalid_area(
+            gdf, max_area=self.MAX_SIZE, min_area=self.MIN_SIZE
         )
-        if drop_ids:
-            logger.info(f"Dropping ROIs that are an invalid size {drop_ids}")
-            rois_gdf.drop(index=drop_ids, axis=0, inplace=True)
-            if rois_gdf.empty:
-                raise exceptions.InvalidSize(
-                    "The ROI(s) had an invalid size.",
-                    "ROI",
-                    max_size=ROI.MAX_SIZE,
-                    min_size=ROI.MIN_SIZE,
-                )
+        logger.info(f"Dropping ROIs that are an invalid size {drop_index}")
+        gdf.drop(index=drop_index, axis=0, inplace=True)
+        if gdf.empty:
+            raise exceptions.InvalidSize(
+                "The ROI(s) had an invalid size.",
+                "ROI",
+                max_size=ROI.MAX_SIZE,
+                min_size=ROI.MIN_SIZE,
+            )
 
-        self.gdf = rois_gdf
+        return gdf
 
     def _initialize_from_bbox_and_shoreline(
         self,
@@ -185,7 +197,7 @@ class ROI(Feature):
         shoreline: Optional[gpd.GeoDataFrame],
         square_len_lg: float,
         square_len_sm: float,
-    ) -> None:
+    ) -> gpd.GeoDataFrame:
         """
         Initializes gdf from bounding box and shoreline.
 
@@ -195,25 +207,32 @@ class ROI(Feature):
             square_len_lg: Large square length.
             square_len_sm: Small square length.
 
+        Returns:
+            GeoDataFrame of ROIs with the bbox and that intersects with the shoreline.
+
         Raises:
             Object_Not_Found: If shoreline or bbox is None or empty.
             ValueError: If square lengths are invalid.
         """
-        if shoreline is None:
-            raise exceptions.Object_Not_Found("shorelines")
-        if bbox is None:
-            raise exceptions.Object_Not_Found("bounding box")
-        if shoreline.empty:
-            raise exceptions.Object_Not_Found("shorelines")
-        if bbox.empty:
-            raise exceptions.Object_Not_Found("bounding box")
+        if (
+            any(v is None for v in (bbox, shoreline))
+            or (bbox is not None and bbox.empty)
+            or (shoreline is not None and shoreline.empty)
+        ):
+            from coastseg import exceptions as ex
 
+            raise ex.Object_Not_Found(
+                "shorelines"
+                if shoreline is None or (shoreline is not None and shoreline.empty)
+                else "bounding box"
+            )
         if square_len_sm == square_len_lg == 0:
-            logger.error("Invalid square size for ROI")
             raise ValueError("Invalid square size for ROI. Must be greater than 0")
-
-        self.gdf = self.create_geodataframe(
-            bbox, shoreline, square_len_lg, square_len_sm
+        return self.create_geodataframe(
+            cast(gpd.GeoDataFrame, bbox),
+            cast(gpd.GeoDataFrame, shoreline),
+            square_len_lg,
+            square_len_sm,
         )
 
     def get_roi_settings(
@@ -241,9 +260,7 @@ class ROI(Feature):
                     f"self.roi_settings[roi_id]: {self.roi_settings.get(roi_id, {})}"
                 )
                 return self.roi_settings.get(roi_id, {})
-        elif isinstance(roi_id, collections.abc.Iterable) and not isinstance(
-            roi_id, (str, bytes)
-        ):
+        elif isinstance(roi_id, Iterable) and not isinstance(roi_id, (str, bytes)):
             roi_settings = {}
             for id in roi_id:
                 if not isinstance(id, str):
@@ -334,12 +351,8 @@ class ROI(Feature):
         # check if geodataframe column has 'id' column and add one if one doesn't exist
         if "id" not in gdf.columns:
             gdf["id"] = gdf.index.astype(str).tolist()
-        # get row ids of ROIs with area that's too large
-        drop_ids = common.get_ids_with_invalid_area(gdf)
-        if drop_ids:
-            print("Dropping ROIs that are an invalid size ")
-            logger.info(f"Dropping ROIs that are an invalid size {drop_ids}")
-            gdf.drop(index=drop_ids, axis=0, inplace=True)
+        # drop any ROIs that are an invalid size
+        gdf = self.validate_ROI_sizes(gdf)
         # Combine the two GeoDataFrames and drop duplicates from columns "id" and "geometry"
         combined_gdf = pd.concat([self.gdf, gdf], axis=0).drop_duplicates(
             subset=["id", "geometry"]
@@ -465,7 +478,6 @@ class ROI(Feature):
         shoreline: gpd.GeoDataFrame,
         large_length: float = 7500,
         small_length: float = 5000,
-        crs: str = "EPSG:4326",
     ) -> gpd.GeoDataFrame:
         """
         Generates ROIs along shoreline using fishnet method.
@@ -475,11 +487,12 @@ class ROI(Feature):
             shoreline: Shoreline GeoDataFrame.
             large_length: Large square length.
             small_length: Small square length.
-            crs: Coordinate reference system.
 
         Returns:
             GeoDataFrame of ROIs.
         """
+        if bbox is None or shoreline is None:
+            raise ValueError("bbox and shoreline must not be None")
         # Create a single set of fishnets with square size = small and/or large side lengths that overlap each other
         # logger.info(f"Small Length: {small_length}  Large Length: {large_length}")
         if small_length == 0 or large_length == 0:
@@ -494,22 +507,22 @@ class ROI(Feature):
             fishnet_intersect_gdf = gpd.GeoDataFrame(
                 pd.concat([fishnet_gpd_large, fishnet_gpd_small], ignore_index=True)
             )
-
-        # clean the geodataframe
-        fishnet_intersect_gdf = common.preprocess_geodataframe(
+        # clean the geodataframe and create unique ids for each roi
+        gdf = self.clean_gdf(
             fishnet_intersect_gdf,
             columns_to_keep=[
                 "id",
                 "geometry",
             ],
-            create_ids=True,
+            output_crs=self.DEFAULT_CRS,
+            create_ids_flag=True,
+            geometry_types=("Polygon", "MultiPolygon"),
+            feature_type="rois",
+            unique_ids=True,
+            ids_as_str=True,
         )
-        # make sure all the ids are unique
-        fishnet_intersect_gdf = common.create_unique_ids(
-            fishnet_intersect_gdf, prefix_length=3
-        )
-        # logger.info(f"Created fishnet_intersect_gdf: {fishnet_intersect_gdf}")
-        return fishnet_intersect_gdf
+
+        return gdf
 
     def style_layer(self, geojson: Dict[str, Any], layer_name: str) -> GeoJSON:
         """
@@ -651,6 +664,8 @@ class ROI(Feature):
         Returns:
             Intersected fishnet GeoDataFrame.
         """
+        if bbox_gdf is None or shoreline_gdf is None:
+            raise ValueError("bbox_gdf and shoreline_gdf must not be None")
         # Get the geodataframe for the fishnet within the bbox
         fishnet = self.create_rois(bbox_gdf, square_length)
         # Get the geodataframe for the fishnet intersecting the shoreline
