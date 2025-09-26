@@ -21,13 +21,14 @@ def test_authenticate_and_initialize_max_attempts():
     with (
         patch("coastseg.common.ee.Authenticate") as mock_authenticate,
         patch("coastseg.common.ee.Initialize") as mock_initialize,
-    ):
+        patch("coastseg.common.needs_authentication", return_value=True),
+    ):  # this allows the mock auth function to be called
         # Mock an exception for all initialize attempts
         mock_initialize.side_effect = Exception("Credentials file not found")
 
         with pytest.raises(Exception) as excinfo:
             common.authenticate_and_initialize(
-                print_mode=True, force=False, auth_args={}, kwargs={}
+                print_mode=True, force=False, auth_kwargs={}, init_kwargs={}
             )
 
         assert "Failed to initialize Google Earth Engine after 2 attempts" in str(
@@ -41,15 +42,17 @@ def test_authenticate_and_initialize_success():
     with (
         patch("coastseg.common.ee.Authenticate") as mock_authenticate,
         patch("coastseg.common.ee.Initialize") as mock_initialize,
-    ):
+        patch("coastseg.common.needs_authentication", return_value=True),
+    ):  # this allows the mock auth function to be called
+
         # Mock successful initialization
         mock_initialize.return_value = None
 
         common.authenticate_and_initialize(
-            print_mode=True, force=False, auth_args={}, kwargs={}
+            print_mode=True, force=False, auth_kwargs={}, init_kwargs={}
         )
 
-        mock_authenticate.assert_called_once()  # this will call once becase ee.credentials is None
+        mock_authenticate.assert_called_once()  # this should be called once because we set needs_authentication to True
         mock_initialize.assert_called_once()
 
 
@@ -62,7 +65,7 @@ def test_authenticate_and_initialize_force_auth():
         mock_initialize.return_value = None
 
         common.authenticate_and_initialize(
-            print_mode=True, force=True, auth_args={}, kwargs={}
+            print_mode=True, force=True, auth_kwargs={}, init_kwargs={}
         )
 
         mock_authenticate.assert_called_once_with(force=True)
@@ -73,12 +76,14 @@ def test_authenticate_and_initialize_retry():
     with (
         patch("coastseg.common.ee.Authenticate") as mock_authenticate,
         patch("coastseg.common.ee.Initialize") as mock_initialize,
-    ):
+        patch("coastseg.common.needs_authentication", return_value=True),
+    ):  # this allows the mock auth function to be called
+
         # Mock an exception on first initialize, then success
         mock_initialize.side_effect = [Exception("Credentials file not found"), None]
 
         common.authenticate_and_initialize(
-            print_mode=True, force=False, auth_args={}, kwargs={}
+            print_mode=True, force=False, auth_kwargs={}, init_kwargs={}
         )
 
         assert mock_authenticate.call_count == 2
