@@ -216,6 +216,40 @@ class BeachSlopeSelector(widgets.VBox):
             {"new": self.radio_buttons.value}
         )  # Initialize with the default selection
 
+    def create_file_chooser_with_clear(
+        self, callback, title="Select a file", filter_pattern="*.csv"
+    ):
+        padding = "0px 0px 0px 5px"
+        initial_path = os.getcwd()
+        file_chooser = FileChooser(initial_path)
+        file_chooser.filter_pattern = filter_pattern
+        file_chooser.title = f"<b>{title}</b>"
+        file_chooser.register_callback(callback)
+
+        clear_button = widgets.Button(
+            description="Clear",
+            button_style="warning",
+            layout=widgets.Layout(height="28px", padding=padding),
+        )
+        clear_button.on_click(lambda b: file_chooser.reset())
+
+        instructions = widgets.HTML(
+            value="""Upload a CSV file containing the slopes. Note: any transescts that do not have a slope will have their slope set to the median slope value for the tide correction.
+                                    The CSV file must follow the file format listed here: 
+                                     <a href="https://satelliteshorelines.github.io/CoastSeg/slope-file-format/" target="_blank" style="color: blue; text-decoration: underline;">View acceptable formats</a>""",
+            layout=widgets.Layout(margin="0 0 10px 0"),
+        )
+
+        chooser = widgets.VBox(
+            [
+                instructions,
+                widgets.HBox(
+                    [file_chooser, clear_button], layout=widgets.Layout(width="100%")
+                ),
+            ]
+        )
+        return chooser, file_chooser
+
     def on_slope_change(self, change):
         with self.output:
             clear_output(wait=True)
