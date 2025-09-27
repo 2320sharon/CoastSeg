@@ -172,16 +172,16 @@ def test_roi_from_bbox_and_shorelines(valid_bbox_gdf, valid_shoreline_gdf):
 def test_create_fishnet(valid_bbox_gdf: gpd.GeoDataFrame, valid_ROI: roi.ROI):
     # tests if a valid geodataframe is created with square sizes approx. equal to given square_size
     square_size = 1000
-    input_espg = "epsg:32610"
+    input_epsg = "epsg:32610"
     output_epsg = "epsg:4326"
 
-    # convert bbox to input_espg to most accurate espg to create fishnet with
-    valid_bbox_gdf = valid_bbox_gdf.to_crs(input_espg)
+    # convert bbox to input_epsg to most accurate espg to create fishnet with
+    valid_bbox_gdf = valid_bbox_gdf.to_crs(input_epsg)
     assert valid_bbox_gdf.crs == "epsg:32610"
 
     actual_fishnet = valid_ROI.create_fishnet(
         valid_bbox_gdf,
-        input_espg=input_espg,
+        input_epsg=input_epsg,
         output_epsg=output_epsg,
         square_size=square_size,
     )
@@ -189,8 +189,8 @@ def test_create_fishnet(valid_bbox_gdf: gpd.GeoDataFrame, valid_ROI: roi.ROI):
     assert set(actual_fishnet.columns) == set(["geometry"])
     assert isinstance(actual_fishnet.crs, pyproj.CRS)
     assert actual_fishnet.crs == output_epsg
-    # reproject back to input_espg to check if square sizes are correct
-    actual_fishnet = actual_fishnet.to_crs(input_espg)
+    # reproject back to input_epsg to check if square sizes are correct
+    actual_fishnet = actual_fishnet.to_crs(input_epsg)
     # pick a square out of the fishnet ensure is approx. equal to square size
     actual_lengths = tuple(map(lambda x: x.length / 4, actual_fishnet["geometry"]))
     # check if actual lengths are close to square_size length
@@ -206,11 +206,11 @@ def test_create_fishnet(valid_bbox_gdf: gpd.GeoDataFrame, valid_ROI: roi.ROI):
 def test_create_rois(valid_ROI: roi.ROI, valid_bbox_gdf: gpd.GeoDataFrame):
     square_size = 1000
     # espg code of the valid_bbox_gdf
-    input_espg = "epsg:4326"
+    input_epsg = "epsg:4326"
     output_epsg = "epsg:4326"
     actual_roi_gdf = valid_ROI.create_rois(
         bbox=valid_bbox_gdf,
-        input_espg=input_espg,
+        input_epsg=input_epsg,
         output_epsg=output_epsg,
         square_size=square_size,
     )

@@ -150,6 +150,7 @@ class Feature(ABC):
             return self.gdf
         if isinstance(ids_to_drop, (str, int)):
             ids_to_drop = [str(ids_to_drop)]
+        # convert all ids to strings for consistent comparison
         ids_to_drop = set(map(str, ids_to_drop))
         # drop the ids from the geodataframe
         self.gdf = self.gdf[~self.gdf["id"].astype(str).isin(ids_to_drop)]
