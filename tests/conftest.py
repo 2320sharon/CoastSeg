@@ -1113,7 +1113,7 @@ def valid_bbox_gdf() -> gpd.GeoDataFrame:
 
 
 @pytest.fixture
-def valid_ROI(transect_compatible_roi) -> gpd.GeoDataFrame:
+def valid_ROI(transect_compatible_roi) -> roi.ROI:
     """returns a valid instance of ROI current espg code : 4326 ROIs with ids:[17,30,35]"""
     return roi.ROI(rois_gdf=transect_compatible_roi)
 
@@ -1135,7 +1135,7 @@ def valid_ROI_with_settings(valid_ROI):
             "landsat_collection": "C02",
             "roi_id": "13",
             "sat_list": ["L8", "L9"],
-            "filepath": r"C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": r"C:\\CoastSeg\\data",
             "dates": ["2018-12-01", "2023-03-01"],
         },
         "12": {
@@ -1152,7 +1152,7 @@ def valid_ROI_with_settings(valid_ROI):
             "landsat_collection": "C02",
             "roi_id": "12",
             "sat_list": ["L8", "L9"],
-            "filepath": r"C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": r"C:\\CoastSeg\\data",
             "dates": ["2018-12-01", "2023-03-01"],
         },
     }

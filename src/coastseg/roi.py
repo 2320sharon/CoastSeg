@@ -1,4 +1,5 @@
 # Standard library imports
+from __future__ import annotations
 import datetime
 import logging
 from collections.abc import Iterable
@@ -88,7 +89,7 @@ class ROI(Feature):
 
         # Initialize ROI-specific attributes
         self.roi_settings: Dict[str, Any] = {}
-        self.extracted_shorelines: Dict[str, "Extracted_Shoreline"] = {}
+        self.extracted_shorelines: Dict[str, Extracted_Shoreline] = {}
         self.cross_shore_distances: Dict[str, Dict[str, Any]] = {}
 
         # Initialize GeoDataFrame based on provided data
@@ -150,6 +151,7 @@ class ROI(Feature):
                 self.remove_cross_shore_distance(roi_id)
 
         self.gdf = result_gdf
+        return result_gdf.copy(deep=True)
 
     def _initialize_from_roi_gdf(self, rois_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
@@ -323,7 +325,7 @@ class ROI(Feature):
         self.roi_settings.update(new_settings)
         return self.roi_settings
 
-    def get_extracted_shoreline(self, roi_id: str) -> Optional["Extracted_Shoreline"]:
+    def get_extracted_shoreline(self, roi_id: str) -> Optional[Extracted_Shoreline]:
         """
         Returns extracted shoreline for ROI ID.
 
@@ -387,7 +389,7 @@ class ROI(Feature):
 
     def get_all_extracted_shorelines(
         self,
-    ) -> Dict[str, "Extracted_Shoreline"]:
+    ) -> Dict[str, Extracted_Shoreline]:
         """
         Returns dict of all extracted shorelines.
         """
@@ -433,7 +435,7 @@ class ROI(Feature):
 
     def add_extracted_shoreline(
         self,
-        extracted_shoreline: "Extracted_Shoreline",
+        extracted_shoreline: Extracted_Shoreline,
         roi_id: str,
     ) -> None:
         """
