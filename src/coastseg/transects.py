@@ -12,11 +12,7 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 
 # Project / local
-from coastseg.common import (
-    create_unique_ids,
-    preprocess_geodataframe,
-    validate_geometry_types,
-)
+from coastseg.common import create_unique_ids
 from coastseg.feature import Feature
 
 logger = logging.getLogger(__name__)
@@ -143,81 +139,88 @@ def load_intersecting_transects(
     Load transects that intersect with a rectangular bounding box.
 
     Args:
-        rectangle (gpd.GeoDataFrame): GeoDataFrame containing rectangular geometry for filtering.
-        transect_files (List[str]): List of GeoJSON filenames to read.
-        transect_dir (str): Directory path containing GeoJSON transect files.
-        columns_to_keep (Iterable[str], optional): Column names to retain.
-            Defaults to {"id", "geometry", "slope"}.
+        rectangle: GeoDataFrame containing rectangular geometry for filtering.
+        transect_files: List of GeoJSON filenames to read.
+        transect_dir: Directory path containing GeoJSON transect files.
+        columns_to_keep: Column names to retain.
         **kwargs: Additional keyword arguments.
 
     Keyword Args:
         crs (str, optional): Target CRS. Defaults to "EPSG:4326".
 
     Returns:
-        gpd.GeoDataFrame: Transects that intersect with rectangle, with specified columns retained.
-
-    Raises:
-        FileNotFoundError: If transect file does not exist.
-        ValueError: If no valid transects found.
+        Transects that intersect with rectangle, cleaned and validated.
     """
     crs = kwargs.get("crs", "EPSG:4326")
 
-    # Create an empty GeoDataFrame to hold the selected transects
-    selected_transects = gpd.GeoDataFrame(columns=list(columns_to_keep), crs=crs)
+    # Ensure rectangle has proper CRS
+    rectangle = Feature.ensure_crs(rectangle, crs)
 
-    # Get the bounding box of the rectangle in the same CRS as the transects
-    if hasattr(rectangle, "crs") and rectangle.crs:
-        rectangle = rectangle.copy().to_crs(crs)
-    else:
-        rectangle = rectangle.copy().set_crs(crs)
-    # get the bounding box of the rectangle
-    bbox = tuple(rectangle.bounds.iloc[0].tolist())
-    # Create a list to store the GeoDataFrames
-    gdf_list = []
-    # Iterate over each transect file and select the transects that intersect with the rectangle
+    # Load intersecting files
+    gdfs = []
     for transect_file in transect_files:
-        transects_name = os.path.splitext(transect_file)[0]
         transect_path = os.path.join(transect_dir, transect_file)
         if not os.path.exists(transect_path):
             logger.warning("Transect file %s does not exist", transect_path)
             continue
-        transects = gpd.read_file(transect_path, bbox=bbox)
-        # keep only those transects that intersect with the rectangle
-        transects = transects[transects.intersects(rectangle.unary_union)]
-        # drop any columns that are not in columns_to_keep
-        columns_to_keep = set(col.lower() for col in columns_to_keep)
-        transects = transects[
-            [col for col in transects.columns if col.lower() in columns_to_keep]
-        ]
-        # if the transects are not empty then add them to the list
-        if not transects.empty:
-            logger.info("Adding transects from %s", transects_name)
-            gdf_list.append(transects)
 
-    # Concatenate all the GeoDataFrames in the list into one GeoDataFrame
-    if gdf_list:
-        selected_transects = pd.concat(gdf_list, ignore_index=True)
+        try:
+            # Use Feature.read_masked_clean for consistent processing
+            gdf = Feature.read_masked_clean(
+                transect_path,
+                mask=rectangle,
+                columns_to_keep=columns_to_keep,
+                geometry_types=("LineString", "MultiLineString"),
+                feature_type="transects",
+                output_crs=crs,
+            )
 
-    if not selected_transects.empty:
-        selected_transects = preprocess_geodataframe(
-            selected_transects,
-            columns_to_keep=list(columns_to_keep),
-            create_ids=True,
-            output_crs=crs,
+            if not gdf.empty:
+                logger.info(
+                    f"Added transects from {os.path.splitext(transect_file)[0]}"
+                )
+                gdfs.append(gdf)
+
+        except Exception as e:
+            logger.warning(f"Failed to load {transect_file}: {e}")
+
+    # Combine all loaded transects using Feature utility
+    if not gdfs:
+        return gpd.GeoDataFrame(
+            columns=list(columns_to_keep),
+            geometry=gpd.GeoSeries(dtype="geometry"),
+            crs=crs,
         )
-    # ensure that the transects are either LineStrings or MultiLineStrings
-    validate_geometry_types(
-        selected_transects,
-        set(["LineString", "MultiLineString"]),
-        feature_type="transects",
-    )
-    # make sure all the ids in selected_transects are unique
-    selected_transects = create_unique_ids(selected_transects, prefix_length=3)
-    return selected_transects
+
+    combined_gdf = Feature.concat_clean(gdfs)
+
+    # Final processing with Feature utilities
+    return create_unique_ids(combined_gdf, prefix_length=3)
 
 
 class Transects(Feature):
-    """A class representing a collection of transects within a specified bounding box."""
+    """Manages coastal transect data with streamlined processing and visualization.
+
+    Provides automated workflow for loading, filtering, and processing transect
+    geometries with robust error handling and efficient spatial operations.
+    Leverages Feature parent class utilities for consistent data handling.
+
+    Attributes:
+        LAYER_NAME: Default layer name for visualization.
+        COLUMNS_TO_KEEP: Essential columns preserved during processing.
+
+    Examples:
+        Create from bounding box:
+        >>> bbox_gdf = gpd.GeoDataFrame([1], geometry=[polygon], crs="EPSG:4326")
+        >>> transects = Transects.from_bbox(bbox_gdf)
+
+        Create from existing data:
+        >>> transects = Transects.from_gdf(existing_transects_gdf)
+
+        Load from files:
+        >>> files = ["transects1.geojson", "transects2.geojson"]
+        >>> transects = Transects.from_files(files)
+    """
 
     LAYER_NAME = "transects"
     COLUMNS_TO_KEEP = set(
@@ -249,42 +252,51 @@ class Transects(Feature):
         bbox: Optional[gpd.GeoDataFrame] = None,
         transects: Optional[gpd.GeoDataFrame] = None,
         filename: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Initialize a Transects object for coastal transect analysis.
 
         Args:
-            bbox (Optional[gpd.GeoDataFrame], optional): Bounding box geometry to filter transects.
-                Defaults to None.
-            transects (Optional[gpd.GeoDataFrame], optional): Existing transect data.
-                Defaults to None.
-            filename (Optional[str], optional): Filename for saving/loading transect data.
-                Defaults to "transects.geojson".
+            bbox: Bounding box geometry to filter transects. Triggers automatic
+                file discovery and spatial filtering.
+            transects: Existing transect data to use directly. Takes precedence
+                over bbox if both provided.
+            filename: Filename for saving/loading. Defaults to "transects.geojson".
 
         Note:
-            Only one of `bbox` or `transects` should be provided. If both are provided,
-            `transects` takes precedence.
+            Transects takes precedence over bbox if both are provided.
+            Uses Feature parent class utilities for consistent data processing.
         """
         super().__init__(filename or "transects.geojson")
+
+        # Initialize based on provided data
         if transects is not None:
-            self._init_with_transects(transects)
+            self.gdf = self._process_transects(transects)
         elif bbox is not None:
             self.gdf = self._create_from_bbox(bbox)
+        else:
+            # Create empty GeoDataFrame with proper geometry column
+            self.gdf = gpd.GeoDataFrame(
+                columns=list(self.COLUMNS_TO_KEEP),
+                geometry=gpd.GeoSeries(dtype="geometry"),
+                crs=self.DEFAULT_CRS,
+            )
 
-    def _init_with_transects(self, transects: gpd.GeoDataFrame) -> None:
+    def _process_transects(self, transects: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         """
-        Initialize the transects object with existing transect data.
+        Process provided transect data using Feature parent class utilities.
 
         Args:
-            transects (gpd.GeoDataFrame): Existing transect data with LineString or
-                MultiLineString geometries.
+            transects: Existing transect data with LineString/MultiLineString geometries.
+
+        Returns:
+            Cleaned and validated GeoDataFrame of transects.
 
         Raises:
             ValueError: If transects contain invalid geometry types.
         """
-        gdf = self.ensure_crs(transects, self.DEFAULT_CRS)
-        self.gdf = self.clean_gdf(
-            gdf,
+        return self.clean_gdf(
+            self.ensure_crs(transects),
             columns_to_keep=list(self.COLUMNS_TO_KEEP),
             output_crs=self.DEFAULT_CRS,
             create_ids_flag=True,
@@ -317,30 +329,26 @@ class Transects(Feature):
         specified coordinate reference system.
 
         Args:
-            bbox (gpd.GeoDataFrame): Bounding box geometry to filter transects.
-            crs (str, optional): Target CRS for output transects. Defaults to "EPSG:4326".
+            bbox: Bounding box geometry to filter transects.
 
         Returns:
-            gpd.GeoDataFrame: Transects that intersect with the bounding box.
+            Cleaned GeoDataFrame of intersecting transects.
         """
-        bbox = bbox[["geometry"]]  # get only the geometry column
-        # get the directory where transect files are stored within coastseg
-        transect_dir = self.get_transects_directory()
-        # get transect geojson files that intersect with bounding box
-        intersecting_transect_files = self.get_intersecting_files(bbox)
-        # load the intersecting transects into a geodataframe
+        # Get intersecting files and load them
+        intersecting_files = self.get_intersecting_files(bbox)
         gdf = load_intersecting_transects(
-            bbox,
-            intersecting_transect_files,
-            transect_dir,
-            columns_to_keep=list(self.COLUMNS_TO_KEEP),
+            bbox[["geometry"]],  # geometry only
+            intersecting_files,
+            self.get_transects_directory(),
+            columns_to_keep=self.COLUMNS_TO_KEEP,
         )
-        # if no transects found, return empty gdf
+
         if gdf.empty:
             logger.warning(f"No transects found within the bounding box. {bbox}")
             return gdf
 
-        gdf = self.clean_gdf(
+        # Use parent class method for consistent cleaning
+        return self.clean_gdf(
             gdf,
             columns_to_keep=list(self.COLUMNS_TO_KEEP),
             output_crs=self.DEFAULT_CRS,
@@ -350,7 +358,73 @@ class Transects(Feature):
             unique_ids=True,
             ids_as_str=True,
         )
-        return gdf
+
+    @classmethod
+    def from_bbox(
+        cls, bbox: gpd.GeoDataFrame, filename: Optional[str] = None
+    ) -> "Transects":
+        """
+        Create a Transects instance from a bounding box.
+
+        Args:
+            bbox: Bounding box for spatial filtering.
+            filename: Optional output filename.
+
+        Returns:
+            Transects instance with intersecting data.
+        """
+        return cls(bbox=bbox, filename=filename)
+
+    @classmethod
+    def from_gdf(
+        cls, gdf: gpd.GeoDataFrame, filename: Optional[str] = None
+    ) -> "Transects":
+        """
+        Create a Transects instance from an existing GeoDataFrame.
+
+        Args:
+            gdf: Existing transect data.
+            filename: Optional output filename.
+
+        Returns:
+            Transects instance with provided data.
+        """
+        return cls(transects=gdf, filename=filename)
+
+    @classmethod
+    def from_files(
+        cls, transect_files: List[str], filename: Optional[str] = None
+    ) -> "Transects":
+        """
+        Create a Transects instance from transect files.
+
+        Args:
+            transect_files: List of transect file paths.
+            filename: Optional output filename.
+
+        Returns:
+            Transects instance with combined data.
+        """
+        gdfs = []
+
+        for file in transect_files:
+            try:
+                gdf = gpd.read_file(file)
+                if not gdf.empty:
+                    gdfs.append(gdf)
+            except Exception as e:
+                logger.warning(f"Failed to load {file}: {e}")
+
+        combined_gdf = (
+            cls.concat_clean(gdfs)
+            if gdfs
+            else gpd.GeoDataFrame(
+                columns=list(cls.COLUMNS_TO_KEEP),
+                geometry=gpd.GeoSeries(dtype="geometry"),
+                crs=cls.DEFAULT_CRS,
+            )
+        )
+        return cls(transects=combined_gdf, filename=filename)
 
     def style_layer(
         self,
@@ -362,11 +436,11 @@ class Transects(Feature):
         Creates arrowheads to indicate transect direction with origin being the starting point on land.
 
         Args:
-            data (Union[Dict[str, Any], gpd.GeoDataFrame]): Transect data to style.
-            layer_name (str, optional): Layer name for visualization. Defaults to "transects".
+            data: Transect data to style (GeoDataFrame or GeoJSON dict).
+            layer_name: Layer name for visualization.
 
         Returns:
-            GeoJSON: Styled GeoJSON layer for interactive mapping.
+            Styled GeoJSON layer with arrows indicating transect direction.
         """
         geojson = data
         # if the data is a gdf then convert to geojson with arrowheads, otherwise just use the geojson as is
@@ -382,6 +456,7 @@ class Transects(Feature):
             "weight": 2,
         }
         hover_style = {"color": "blue", "fillOpacity": 0.7}
+
         return super().style_layer(
             geojson, layer_name, style=style, hover_style=hover_style
         )
