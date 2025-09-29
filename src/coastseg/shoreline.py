@@ -1,17 +1,20 @@
 """
 CoastSeg Shoreline Management.
 
-Tools to download, validate, clip, and visualize shoreline geometries
-(LineString/MultiLineString) — including CRS handling (EPSG:4326), unique ID
-generation, and simple ipyleaflet styling. Supports fetching data from Zenodo.
+Streamlined tools to download, validate, clip, and visualize shoreline geometries
+(LineString/MultiLineString) with CRS handling (EPSG:4326), unique ID generation,
+and simple ipyleaflet styling. Automatically handles Zenodo data fetching.
 
 Classes:
   - Shoreline: manages shoreline data and operations.
 
 Functions:
-  - construct_download_url
-  - get_intersecting_files
-  - load_total_bounds_df
+  - construct_download_url: helper for Zenodo URL construction.
+
+Key Features:
+  - Streamlined loading: automatically finds intersecting files and downloads as needed
+  - Robust error handling: continues processing even if some files fail
+  - Efficient caching: reuses already downloaded files
 """
 
 # Standard library imports
@@ -21,7 +24,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 # External dependencies imports
 import geopandas as gpd
-import pandas as pd
 from ipyleaflet import GeoJSON
 
 # Internal dependencies imports
@@ -53,6 +55,7 @@ class Shoreline(Feature):
         filename (str): Name of the shoreline file.
     """
 
+    DATASET_ID = "7814755"
     LAYER_NAME = "shoreline"
     SELECTED_LAYER_NAME = "Selected Shorelines"
     # Read in each shoreline file and clip it to the bounding box
@@ -74,65 +77,57 @@ class Shoreline(Feature):
         bbox: Optional[gpd.GeoDataFrame] = None,
         shoreline: Optional[gpd.GeoDataFrame] = None,
         filename: Optional[str] = None,
-        download_location: Optional[str] = None,
+        bounds_file: Optional[str] = None,
+        shorelines_dir: Optional[str] = None,
     ) -> None:
         """
         Initialize a Shoreline object with optional data sources.
 
         Args:
-            bbox (Optional[gpd.GeoDataFrame]): Bounding box to clip shorelines to.
-                If provided, shorelines will be downloaded and clipped to this area.
-            shoreline (Optional[gpd.GeoDataFrame]): Existing shoreline data to use.
-                Takes precedence over bbox if both are provided.
-            filename (Optional[str]): Name for the shoreline file. Must end with '.geojson'.
-                Defaults to 'shoreline.geojson'.
-
-            download_location (Optional[str]): Directory for downloading shoreline files.
-                Defaults to the module directory.
+            bbox: Bounding box to find and clip shorelines. Triggers automatic
+                file discovery and download from Zenodo datasets.
+            shoreline: Existing shoreline data to use directly. Takes precedence
+                over bbox if both are provided.
+            filename: Name for the shoreline file. Defaults to 'shoreline.geojson'.
+            bounds_file: Path to GeoJSON file containing bounding boxes for shoreline files.
+                Defaults to 'coastseg/bounding_boxes/world_reference_shorelines_bboxes.geojson'.
+            shorelines_directory: Directory for shoreline files. Defaults to 'coastseg/shorelines'.
 
         Raises:
             ValueError: If shoreline data is invalid or bbox processing fails.
+            FileNotFoundError: If no intersecting shoreline data can be found.
         """
-        # location to create shorelines directory and download shorelines to
-        self._download_location = download_location or os.path.dirname(
-            os.path.abspath(__file__)
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        # coastseg/bounding_boxes by default
+        # this is the location of the bounds file. Its each shoreline file name and the bounds each covers
+        self.bounds_file = bounds_file or os.path.join(
+            self.base_dir, "bounding_boxes", "world_reference_shorelines_bboxes.geojson"
         )
+        # coastseg/shorelines by default
+        # this is the location of the shoreline files to load the reference shoreline from
+        self.shoreline_dir = shorelines_dir or os.path.join(self.base_dir, "shorelines")
+
         # initialize the shorelines
         super().__init__(filename or "shoreline.geojson")
         self.initialize_shorelines(bbox, shoreline)
 
     def __repr__(self) -> str:
         """
-        Return a concise string representation of the Shoreline object.
-        Provides detailed information about the shoreline data including CRS,
-        column information, first few rows, geometry preview, and IDs.
+        Return a string representation of the Shoreline object.
 
         Returns:
-            str: Same as __str__ method for detailed representation.
+            String representation including Shoreline-specific and Feature information.
         """
-        # Get column names and their data types
-        col_info = self.gdf.dtypes.apply(lambda x: x.name).to_string()
-        # Get first 3 rows as a string
-        first_rows = self.gdf
-        geom_str = ""
-        if isinstance(self.gdf, gpd.GeoDataFrame):
-            if "geometry" in self.gdf.columns:
-                first_rows = self.gdf.head(3).drop(columns="geometry").to_string()
-            if not self.gdf.empty:
-                geom_str = str(self.gdf.iloc[0]["geometry"])[:100] + "...)"
-        # Get CRS information
-        if self.gdf.empty:
-            crs_info = "CRS: None"
-        else:
-            if self.gdf is not None and hasattr(self.gdf, "crs"):
-                crs_info = f"CRS: {self.gdf.crs}" if self.gdf.crs else "CRS: None"
-            else:
-                crs_info = "CRS: None"
+        # Get base feature representation
+        base_repr = super().__repr__()
 
-        ids = []
-        if "id" in self.gdf.columns:
-            ids = self.gdf["id"].astype(str)
-        return f"Shoreline:\nself.gdf:\n\n{crs_info}\n- Columns and Data Types:\n{col_info}\n\n- First 3 Rows:\n{first_rows}\n geometry: {geom_str}\nIDs:\n{ids}"
+        # Add shoreline-specific information
+        geometry_preview = ""
+        if not self.gdf.empty and "geometry" in self.gdf.columns:
+            geom = self.gdf.iloc[0]["geometry"]
+            geometry_preview = f", geometry_preview={str(geom)[:50]}..."
+
+        return f"Shoreline(ids={self.ids()}{geometry_preview}, base={base_repr})"
 
     __str__ = __repr__
 
@@ -145,17 +140,19 @@ class Shoreline(Feature):
         Initialize shoreline data from either existing shorelines or a bounding box.
 
         Args:
-            bbox (Optional[gpd.GeoDataFrame]): Bounding box to download and clip shorelines.
-            shorelines (Optional[gpd.GeoDataFrame]): Existing shoreline data to use directly.
+            bbox: Bounding box to download and clip shorelines.
+            shorelines: Existing shoreline data to use directly.
 
         Note:
-            If both bbox and shorelines are provided, shorelines takes precedence.
+            If both are provided, shorelines takes precedence.
         """
         if shorelines is not None:
             self.gdf = self.initialize_shorelines_with_shorelines(shorelines)
-
         elif bbox is not None:
             self.gdf = self.initialize_shorelines_with_bbox(bbox)
+        else:
+            # Initialize with empty GeoDataFrame
+            self.gdf = gpd.GeoDataFrame()
 
     def initialize_shorelines_with_shorelines(
         self, shorelines: gpd.GeoDataFrame
@@ -163,11 +160,11 @@ class Shoreline(Feature):
         """
         Initialize shorelines using provided shoreline GeoDataFrame.
 
-        Validates and preprocesses the provided shorelines, ensuring they have the correct
-        geometry types (LineString or MultiLineString) and proper CRS (EPSG:4326).
-
         Args:
-            shorelines (gpd.GeoDataFrame): GeoDataFrame containing shoreline geometries.
+            shorelines: GeoDataFrame containing shoreline geometries.
+
+        Returns:
+            Cleaned and validated GeoDataFrame of shorelines.
 
         Raises:
             ValueError: If shorelines is not a GeoDataFrame.
@@ -179,21 +176,21 @@ class Shoreline(Feature):
             - Keeps only specified columns related to shoreline properties
         """
         if not isinstance(shorelines, gpd.GeoDataFrame):
-            raise ValueError("Shorelines must be a GeoDataFrame.")
+            raise ValueError("Shorelines must be a GeoDataFrame")
         if shorelines.empty:
-            logger.warning("Shorelines cannot be empty.")
+            logger.warning("Empty shorelines provided")
             return shorelines
 
         return self.clean_gdf(
-            self.ensure_crs(shorelines, self.DEFAULT_CRS),
+            self.ensure_crs(shorelines),
             columns_to_keep=self.COLUMNS_TO_KEEP,
             output_crs=self.DEFAULT_CRS,
             create_ids_flag=True,
-            geometry_types=["LineString", "MultiLineString"],
+            geometry_types=("LineString", "MultiLineString"),
             feature_type="shoreline",
             unique_ids=True,
             ids_as_str=True,
-            help_message="The uploaded shorelines need to be LineStrings.",
+            help_message="Shorelines must be LineString or MultiLineString geometries",
         )
 
     def initialize_shorelines_with_bbox(
@@ -202,26 +199,27 @@ class Shoreline(Feature):
         """
         Initialize shorelines by downloading and clipping to a bounding box.
 
-        Downloads shoreline data that intersects with the provided bounding box and
-        clips the shorelines to the bbox boundaries.
-
         Args:
-            bbox (gpd.GeoDataFrame): Bounding box geometry for clipping shorelines.
+            bbox: Bounding box geometry for clipping shorelines.
+
+        Returns:
+            GeoDataFrame of shorelines clipped to the bounding box.
 
         Raises:
-            FileNotFoundError: If no shoreline files are found that intersect the bbox.
-            Exception: If no default shoreline features are available.
+            ValueError: If bbox is None or empty.
+            FileNotFoundError: If no intersecting shoreline files are found.
         """
         if bbox is None or bbox.empty:
-            raise ValueError(
-                "Cannot create shoreline within a Bounding box thats empty or None."
-            )
-        shoreline_files = self.get_intersecting_shoreline_files(bbox)
-        # if no shorelines were found to intersect with the bounding box raise an exception
-        if not shoreline_files:
-            exception_handler.check_if_default_feature_available(None, "shoreline")
+            raise ValueError("Bounding box cannot be None or empty")
 
-        return self.create_geodataframe(bbox, shoreline_files)
+        try:
+            shoreline_files = self.get_intersecting_shoreline_files(bbox)
+            if not shoreline_files:
+                exception_handler.check_if_default_feature_available(None, "shoreline")
+            return self.create_geodataframe(bbox, shoreline_files)
+        except Exception as e:
+            logger.error(f"Failed to initialize shorelines from bbox: {e}")
+            raise
 
     def get_clipped_shoreline(
         self, shoreline_file: str, bbox: gpd.GeoDataFrame, columns_to_keep: List[str]
@@ -230,65 +228,74 @@ class Shoreline(Feature):
         Read, preprocess, and clip a shoreline file to the bounding box.
 
         Args:
-            shoreline_file (str): Path to the shoreline file to read.
-            bbox (gpd.GeoDataFrame): Bounding box for clipping.
-            columns_to_keep (List[str]): List of column names to retain.
+            shoreline_file: Path to the shoreline file to read.
+            bbox: Bounding box for clipping.
+            columns_to_keep: List of column names to retain.
 
         Returns:
-            gpd.GeoDataFrame: Clipped shoreline GeoDataFrame with validated geometries.
-
-        Note:
-            Validates that geometries are LineString or MultiLineString types.
+            Clipped shoreline GeoDataFrame with validated geometries.
         """
-        return Feature.read_masked_clean(
+        return self.read_masked_clean(
             shoreline_file,
             mask=bbox,
             columns_to_keep=columns_to_keep,
-            geometry_types=["LineString", "MultiLineString"],
+            geometry_types=("LineString", "MultiLineString"),
             feature_type="shoreline",
             output_crs=self.DEFAULT_CRS,
         )
 
     def get_intersecting_shoreline_files(
-        self, bbox: gpd.GeoDataFrame, bounding_boxes_location: str = ""
+        self,
+        bbox: gpd.GeoDataFrame,
     ) -> List[str]:
         """
-        Retrieves a list of intersecting shoreline files based on the given bounding box.
+        Get list of shoreline files that intersect with the bounding box.
 
         Args:
-            bbox (gpd.GeoDataFrame): The bounding box to use for finding intersecting shoreline files.
-            bounding_boxes_location (str, optional): The location to store the bounding box files. If not provided,
-                it defaults to the download location specified during object initialization.
+            bbox: Bounding box to use for finding intersecting files.
 
         Returns:
-            List[str]: A list of intersecting shoreline file paths.
+            List of local file paths for intersecting shorelines.
 
         Raises:
-            ValueError: If no intersecting shorelines were available within the bounding box.
-            FileNotFoundError: If no shoreline files were found at the download location.
+            FileNotFoundError: If no intersecting shoreline files are found.
         """
-        # load the intersecting shoreline files
-        bounding_boxes_location = (
-            bounding_boxes_location
-            if bounding_boxes_location
-            else os.path.join(self._download_location, "bounding_boxes")
-        )
-        os.makedirs(bounding_boxes_location, exist_ok=True)
-        intersecting_files = get_intersecting_files(bbox, bounding_boxes_location)
-
-        if not intersecting_files:
-            logger.warning("No intersecting shoreline files were found.")
+        try:
+            bounds_df = gpd.read_file(self.bounds_file, mask=bbox)
+            if "filename" in bounds_df.columns:
+                bounds_df = bounds_df.set_index("filename")
+        except Exception as e:
+            logger.warning(f"Could not load bounding box file {self.bounds_file}: {e}")
             return []
 
-        # Download any missing shoreline files
-        shoreline_files = self.get_shoreline_files(
-            intersecting_files, self._download_location
-        )
-        if not shoreline_files:
+        if bounds_df.empty:
+            logger.warning("No intersecting shoreline files found")
+            return []
+
+        # Process each intersecting file
+        available_files = []
+
+        for filename in bounds_df.index:
+            shoreline_path = os.path.join(self.shoreline_dir, filename)
+
+            # Check if file exists locally, download if needed
+            if os.path.exists(shoreline_path):
+                available_files.append(shoreline_path)
+            else:
+                try:
+                    self.download_shoreline(filename, shoreline_path, self.DATASET_ID)
+                    available_files.append(shoreline_path)
+                except DownloadError as e:
+                    logger.error(f"Failed to download {filename}: {e}")
+                    # Continue with other files rather than failing completely
+
+        if not available_files:
             raise FileNotFoundError(
-                f"No shoreline files were found at {self._download_location}."
+                "No shoreline files could be obtained for the given area"
             )
-        return shoreline_files
+
+        logger.info(f"Found {len(available_files)} available shoreline files")
+        return available_files
 
     def create_geodataframe(
         self, bbox: gpd.GeoDataFrame, shoreline_files: List[str], crs: str = "EPSG:4326"
@@ -300,97 +307,58 @@ class Shoreline(Feature):
         them into a single GeoDataFrame with unique IDs and proper CRS.
 
         Args:
-            bbox (gpd.GeoDataFrame): Bounding box for clipping shorelines.
-            shoreline_files (List[str]): List of file paths to shoreline data.
-            crs (str): Target coordinate reference system. Defaults to 'EPSG:4326'.
+            bbox: Bounding box for clipping shorelines.
+            shoreline_files: List of file paths to shoreline data.
+            crs: Target coordinate reference system. Defaults to 'EPSG:4326'.
 
         Returns:
-            gpd.GeoDataFrame: Combined shoreline data clipped to bbox with unique IDs.
+            Combined shoreline data clipped to bbox with unique IDs.
 
         Raises:
             FileNotFoundError: If no shoreline files are provided.
-
-        Note:
-            - Removes columns where all values are NA before concatenation
-            - Validates all geometries are LineString or MultiLineString
-            - Creates unique IDs with 3-character prefixes
         """
-        # Read in each shoreline file and clip it to the bounding box
         if not shoreline_files:
-            logger.error("No shoreline files were provided to read shorelines from")
+            logger.error(
+                "No shoreline files were provided for creating the Shoreline GeoDataFrame"
+            )
             raise FileNotFoundError(
-                f"No shoreline files were found at {self._download_location}."
+                "No shoreline files were provided for creating the Shoreline GeoDataFrame"
             )
 
-        shorelines_gdf = gpd.GeoDataFrame()
-        shorelines = [
-            self.get_clipped_shoreline(file, bbox, self.COLUMNS_TO_KEEP)
-            for file in shoreline_files
-        ]
-        # Drop columns where all values are NA
-        shorelines = [df.dropna(axis=1, how="all") for df in shorelines]
+        # Read and clip all shoreline files in parallel-friendly way
+        shorelines = []
+        for file_path in shoreline_files:
+            try:
+                clipped_shoreline = self.get_clipped_shoreline(
+                    file_path, bbox, self.COLUMNS_TO_KEEP
+                )
+                if not clipped_shoreline.empty:
+                    shorelines.append(clipped_shoreline)
+            except Exception as e:
+                logger.warning(f"Could not process shoreline file {file_path}: {e}")
+                # Continue with other files
 
-        # Concatenate the DataFrames
-        shorelines_gdf = pd.concat(shorelines, ignore_index=True)
+        if not shorelines:
+            raise FileNotFoundError(
+                "No valid shoreline data found after processing. Check the logs for details."
+            )
+
+        # Use parent class method to concatenate and clean
+        combined_gdf = self.concat_clean(
+            shorelines, ignore_index=True, drop_all_na=True
+        )
 
         return self.clean_gdf(
-            shorelines_gdf,
-            columns_to_keep=list(self.COLUMNS_TO_KEEP),
+            combined_gdf,
+            columns_to_keep=self.COLUMNS_TO_KEEP,
             output_crs=crs,
             create_ids_flag=True,
             geometry_types=("LineString", "MultiLineString"),
-            feature_type="transects",
+            feature_type="shoreline",
             unique_ids=True,
             ids_as_str=True,
-            help_message="The uploaded transects need to be LineStrings.",
+            help_message="Shorelines must be LineString or MultiLineString geometries",
         )
-
-    def get_shoreline_files(
-        self, intersecting_shoreline_files: Dict[str, str], download_location: str
-    ) -> List[str]:
-        """
-        Download missing shoreline files and return list of available file paths.
-
-        Checks for existing shoreline files and downloads any missing ones from
-        the specified dataset sources (e.g., Zenodo).
-
-        Args:
-            intersecting_shoreline_files (Dict[str, str]): Dictionary mapping
-                shoreline filenames to their dataset IDs.
-            download_location (str): Full path to location where the shorelines
-                directory should be created.
-
-        Returns:
-            List[str]: List of file paths for all available shoreline files.
-
-        Note:
-            - Creates a 'shorelines' directory if it doesn't exist
-            - Skips download if file already exists locally
-            - Logs download errors but continues processing other files
-        """
-        available_files = []
-
-        # Ensure the directory to hold the downloaded shorelines from Zenodo exists
-        shoreline_dir = os.path.abspath(os.path.join(download_location, "shorelines"))
-        os.makedirs(shoreline_dir, exist_ok=True)
-
-        for filename, dataset_id in intersecting_shoreline_files.items():
-            shoreline_path = os.path.join(shoreline_dir, filename)
-            if not os.path.exists(shoreline_path):
-                try:
-                    self.download_shoreline(filename, shoreline_path, dataset_id)
-                    available_files.append(shoreline_path)
-                except DownloadError as download_exception:
-                    logger.error(
-                        f"{download_exception} Shoreline {filename} failed to download."
-                    )
-                    print(
-                        f"{download_exception} Shoreline {filename} failed to download."
-                    )
-            else:
-                # if the shoreline file already exists then add it to the list of available files
-                available_files.append(shoreline_path)
-        return available_files
 
     def style_layer(self, geojson: Dict[str, Any], layer_name: str) -> GeoJSON:
         """
@@ -427,28 +395,21 @@ class Shoreline(Feature):
         download_function: Callable = download_url,
     ) -> None:
         """
-        Download shoreline files from Zenodo dataset.
-
-        Constructs the download URL and downloads the specified shoreline file
-        from the Zenodo repository to the local filesystem.
+        Download shoreline file from Zenodo dataset.
 
         Args:
-            filename (str): Name of the file to download from Zenodo.
-            save_location (str): Full path where the downloaded file should be saved.
-            dataset_id (str): Zenodo dataset ID. Defaults to '7814755' (world shorelines).
+            filename: Name of the file to download from Zenodo.
+            save_location: Full path where the downloaded file should be saved.
+            dataset_id: Zenodo dataset ID. Defaults to '7814755' (world shorelines).
+            download_function: Function to use for downloading. Defaults to download_url.
 
-        Note:
-            - Uses the configured download service for actual file transfer
-            - Logs the download operation for monitoring
-            - Raises DownloadError if the download fails
+        Raises:
+            DownloadError: If the download fails.
         """
+        # Construct URL and download
+        url = construct_download_url("https://zenodo.org/record/", dataset_id, filename)
 
-        # Construct the download URL
-        root_url = "https://zenodo.org/record/"
-        url = construct_download_url(root_url, dataset_id, filename)
-
-        # Download shorelines from Zenodo
-        logger.info(f"Retrieving file: {save_location} from {url}")
+        logger.info(f"Downloading {filename} from {url} to {save_location}")
         download_function(url, save_location, filename)
 
 
@@ -458,104 +419,15 @@ def construct_download_url(root_url: str, dataset_id: str, filename: str) -> str
     Construct a download URL for Zenodo dataset files.
 
     Args:
-        root_url (str): Base URL for the Zenodo repository (e.g., "https://zenodo.org/record/").
-        dataset_id (str): Zenodo dataset identifier.
-        filename (str): Name of the file to download.
+        root_url: Base URL for the Zenodo repository.
+        dataset_id: Zenodo dataset identifier.
+        filename: Name of the file to download.
 
     Returns:
-        str: Complete download URL with download parameter.
+        Complete download URL with download parameter.
 
     Example:
         >>> construct_download_url("https://zenodo.org/record/", "7814755", "shoreline.geojson")
         "https://zenodo.org/record/7814755/files/shoreline.geojson?download=1"
     """
     return f"{root_url}{dataset_id}/files/{filename}?download=1"
-
-
-def get_intersecting_files(
-    bbox: gpd.GeoDataFrame, bounding_boxes_location: str
-) -> Dict[str, str]:
-    """
-    Find shoreline files that intersect with the given bounding box.
-
-    Searches through available shoreline bounding box datasets to identify
-    which shoreline files contain data that intersects with the provided bbox.
-
-    Args:
-        bbox (gpd.GeoDataFrame): Bounding box geometry to search for intersections.
-        bounding_boxes_location (str): Full path to the directory containing
-            bounding box datasets.
-
-    Returns:
-        Dict[str, str]: Dictionary mapping intersecting shoreline filenames
-            to their dataset IDs.
-
-    Note:
-        - Currently searches world shoreline dataset (ID: 7814755)
-        - Uses spatial intersection to determine file relevance
-        - Returns empty dict if no intersecting files are found
-    """
-    WORLD_DATASET_ID = "7814755"
-
-    # DataFrames containing total bounding box for each shoreline file
-    world_total_bounds_df = load_total_bounds_df(bounding_boxes_location, "world", bbox)
-    # Create a list of tuples containing the DataFrames and their dataset IDs
-    total_bounds_dfs = [
-        (world_total_bounds_df, WORLD_DATASET_ID),
-    ]
-
-    intersecting_files = {}
-    # Add filenames of interesting shoreline in both the usa and world shorelines to intersecting_files
-    for bounds_df, dataset_id in total_bounds_dfs:
-        if not bounds_df.empty:
-            filenames = bounds_df.index
-            # Create a dictionary mapping filenames to their dataset IDs
-            filenames_and_ids = zip(filenames, [dataset_id] * len(filenames))
-            # Add the filenames and their dataset IDs to intersecting_files
-            intersecting_files.update(dict(filenames_and_ids))
-    logger.debug(
-        f"Found {len(intersecting_files)} intersecting files\n {intersecting_files}"
-    )
-    return intersecting_files
-
-
-def load_total_bounds_df(
-    bounding_boxes_location: str,
-    location: str = "usa",
-    mask: Optional[gpd.GeoDataFrame] = None,
-) -> gpd.GeoDataFrame:
-    """
-    Load and return bounding boxes for shoreline datasets.
-
-    Reads GeoJSON files containing bounding box information for shoreline
-    datasets and optionally filters them using a spatial mask.
-
-    Args:
-        bounding_boxes_location (str): Full path to the directory containing
-            bounding box files.
-        location (str): Dataset location identifier. Either 'world' or 'usa'.
-            Defaults to 'usa'.
-        mask (Optional[gpd.GeoDataFrame]): Optional spatial mask for filtering
-            bounding boxes. Only boxes intersecting this mask will be returned.
-
-    Returns:
-        gpd.GeoDataFrame: GeoDataFrame with shoreline bounding boxes indexed by filename.
-
-    Note:
-        - For 'usa': loads 'usa_shorelines_bounding_boxes.geojson'
-        - For 'world': loads 'world_reference_shorelines_bboxes.geojson'
-        - Sets index to filename column for easy lookup
-        - Removes filename column after setting as index
-    """
-    # load in different  total bounding box different depending on location given
-    if location == "usa":
-        gdf_file = "usa_shorelines_bounding_boxes.geojson"
-    elif location == "world":
-        gdf_file = "world_reference_shorelines_bboxes.geojson"
-
-    gdf_location = os.path.join(bounding_boxes_location, gdf_file)
-    total_bounds_df = gpd.read_file(gdf_location, mask=mask)
-    total_bounds_df.index = total_bounds_df["filename"]  # type: ignore
-    if "filename" in total_bounds_df.columns:
-        total_bounds_df.drop("filename", axis=1, inplace=True)
-    return total_bounds_df
