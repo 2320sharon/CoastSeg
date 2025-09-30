@@ -352,6 +352,62 @@ class ROI(Feature):
         """
         return list(self.get_all_extracted_shorelines().keys())
 
+    @classmethod
+    def extract_roi_by_id(
+        cls, gdf: gpd.GeoDataFrame, roi_id: Union[str, int]
+    ) -> gpd.GeoDataFrame:
+        """
+        Extract a single ROI from GeoDataFrame by ID.
+
+        Args:
+            gdf: GeoDataFrame containing ROIs to extract from.
+            roi_id: ID of the ROI to extract. If None, returns original GeoDataFrame.
+
+        Returns:
+            GeoDataFrame with a single ROI matching the given ID.
+
+        Raises:
+            exceptions.Id_Not_Found: If the ID doesn't exist in the GeoDataFrame or GeoDataFrame is empty.
+
+        Example:
+            >>> import geopandas as gpd
+            >>> from shapely.geometry import Polygon
+            >>> from coastseg.roi import ROI
+            >>> 
+            >>> # Create test GeoDataFrame with ROIs
+            >>> roi_data = {
+            ...     'id': ['roi1', 'roi2'],
+            ...     'geometry': [
+            ...         Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            ...         Polygon([(2, 2), (3, 2), (3, 3), (2, 3)])
+            ...     ]
+            ... }
+            >>> rois_gdf = gpd.GeoDataFrame(roi_data, crs='EPSG:4326')
+            >>> 
+            >>> # Extract single ROI by ID
+            >>> single_roi = ROI.extract_roi_by_id(rois_gdf, 'roi1')
+            >>> print(single_roi['id'].iloc[0])
+            roi1
+        """
+        if roi_id is None:
+            return gdf
+
+        # Select a single roi by id
+        single_roi = gdf[gdf["id"].astype(str) == str(roi_id)]
+        
+        # If the id was not found in the GeoDataFrame raise an exception
+        if single_roi.empty:
+            logger.error(f"Id: {roi_id} was not found in {gdf}")
+            # Convert to int if possible for the exception, otherwise use None
+            try:
+                id_as_int = int(roi_id)
+                raise exceptions.Id_Not_Found(id_as_int)
+            except (ValueError, TypeError):
+                raise exceptions.Id_Not_Found(None, f"The ROI id '{roi_id}' does not exist.")
+        
+        logger.info(f"single_roi: {single_roi}")
+        return single_roi
+
     def add_geodataframe(self, gdf: gpd.GeoDataFrame) -> "ROI":
         """
         Add GeoDataFrame to existing ROI object.

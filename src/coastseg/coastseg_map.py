@@ -2116,7 +2116,7 @@ class CoastSeg_Map:
         try:
             logger.info(f"Extracting shorelines from ROI with the id: {roi_id}")
             roi_settings = self.rois.get_roi_settings(roi_id)  # type: ignore
-            single_roi = common.extract_roi_by_id(rois_gdf, roi_id)
+            single_roi = ROI.extract_roi_by_id(rois_gdf, roi_id)
             # Clip shoreline to specific roi
             shoreline_in_roi = gpd.clip(shoreline_gdf, single_roi)
             # extract shorelines from ROI
@@ -2404,7 +2404,7 @@ class CoastSeg_Map:
         else:
             # pick the first ROI ID and use it to update the settings with the most accurate epsg
             roi_id = roi_ids[0]
-            single_roi = common.extract_roi_by_id(self.rois.gdf, roi_id)
+            single_roi = ROI.extract_roi_by_id(self.rois.gdf, roi_id)
             self.update_settings_with_accurate_epsg(single_roi)
 
         shoreline_extraction_area_gdf = (
@@ -2538,7 +2538,7 @@ class CoastSeg_Map:
             float: The computed cross distance for the ROI.
         """
         # get transects that intersect with ROI
-        single_roi = common.extract_roi_by_id(roi_gdf, roi_id)
+        single_roi = ROI.extract_roi_by_id(roi_gdf, roi_id)
         # save cross distances by ROI id
         transects_in_roi_gdf = transects_gdf[
             transects_gdf.intersects(single_roi.unary_union)

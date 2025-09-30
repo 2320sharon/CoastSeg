@@ -8,6 +8,17 @@ import pyproj
 # Geometry classes now used from shared fixtures in conftest.py
 
 
+def test_extract_roi_by_id(valid_rois_gdf):
+    # test if valid gdf is returned when id within gdf is given
+    roi_id = 17
+    actual_roi = roi.ROI.extract_roi_by_id(valid_rois_gdf, roi_id)
+    assert isinstance(actual_roi, gpd.GeoDataFrame)
+    assert not actual_roi[actual_roi["id"].astype(int) == roi_id].empty
+    expected_roi = valid_rois_gdf[valid_rois_gdf["id"].astype(int) == roi_id]
+    assert actual_roi["geometry"][0] == expected_roi["geometry"][0]
+    assert actual_roi["id"][0] == expected_roi["id"][0]
+
+
 # Test that when ROI's area is too large an error is thrown
 def test_ROI_too_large(large_polygon_gdf):
     """Test that creating ROI with a polygon that is too large raises InvalidSize error."""

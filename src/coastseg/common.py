@@ -3126,33 +3126,6 @@ def convert_wgs_to_utm(lon: float, lat: float) -> str:
     return epsg_code
 
 
-def extract_roi_by_id(
-    gdf: gpd.GeoDataFrame, roi_id: Union[str, int]
-) -> gpd.GeoDataFrame:
-    """Returns GeoDataFrame with a single ROI whose id matches roi_id.
-       If roi_id is None returns gdf
-
-    Args:
-        gdf (gpd.GeoDataFrame): ROI GeoDataFrame to extract ROI with roi_id from
-        roi_id (int): id of the ROI to extract
-    Raises:
-        exceptions.Id_Not_Found: if id doesn't exist in ROI's GeoDataFrame or self.rois.gdf is empty
-    Returns:
-        gpd.GeoDataFrame: ROI with id matching roi_id
-    """
-    if roi_id is None:
-        single_roi = gdf
-    else:
-        # Select a single roi by id
-        single_roi = gdf[gdf["id"].astype(str) == str(roi_id)]
-        # if the id was not found in the GeoDataFrame raise an exception
-    if single_roi.empty:
-        logger.error(f"Id: {id} was not found in {gdf}")
-        raise exceptions.Id_Not_Found(id)
-    logger.info(f"single_roi: {single_roi}")
-    return single_roi
-
-
 def extract_roi_data(json_data: dict, roi_id: str, fields_of_interest: list = None):
     """
     Extracts the specified fields for a specific ROI from a JSON data dictionary.
