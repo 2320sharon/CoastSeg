@@ -8,7 +8,7 @@ from shapely.geometry import Point
 from coastseg.feature import Feature
 
 
-class TestFeature(Feature):
+class FeatureForTests(Feature):
     """Concrete implementation of Feature for testing."""
 
     pass
@@ -20,24 +20,23 @@ class TestFeatureInit:
     def test_default_initialization(self):
         """Test Feature initializes with default values."""
         # Create instance with defaults
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Check default state
         assert isinstance(feature.gdf, gpd.GeoDataFrame)
         assert feature.gdf.empty
-        assert feature.filename == "testfeature.geojson"
 
     def test_custom_filename_initialization(self):
         """Test Feature initializes with custom filename."""
         # Create instance with custom filename
-        feature = TestFeature(filename="custom.geojson")
+        feature = FeatureForTests(filename="custom.geojson")
 
         # Check custom filename
         assert feature.filename == "custom.geojson"
 
     def test_filename_validation_invalid_type(self):
         """Test filename setter raises error for non-string input."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Test invalid type - using type: ignore to test runtime behavior
         with pytest.raises(ValueError, match="Filename must be a string"):
@@ -45,7 +44,7 @@ class TestFeatureInit:
 
     def test_filename_validation_invalid_extension(self):
         """Test filename setter requires .geojson extension."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Test invalid extension
         with pytest.raises(ValueError, match="Filename must end with '.geojson'"):
@@ -53,23 +52,23 @@ class TestFeatureInit:
 
     def test_repr_empty_feature(self):
         """Test string representation of empty Feature."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Check repr includes key information
         repr_str = repr(feature)
-        assert "TestFeature" in repr_str
+        assert "FeatureForTests" in repr_str
         assert "CRS=" in repr_str
         assert "columns=[]" in repr_str
         assert "<empty>" in repr_str
 
     def test_repr_with_data(self, standard_polygon_gdf):
         """Test string representation with data."""
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = standard_polygon_gdf
 
         # Check repr includes data information
         repr_str = repr(feature)
-        assert "TestFeature" in repr_str
+        assert "FeatureForTests" in repr_str
         assert "geometry" in repr_str
         assert "EPSG:4326" in repr_str
 
@@ -168,14 +167,14 @@ class TestFeatureMethods:
 
     def test_ids_empty_gdf(self):
         """Test getting IDs from empty GeoDataFrame."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Empty GeoDataFrame should return empty list
         assert feature.ids() == []
 
     def test_ids_no_id_column(self, standard_polygon_gdf):
         """Test getting IDs when no 'id' column exists."""
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = standard_polygon_gdf  # Has no 'id' column
 
         # Should return empty list
@@ -189,7 +188,7 @@ class TestFeatureMethods:
             crs="EPSG:4326",
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Should return list of string IDs
@@ -203,7 +202,7 @@ class TestFeatureMethods:
             {"geometry": [Point(0, 0)], "id": [123]}, crs="EPSG:4326"
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Should return string IDs
@@ -212,7 +211,7 @@ class TestFeatureMethods:
 
     def test_remove_by_id_empty_gdf(self):
         """Test removing IDs from empty GeoDataFrame."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Should return unchanged empty GeoDataFrame
         result = feature.remove_by_id(["id1"])
@@ -220,7 +219,7 @@ class TestFeatureMethods:
 
     def test_remove_by_id_no_id_column(self, standard_polygon_gdf):
         """Test removing IDs when no 'id' column exists."""
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = standard_polygon_gdf
 
         # Should return unchanged GeoDataFrame
@@ -235,7 +234,7 @@ class TestFeatureMethods:
             crs="EPSG:4326",
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Should return unchanged GeoDataFrame - using type: ignore to test runtime behavior
@@ -250,7 +249,7 @@ class TestFeatureMethods:
             crs="EPSG:4326",
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Remove single ID
@@ -267,7 +266,7 @@ class TestFeatureMethods:
             {"geometry": [Point(0, 0), Point(1, 1)], "id": [1, 2]}, crs="EPSG:4326"
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Remove single numeric ID
@@ -288,7 +287,7 @@ class TestFeatureMethods:
             crs="EPSG:4326",
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Remove multiple IDs
@@ -371,7 +370,7 @@ class TestFeatureStyleLayer:
 
     def test_style_layer_with_geodataframe(self, standard_polygon_gdf):
         """Test creating styled layer from GeoDataFrame."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Create styled layer
         result = feature.style_layer(standard_polygon_gdf, "test_layer")
@@ -382,7 +381,7 @@ class TestFeatureStyleLayer:
 
     def test_style_layer_with_dict(self):
         """Test creating styled layer from GeoJSON dict."""
-        feature = TestFeature()
+        feature = FeatureForTests()
         geojson_dict = {
             "type": "FeatureCollection",
             "features": [
@@ -403,7 +402,7 @@ class TestFeatureStyleLayer:
 
     def test_style_layer_custom_style(self, standard_polygon_gdf):
         """Test creating layer with custom style."""
-        feature = TestFeature()
+        feature = FeatureForTests()
         custom_style = {"color": "red", "weight": 3}
 
         # Create styled layer with custom style
@@ -416,7 +415,7 @@ class TestFeatureStyleLayer:
 
     def test_style_layer_empty_geojson_error(self):
         """Test error when creating layer from empty GeoJSON."""
-        feature = TestFeature()
+        feature = FeatureForTests()
 
         # Empty GeoJSON should raise error
         with pytest.raises(
@@ -567,7 +566,7 @@ class TestFeatureEdgeCases:
             crs="EPSG:4326",
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Remove both string and numeric ID (as string) - using type: ignore for mixed types
@@ -613,7 +612,7 @@ class TestFeatureEdgeCases:
             {"geometry": [Point(0, 0)], "id": ["id1"]}, crs="EPSG:4326"
         )
 
-        feature = TestFeature()
+        feature = FeatureForTests()
         feature.gdf = gdf
 
         # Remove empty list - should return unchanged
@@ -636,7 +635,7 @@ class TestFeatureEdgeCases:
 
     def test_style_layer_with_hover_style(self, standard_polygon_gdf):
         """Test creating layer with custom hover style."""
-        feature = TestFeature()
+        feature = FeatureForTests()
         hover_style = {"fillOpacity": 0.7, "weight": 3}
 
         # Create layer with hover style

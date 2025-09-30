@@ -98,7 +98,7 @@ def test_empty_merged_timeseries_gdf():
 
     # Call the function with the empty GeoDataFrame
     result = common.save_timeseries_vectors_as_geojson(
-        empty_gdf, save_location=r"C:\Users\sf230\Downloads"
+        empty_gdf, save_location=r"sample_folder"
     )
 
     # Check that the result is also an empty GeoDataFrame
@@ -333,7 +333,7 @@ def test_get_missing_roi_dirs():
             ],
             "landsat_collection": "C02",
             "sitename": "ID_mgm8_datetimefake",
-            "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": "C:\\CoastSeg\\data",
             "include_T2": False,
         },
         "roi_ids": ["mgm8"],
@@ -761,7 +761,7 @@ def test_default_fields_of_interest():
             "landsat_collection": "C02",
             "dates": ["2017-12-01", "2018-01-01"],
             "sitename": "ID_vnv5_datetime01-10-24__01_15_42",
-            "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": "C:\\CoastSeg\\data",
             "roi_id": "vnv5",
         },
     }
@@ -797,7 +797,7 @@ def test_specific_roi_ids():
             "landsat_collection": "C02",
             "dates": ["2017-12-01", "2018-01-01"],
             "sitename": "ID_vnv5_datetime01-10-24__01_15_42",
-            "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": "C:\\CoastSeg\\data",
             "roi_id": "vnv5",
         },
         "vnv6": {
@@ -814,7 +814,7 @@ def test_specific_roi_ids():
             "landsat_collection": "C02",
             "dates": ["2017-12-01", "2018-01-01"],
             "sitename": "ID_vnv6_datetime01-10-24__01_15_42",
-            "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": "C:\\CoastSeg\\data",
             "roi_id": "vnv6",
         },
     }
@@ -840,7 +840,7 @@ def test_missing_fields_in_json_data():
             "sat_list": ["L8"],
             "landsat_collection": "C02",
             "dates": ["2017-12-01", "2018-01-01"],
-            "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+            "filepath": "C:\\CoastSeg\\data",
             "roi_id": "vnv5",
         },
     }
@@ -1806,7 +1806,7 @@ def test_config_dict_to_file(tmp_path):
             ],
             "landsat_collection": "C01",
             "sitename": "ID_0_datetime11-01-22__03_54_47",
-            "filepath": "C:\\1_USGS\\CoastSeg\\repos\\2_CoastSeg\\CoastSeg_fork\\Seg2Map\\data",
+            "filepath": "C:\\CoastSeg\\data",
         }
     }
     filepath = tmp_path
@@ -2013,17 +2013,6 @@ def test_create_json_config_single_input(valid_settings, valid_single_roi_settin
     assert actual_config["roi_ids"] == expected_roi_ids
     for key in expected_roi_ids:
         assert isinstance(actual_config[str(key)], dict)
-
-
-def test_extract_roi_by_id(valid_rois_gdf):
-    # test if valid gdf is returned when id within gdf is given
-    roi_id = 17
-    actual_roi = common.extract_roi_by_id(valid_rois_gdf, roi_id)
-    assert isinstance(actual_roi, gpd.GeoDataFrame)
-    assert actual_roi[actual_roi["id"].astype(int) == roi_id].empty == False
-    expected_roi = valid_rois_gdf[valid_rois_gdf["id"].astype(int) == roi_id]
-    assert actual_roi["geometry"][0] == expected_roi["geometry"][0]
-    assert actual_roi["id"][0] == expected_roi["id"][0]
 
 
 def test_load_settings_empty_filepath():

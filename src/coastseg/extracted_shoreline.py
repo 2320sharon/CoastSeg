@@ -2444,7 +2444,7 @@ class Extracted_Shoreline:
                 ],
                 "landsat_collection": "C02",
                 "sitename": "ID_lyw1_datetime01-18-24__12_26_51",
-                "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+                "filepath": "C:\\CoastSeg\\data",
             },
             settings (dict): General settings dictionary.
             session_path (str, optional): Path to the session. Defaults to None.
@@ -2574,7 +2574,7 @@ class Extracted_Shoreline:
                 ],
                 "landsat_collection": "C02",
                 "sitename": "ID_lyw1_datetime01-18-24__12_26_51",
-                "filepath": "C:\\development\\doodleverse\\coastseg\\CoastSeg\\data",
+                "filepath": "C:\\CoastSeg\\data",
             },
             reference_shoreline (dict): reference shoreline
 
