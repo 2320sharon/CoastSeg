@@ -26,7 +26,6 @@ classifiers = [
 ]
 dependencies = [
   "aiohttp",
-  "area",
   "chardet",
   "dask",
   "doodleverse-utils>=0.0.35",
