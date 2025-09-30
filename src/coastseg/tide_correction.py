@@ -1443,7 +1443,7 @@ def get_tide_predictions(
                  - All the transect ids should be type string
 
        - model_region_directory: The path to the model region that will be used to compute the tide predictions
-         ex."C:/development/doodleverse/CoastSeg/tide_model/region"
+         ex."CoastSeg/tide_model/region"
         transect_id (str): The ID of the transect. Pass "" if no transect ID is available.
         model (str): The tide model to use. Defaults to 'FES2022'.
             Available options FES2014 and FES2022.

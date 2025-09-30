@@ -141,7 +141,7 @@ def sort_images_with_model(
 
     Example:
         >>> sort_images_with_model(
-        ...     input_directory='C:/Coastseg/data/ID_1_datetime06-04-24__12_09_54/jpg_files/preprocessed/RGB',
+        ...     input_directory='C:/Coastseg/data/ID_<roi_id>_datetime<date>/jpg_files/preprocessed/RGB',
         ...     type='rgb',
         ...     threshold=0.40
         ... )
