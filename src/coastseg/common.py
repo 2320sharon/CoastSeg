@@ -11,8 +11,10 @@ import string
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Callable,
+    Collection,
     Dict,
     Hashable,
     Iterable,
@@ -35,7 +37,6 @@ from ipywidgets import HTML, HBox, Layout, ToggleButton, VBox
 from PIL import Image
 from pyproj import CRS, Transformer
 from requests.exceptions import SSLError
-from shapely import geometry
 
 # Third-party imports
 from shapely.geometry import LineString, MultiPoint, Point, Polygon, shape
@@ -43,9 +44,12 @@ from shapely.ops import transform
 from tqdm.auto import tqdm
 
 # Internal dependencies imports
-from coastseg import core_utilities, exceptions, file_utilities
+from coastseg import exceptions, file_utilities
 from coastseg.exceptions import InvalidGeometryType
 from coastseg.validation import find_satellite_in_filename
+
+if TYPE_CHECKING:
+    from coastseg.extracted_shoreline import Extracted_Shoreline
 
 # widget icons from https://fontawesome.com/icons/angle-down?s=solid&f=classic
 
@@ -260,7 +264,7 @@ def merge_tide_corrected_with_raw_timeseries(
         raw_time_series_location = file_utilities.find_file_by_regex(
             session_path, r"^raw_transect_time_series_merged\.csv$"
         )
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         logger.warning(
             f"Could not find raw_transect_time_series_merged.csv in {session_path}"
         )
@@ -285,176 +289,10 @@ def merge_tide_corrected_with_raw_timeseries(
     )
 
 
-def delete_unmatched_rows(
-    data_dict: Dict[Hashable, Union[Sequence[Any], pd.Series]],
-    dates_list: List[Union[str, pd.Timestamp]],
-    sat_list: List[str],
-) -> Dict[Hashable, Any]:
-    """
-    Delete rows in the data dictionary that do not match any of the specified dates and satellite names.
-
-    Args:
-        data_dict (Dict[Hashable, Union[Sequence[Any], pd.Series]]): The dictionary containing data arrays. Expected keys are 'dates' and 'satname'.
-        dates_list (List[Union[str, pd.Timestamp]]): A list containing dates to match against.
-        sat_list (List[str]): A list containing satellite names to match against.
-
-    Returns:
-        Dict[Hashable, Union[Sequence[Any], pd.Series]]: The updated dictionary where rows that do not match any of the provided lists have been deleted. Returns the original dictionary if all rows match or if the data_dict is empty.
-
-    Example:
-        >>> data = {'dates': ['2021-01-01', '2021-01-02'], 'satname': ['sat1', 'sat2']}
-        >>> delete_unmatched_rows(data, ['2021-01-01'], ['sat1'])
-        {'dates': ['2021-01-01'], 'satname': ['sat1']}
-    """
-    if not data_dict:
-        return data_dict
-    data_dict.setdefault("dates", [])
-    data_dict.setdefault("satname", [])
-    # Convert dictionary to DataFrame
-    df = pd.DataFrame(data_dict)
-
-    # Delete rows that do not match any of the dates or satellite names
-    df = df[df["dates"].isin(dates_list) & df["satname"].isin(sat_list)]
-
-    # Convert DataFrame back to dictionary
-    updated_dict = df.to_dict("list")
-
-    return updated_dict
-
-
-def filter_extract_dict(
-    gdf: gpd.GeoDataFrame,
-    extracted_shorelines_dict: Dict[Hashable, Any],
-    output_crs: Optional[Union[str, int, CRS]],
-) -> Dict[Hashable, Any]:
-    """
-    Filters and updates the extracted shorelines dictionary based on the selected indexes from a GeoDataFrame.
-
-    Args:
-        gdf (gpd.GeoDataFrame): The GeoDataFrame containing filtered shorelines. Must have columns 'satname' and 'date'.
-        extracted_shorelines_dict (dict): The extracted shorelines dictionary to be updated. Must contain keys 'shorelines', 'dates', and 'satname'.
-        output_crs (str): The output CRS to convert the gdf to so it's in the same CRS as the shoreline arrays in extracted_shorelines_dict.
-
-    Returns:
-        dict: The updated extracted shorelines dictionary with only shorelines present in the gdf.
-    """
-    sats = np.array(gdf.satname)
-    dates = np.array(pd.to_datetime(gdf["date"]).dt.tz_localize("UTC"))
-    selected_indexes = get_selected_indexes(
-        extracted_shorelines_dict,
-        dates_list=dates,
-        sat_list=sats,  # type: ignore
-    )
-    # convert gdf to the output epsg otherwise output dict will not be in correct crs
-    projected_gdf = gdf.to_crs(output_crs)  # type: ignore
-
-    # update the extracted_shorelines_dict with the selected indexes
-    for idx in selected_indexes:
-        extracted_shorelines_dict["shorelines"][idx] = np.array(
-            projected_gdf.iloc[idx].geometry.coords
-        )
-
-    # Check if any shorelines were removed from the gdf that are still in the extracted_shorelines_dict
-    extracted_shorelines_dict = delete_unmatched_rows(
-        extracted_shorelines_dict, dates_list=dates.tolist(), sat_list=sats.tolist()
-    )
-    return extracted_shorelines_dict
-
-
-def arr_to_LineString(coords: List[Tuple[float, float]]) -> LineString:
-    """
-    Makes a LineString geometry from a list of (x, y) coordinate tuples.
-
-    Args:
-        coords (List[Tuple[float, float]]): List of (x, y) tuples.
-
-    Returns:
-        LineString: LineString geometry created from the input coordinates.
-    """
-    points = [shapely.geometry.Point(xy) for xy in coords]
-    line = shapely.geometry.LineString(points)
-    return line
-
-
-def LineString_to_arr(line: LineString) -> np.ndarray:
-    """
-    Converts a LineString geometry to a NumPy array of (x, y) tuples.
-
-    Args:
-        line (LineString): The LineString geometry to convert.
-
-    Returns:
-        np.ndarray: Array of (x, y) tuples.
-    """
-    listarray = []
-    for pp in line.coords:
-        listarray.append(pp)
-    nparray = np.array(listarray)
-    return nparray
-
-
-def ref_poly_filter(
-    ref_poly_gdf: gpd.GeoDataFrame, raw_shorelines_gdf: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
-    """
-    Filters shorelines that are within a reference polygon.
-
-    Args:
-        ref_poly_gdf (gpd.GeoDataFrame): A GeoDataFrame representing the reference polygon.
-        raw_shorelines_gdf (gpd.GeoDataFrame): A GeoDataFrame representing the raw shorelines.
-
-    Returns:
-        gpd.GeoDataFrame: A filtered GeoDataFrame containing shorelines that are within the reference polygon.
-    """
-    if ref_poly_gdf.empty:
-        return raw_shorelines_gdf
-
-    ##First need to get rid of lines that are completely outside of the ref polygon
-    ref_polygon = ref_poly_gdf.geometry
-    buffer_vals = [None] * len(raw_shorelines_gdf)
-    for i in range(len(raw_shorelines_gdf)):
-        line_entry = raw_shorelines_gdf.iloc[i]
-        line = line_entry.geometry
-        # if any of the polygons intersect with the line, then it is within the buffer
-        bool_val = np.any(ref_polygon.intersects(line).values)
-        buffer_vals[i] = bool_val
-    # add whether the line is within the buffer to the GeoDataFrame
-    raw_shorelines_gdf["buffer_vals"] = buffer_vals
-    # filter out lines that are not within the buffer
-    shorelines_gdf_filter = raw_shorelines_gdf[raw_shorelines_gdf["buffer_vals"]]
-
-    ##Now get rid of points that lie outside ref polygon but preserve the rest of the shoreline
-    new_lines = [None] * len(shorelines_gdf_filter)
-    for i in range(len(shorelines_gdf_filter)):
-        line_entry = shorelines_gdf_filter.iloc[i]
-        line = line_entry.geometry
-        line_arr = LineString_to_arr(line)
-        bool_vals = [None] * len(line_arr)
-        j = 0
-        for point in line_arr:
-            point = geometry.Point(point)
-            contains_series = ref_polygon.contains(point)
-            # if the point is within any of the polygons, then it is within the buffer
-            bool_val = contains_series.any()
-            bool_vals[j] = bool_val
-            j = j + 1
-        new_line_arr = line_arr[bool_vals]
-        new_line_LineString = arr_to_LineString(new_line_arr)
-        new_lines[i] = new_line_LineString
-
-    ##Assign the new geometries, save the output
-    shorelines_gdf_filter["geometry"] = new_lines
-    shorelines_gdf_filter = shorelines_gdf_filter.drop(
-        columns=["buffer_vals"], errors="ignore"
-    )
-
-    return shorelines_gdf_filter
-
-
 def merge_dataframes(
     df1: pd.DataFrame,
     df2: pd.DataFrame,
-    columns_to_merge_on: Set[str] = {"transect_id", "dates"},
+    columns_to_merge_on: Collection[str] = {"transect_id", "dates"},
 ) -> pd.DataFrame:
     """
     Merges two DataFrames based on column names provided in columns_to_merge_on (default: "transect_id", "dates").
@@ -535,7 +373,7 @@ def update_downloaded_configs(
 
 
 def extract_roi_settings(
-    json_data: dict, fields_of_interest: set = set(), roi_ids: list = None
+    json_data: dict, fields_of_interest: set = set(), roi_ids: Optional[list] = None
 ) -> dict:
     """
     Extracts the settings for regions of interest (ROI) from the given JSON data.
@@ -891,16 +729,14 @@ def delete_selected_indexes(
             for index, array_element in enumerate(input_dict[key]):
                 nested_array[index] = array_element
             input_dict[key] = nested_array
-            print(f"len(input_dict[key]): {len(input_dict[key])}")
-            print(f"input_dict[key]: {input_dict[key]}")
+            logger.info(f"input_dict[key] {key} has length({len(input_dict[key])})")
             # now delete the selected indexes
             input_dict[key] = np.delete(input_dict[key], selected_indexes)
             # then transform back to into a list
-            if was_list == True:
+            if was_list:
                 input_dict[key] = input_dict[key].tolist()
         else:
-            print(f"len(input_dict[key]): {len(input_dict[key])}")
-            print(f"input_dict[key]: {input_dict[key]}")
+            logger.info(f"input_dict[key] {key} has length({len(input_dict[key])})")
             input_dict[key] = np.delete(input_dict[key], selected_indexes)
     return input_dict
 
@@ -1446,7 +1282,7 @@ def get_roi_polygon(
     """Extract the polygonal geometry for a given ROI ID."""
     geoseries = roi_gdf[roi_gdf["id"] == roi_id]["geometry"]
     if not geoseries.empty:
-        return [[[x, y] for x, y in list(geoseries.iloc[0].exterior.coords)]]
+        return [[x, y] for x, y in list(geoseries.iloc[0].exterior.coords)]
     return None
 
 
@@ -1598,7 +1434,7 @@ def get_filtered_dates_dict(
 
 def filter_metadata_with_dates(
     metadata: dict, directory: str, file_type: str = "jpg"
-) -> dict[str]:
+) -> dict[str, Any]:
     """
     This function filters metadata to include only those files that exist in the given directory.
 
@@ -1797,56 +1633,6 @@ def generate_ids(num_ids: int, prefix_length: int) -> List[str]:
     """
     prefix = random_prefix(prefix_length)
     return [prefix + str(i) for i in range(1, num_ids + 1)]
-
-
-def export_dataframe_as_geojson(
-    data: pd.DataFrame,
-    output_file_path: str,
-    x_col: str,
-    y_col: str,
-    id_col: str,
-    columns_to_keep: List[str] = None,
-) -> str:
-    """
-    Export specified columns from a CSV file to a GeoJSON format, labeled by a unique identifier.
-
-    Parameters:
-    - data: pd.DataFrame, the input data.
-    - output_file_path: str, path for the output GeoJSON file.
-    - x_col: str, column name for the x coordinates (longitude).
-    - y_col: str, column name for the y coordinates (latitude).
-    - id_col: str, column name for the unique identifier (transect id).
-    - columns_to_keep: List[str], list of columns to keep in the output GeoJSON file. Defaults to None.
-
-    Returns:
-    - str, path for the created GeoJSON file.
-    """
-
-    # Convert to GeoDataFrame
-    gdf = gpd.GeoDataFrame(
-        data,
-        geometry=[Point(xy) for xy in zip(data[x_col], data[y_col])],
-        crs="EPSG:4326",
-    )
-
-    if columns_to_keep:
-        columns_to_keep.append(id_col)
-        columns_to_keep.append("geometry")
-        gdf = gdf[columns_to_keep].copy()
-        if "dates" in gdf.columns:
-            gdf["dates"] = pd.to_datetime(gdf["dates"]).dt.tz_convert(None)
-        if "date" in gdf.columns:
-            gdf["date"] = pd.to_datetime(gdf["date"]).dt.tz_convert(None)
-        gdf = stringify_datetime_columns(gdf)
-    else:
-        # Keep only necessary columns
-        gdf = gdf[[id_col, "geometry"]].copy()
-
-    # Export to GeoJSON
-    gdf.to_file(output_file_path, driver="GeoJSON")
-
-    # Return the path to the output file
-    return output_file_path
 
 
 def create_complete_line_string(points):
@@ -2183,7 +1969,7 @@ def filter_dropped_points_out_of_timeseries(
         dates_to_drop = dropped_points_df.loc[
             dropped_points_df["transect_id"] == t_id, "dates"
         ]
-        timeseries_df.loc[timeseries_df["dates"].isin(dates_to_drop), t_id] = np.nan
+        timeseries_df.loc[timeseries_df["dates"].isin(dates_to_drop), t_id] = np.nan  # type: ignore
     return timeseries_df
 
 
@@ -2332,7 +2118,9 @@ def create_merged_timeseries_gdf(
 
 
 def save_timeseries_points_as_geojson(
-    merged_timeseries_gdf: gpd.GeoDataFrame, ext: str = "raw", save_location: str = None
+    merged_timeseries_gdf: gpd.GeoDataFrame,
+    ext: str = "raw",
+    save_location: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """
     Save the merged timeseries that includes the shore_x and shore_y columns to a GeoJSON file.
@@ -2375,7 +2163,9 @@ def save_timeseries_points_as_geojson(
 
 
 def save_timeseries_vectors_as_geojson(
-    merged_timeseries_gdf: gpd.GeoDataFrame, ext: str = "raw", save_location: str = None
+    merged_timeseries_gdf: gpd.GeoDataFrame,
+    ext: str = "raw",
+    save_location: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """
     Save the time series of along shore points as vectors to a GeoJSON file called '{ext}_transect_time_series_vectors.geojson'.
@@ -2689,9 +2479,9 @@ def copy_configs(src: str, dst: str) -> None:
 
 def create_file_chooser(
     callback: Callable[[FileChooser], None],
-    title: str = None,
-    filter_pattern: str = None,
-    starting_directory: str = None,
+    title: Optional[str] = None,
+    filter_pattern: Optional[str] = None,
+    starting_directory: Optional[str] = None,
 ):
     """
     This function creates a file chooser and a button to close the file chooser.
@@ -2745,7 +2535,7 @@ def create_file_chooser(
     return chooser
 
 
-def get_most_accurate_epsg(epsg_code: int, polygon: gpd.GeoDataFrame):
+def get_most_accurate_epsg(epsg_code: Union[int, str], polygon: gpd.GeoDataFrame):
     """Returns most accurate epsg code based on lat and lon if epsg code is 4326 or 4327. If not 4326 or 4327 returns unchanged epsg code
     Args:
         epsg_code(int or str): current epsg code
@@ -2765,7 +2555,9 @@ def get_most_accurate_epsg(epsg_code: int, polygon: gpd.GeoDataFrame):
     return epsg_code
 
 
-def create_dir_chooser(callback, title: str = None, starting_directory: str = "data"):
+def create_dir_chooser(
+    callback, title: Optional[str] = None, starting_directory: str = "data"
+):
     """
     Creates a directory chooser widget.
 
@@ -2876,14 +2668,8 @@ def create_hover_box(
     Returns:
     container (VBox): Box with the given title and details about the feature given by feature_html
     """
-    padding = "0px 0px 4px 0px"  # upper, right, bottom, left
-    # create title
-    # title = HTML(f"<b>{title}</b>")
-    title_html = HTML(
-        f"<b>{title}</b>", layout=Layout(margin="0px 8px")
-    )  # Adjust 10px as needed for left and right margins
-
-    # Default message shown when nothing has been hovered
+    padding = "0px 0px 4px 0px"
+    title_html = HTML(f"<b>{title}</b>", layout=Layout(margin="0px 8px"))
     msg = HTML(f"{default_msg}<br/>")
     # open button allows user to see hover data
     uncollapse_button = ToggleButton(
@@ -2902,27 +2688,16 @@ def create_hover_box(
         button_style="danger",
         layout=Layout(height="28px", width="28px", padding=padding),
     )
-
-    # message tells user that data is available on hover
-    container_content = VBox([msg])
-    if feature_html.value == "":
-        container_content.children = [msg]
-    elif feature_html.value != "":
-        container_content.children = [feature_html]
-
-    # default configuration for container is in collapsed mode
+    container_content = VBox([feature_html] if feature_html.value else [msg])
     container_header = HBox([uncollapse_button, title_html])
     container = VBox([container_header])
 
-    def uncollapse_click(change: dict):
-        if feature_html.value == "":
-            container_content.children = [msg]
-        elif feature_html.value != "":
-            container_content.children = [feature_html]
+    def uncollapse_click(change):
+        container_content.children = [feature_html] if feature_html.value else [msg]
         container_header.children = [close_button, title_html]
         container.children = [container_header, container_content]
 
-    def collapse_click(change: dict):
+    def collapse_click(change):
         container_header.children = [uncollapse_button, title_html]
         container.children = [container_header]
 
@@ -2950,24 +2725,17 @@ def create_warning_box(
     Returns:
         HBox: The warning box containing the title, message, and close button.
     """
-    # create title
-    if title is None:
-        title = "Warning"
+    title = title or "Warning"
+    msg = msg or "Something went wrong..."
+    instructions = instructions or ""
     warning_title = HTML(f"<h2 style='text-align: center;'>⚠️{title}</h2>")
-    # create msg
-    if msg is None:
-        msg = "Something went wrong..."
-    if instructions is None:
-        instructions = ""
     warning_msg = HTML(
-        f"<div style='max-height: 250px; overflow-x: hidden; overflow-y:  auto; text-align: center;'>"
-        f"<span style='color: red'>⚠️</span>{msg}"
-        f"</div>"
+        f"<div style='max-height: 250px; overflow-x: hidden; overflow-y: auto; text-align: center;'>"
+        f"<span style='color: red'>⚠️</span>{msg}</div>"
     )
     instructions_msg = HTML(
-        f"<div style='max-height: 210px; overflow-x: hidden; overflow-y:  auto; text-align: center;'>"
-        f"<span style='color: red'></span>{instructions}"
-        f"</div>"
+        f"<div style='max-height: 210px; overflow-x: hidden; overflow-y: auto; text-align: center;'>"
+        f"<span style='color: red'></span>{instructions}</div>"
     )
     x_button = ToggleButton(
         value=False,
@@ -2976,7 +2744,6 @@ def create_warning_box(
         button_style="danger",
         layout=Layout(height="28px", width="28px"),
     )
-
     close_button = ToggleButton(
         value=False,
         description="Close",
@@ -2999,10 +2766,8 @@ def create_warning_box(
 
     def close_click(change):
         if change["new"]:
-            warning_content.close()
-            x_button.close()
-            close_button.close()
-            warning_box.close()
+            for widget in [warning_content, x_button, close_button, warning_box]:
+                widget.close()
 
     close_button.observe(close_click, "value")
     x_button.observe(close_click, "value")
@@ -3018,8 +2783,8 @@ def clear_row(row: HBox):
     Args:
         row (HBox)(VBox): row or column
     """
-    for index in range(len(row.children)):
-        row.children[index].close()
+    for child in row.children:
+        child.close()
     row.children = []
 
 
@@ -3149,7 +2914,9 @@ def extract_roi_data(json_data: dict, roi_id: str, fields_of_interest: list = No
     return roi_data
 
 
-def extract_fields(data: dict, key=None, fields_of_interest: list = None) -> dict:
+def extract_fields(
+    data: dict, key=None, fields_of_interest: Optional[list] = None
+) -> dict:
     """
     Extracts specified fields from a given dictionary.
 
@@ -3346,42 +3113,6 @@ def remove_z_coordinates(geodf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         return geodf.explode(ignore_index=True)
 
 
-def move_report_files(
-    settings: dict, dest: str, filename_pattern="extract_shorelines*.txt"
-):
-    """
-    Move report files matching a specific pattern from the source directory to the destination.
-
-    :param settings: Dictionary containing 'filepath' and 'sitename'.
-    :param dest: The destination path where the report files will be moved.
-    :param filename_pattern: Pattern of the filenames to search for, defaults to 'extract_shorelines*.txt'.
-    """
-    # Attempt to get the data_path and sitename
-    filepath = settings.get("filepath") or settings.get("inputs", {}).get("filepath")
-    sitename = settings.get("sitename") or settings.get("inputs", {}).get("sitename")
-
-    # Check if data_path and sitename were successfully retrieved
-    if not filepath or not sitename:
-        logger.error("Data path or sitename not found in settings.")
-        return
-
-    # Construct the pattern to match files
-    pattern = os.path.join(filepath, sitename, filename_pattern)
-    matching_files = glob.glob(pattern)
-
-    # Check if there are files to move
-    if not matching_files:
-        logger.warning(f"No files found matching the pattern: {pattern}")
-        return
-
-    # Move the files
-    try:
-        file_utilities.move_files(matching_files, dest, delete_src=True)
-        logger.info(f"Files moved successfully to {dest}")
-    except Exception as e:
-        logger.error(f"Error moving files: {e}")
-
-
 def save_extracted_shoreline_figures(settings: dict, save_path: str):
     """
     Save extracted shoreline figures to the specified save path.
@@ -3569,27 +3300,23 @@ def create_json_config(
     return config
 
 
-def set_crs_or_initialize_empty(gdf: gpd.GeoDataFrame, epsg_code: str):
-    """Set the CRS for the given GeoDataFrame or initialize an empty one."""
-    # Check if the GeoDataFrame is empty
-    if gdf is None:
-        # Initialize an empty GeoDataFrame with the new CRS
-        return gpd.GeoDataFrame(geometry=[], crs=epsg_code)
-    elif gdf.empty:
-        # Initialize an empty GeoDataFrame with the new CRS
-        return gpd.GeoDataFrame(geometry=[], crs=epsg_code)
-    else:
-        # Transform the CRS of the non-empty GeoDataFrame
-        return gdf.to_crs(epsg_code)
+def set_crs_or_initialize_empty(
+    gdf: gpd.GeoDataFrame, epsg_code: str
+) -> gpd.GeoDataFrame:
+    return (
+        gpd.GeoDataFrame(geometry=[], crs=epsg_code)
+        if gdf is None or gdf.empty
+        else gdf.to_crs(epsg_code)
+    )
 
 
 def create_config_gdf(
     rois_gdf: gpd.GeoDataFrame,
-    shorelines_gdf: gpd.GeoDataFrame = None,
-    transects_gdf: gpd.GeoDataFrame = None,
-    bbox_gdf: gpd.GeoDataFrame = None,
-    epsg_code: int = None,
-    shoreline_extraction_area_gdf: gpd.GeoDataFrame = None,
+    shorelines_gdf: Optional[gpd.GeoDataFrame] = None,
+    transects_gdf: Optional[gpd.GeoDataFrame] = None,
+    bbox_gdf: Optional[gpd.GeoDataFrame] = None,
+    epsg_code: Optional[int] = None,
+    shoreline_extraction_area_gdf: Optional[gpd.GeoDataFrame] = None,
 ) -> gpd.GeoDataFrame:
     """
     Create a concatenated GeoDataFrame from provided GeoDataFrames with a consistent CRS.
@@ -3644,57 +3371,20 @@ def create_config_gdf(
     return config_gdf
 
 
-def get_jpgs_from_data() -> str:
-    """Returns the folder where all jpgs were copied from the data folder in coastseg.
-    This is where the model will save the computed segmentations."""
-    # Data folder location
-    base_path = os.path.abspath(core_utilities.get_base_dir())
-    src_path = os.path.join(base_path, "data")
-    if os.path.exists(src_path):
-        rename_jpgs(src_path)
-        # Create a new folder to hold all the data
-        location = base_path
-        name = "segmentation_data"
-        # new folder "segmentation_data_datetime"
-        new_folder = file_utilities.mk_new_dir(name, location)
-        # create subdirectories for each image type
-        file_types = ["RGB", "SWIR", "NIR"]
-        for file_type in file_types:
-            new_path = os.path.join(new_folder, file_type)
-            if not os.path.exists(new_path):
-                os.mkdir(new_path)
-            glob_str = (
-                src_path
-                + str(os.sep + "**" + os.sep) * 2
-                + "preprocessed"
-                + os.sep
-                + file_type
-                + os.sep
-                + "*.jpg"
-            )
-            # copy all jpg files from data folder in coastseg to new folder
-            for file in glob.glob(glob_str):
-                shutil.copy(file, new_path)
-            RGB_path = os.path.join(new_folder, "RGB")
-        return RGB_path
-    else:
-        print("ERROR: Cannot find the data directory in coastseg")
-        raise Exception("ERROR: Cannot find the data directory in coastseg")
-
-
 def save_config_files(
     save_location: str = "",
     roi_ids: list[str] = [],
     roi_settings: dict = {},
     shoreline_settings: dict = {},
-    transects_gdf=None,
-    shorelines_gdf=None,
-    shoreline_extraction_area_gdf=None,
-    roi_gdf=None,
-    epsg_code="epsg:4326",
+    transects_gdf: Optional[gpd.GeoDataFrame] = None,
+    shorelines_gdf: Optional[gpd.GeoDataFrame] = None,
+    shoreline_extraction_area_gdf: Optional[gpd.GeoDataFrame] = None,
+    roi_gdf: Optional[gpd.GeoDataFrame] = None,
+    epsg_code: str = "epsg:4326",
 ):
     """
-    Save configuration files.
+    Save configuration files. The config.json file and the config GeoDataFrame
+    containing the ROIs, reference shoreline, and transects are saved to the specified location.
 
     Args:
         save_location (str): The directory where the configuration files will be saved.
@@ -3713,9 +3403,8 @@ def save_config_files(
     config_json = create_json_config(roi_settings, shoreline_settings, roi_ids=roi_ids)
     file_utilities.config_to_file(config_json, save_location)
     # save a config GeoDataFrame with the rois, reference shoreline and transects
-    if roi_gdf is not None:
-        if not roi_gdf.empty:
-            epsg_code = roi_gdf.crs
+    if roi_gdf is not None and not roi_gdf.empty:
+        epsg_code = roi_gdf.crs
     config_gdf = create_config_gdf(
         rois_gdf=roi_gdf,
         shorelines_gdf=shorelines_gdf,

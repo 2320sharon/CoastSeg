@@ -44,7 +44,6 @@ def test_authenticate_and_initialize_success():
         patch("coastseg.common.ee.Initialize") as mock_initialize,
         patch("coastseg.common.needs_authentication", return_value=True),
     ):  # this allows the mock auth function to be called
-
         # Mock successful initialization
         mock_initialize.return_value = None
 
@@ -78,7 +77,6 @@ def test_authenticate_and_initialize_retry():
         patch("coastseg.common.ee.Initialize") as mock_initialize,
         patch("coastseg.common.needs_authentication", return_value=True),
     ):  # this allows the mock auth function to be called
-
         # Mock an exception on first initialize, then success
         mock_initialize.side_effect = [Exception("Credentials file not found"), None]
 
@@ -2601,3 +2599,356 @@ def test_convert_points_to_linestrings_single_point_per_date():
 
     # Check the result
     assert len(linestrings_gdf) == 1
+
+
+# ============================================================================
+# Additional test coverage for common.py functions
+# ============================================================================
+
+
+class TestPolygonAreaCalculation:
+    """Test area calculation functions."""
+
+    def test_get_area_simple_polygon(self):
+        """Test area calculation for a simple geojson polygon."""
+        # Create a 1-degree square polygon at the equator (~12,321 km²)
+        polygon_geojson = {
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+        }
+
+        area = common.get_area(polygon_geojson)
+        # Approximate area of 1-degree square at equator (~12.3 billion m²)
+        assert area == pytest.approx(12.3e9, rel=0.1)
+
+    def test_get_area_small_polygon(self):
+        """Test area calculation for a small polygon."""
+        # Create a smaller polygon (0.1 degree square)
+        polygon_geojson = {
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [0.1, 0], [0.1, 0.1], [0, 0.1], [0, 0]]],
+        }
+
+        area = common.get_area(polygon_geojson)
+        # Should be about 1/100th of the larger polygon (~123 million m²)
+        assert area == pytest.approx(123e6, rel=0.1)
+
+
+class TestGeometryValidation:
+    """Test geometry validation functions."""
+
+    def test_validate_geometry_types_valid_polygons(self, standard_polygon_gdf):
+        """Test validation with valid polygon geometries."""
+        # Should not raise any exception
+        common.validate_geometry_types(
+            standard_polygon_gdf, valid_types={"Polygon"}, feature_type="ROI"
+        )
+
+    def test_validate_geometry_types_invalid_geometry(self, simple_linestring_gdf):
+        """Test validation fails with invalid geometry type."""
+        with pytest.raises(Exception):  # Should raise InvalidGeometryType
+            common.validate_geometry_types(
+                simple_linestring_gdf, valid_types={"Polygon"}, feature_type="ROI"
+            )
+
+    def test_validate_geometry_types_mixed_valid(self):
+        """Test validation with mixed but valid geometry types."""
+        # Create GDF with Points and Polygons
+        geometries = [Point(0, 0), Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])]
+        gdf = gpd.GeoDataFrame(geometry=geometries, crs="EPSG:4326")
+
+        # Should not raise exception
+        common.validate_geometry_types(
+            gdf, valid_types={"Point", "Polygon"}, feature_type="Mixed"
+        )
+
+
+class TestROIUtilities:
+    """Test ROI-specific utility functions."""
+
+    def test_get_roi_polygon_valid_id(self, valid_rois_gdf):
+        """Test extracting polygon coordinates for valid ROI ID."""
+        # Get the first ROI ID from the fixture
+        roi_id = valid_rois_gdf.iloc[0]["id"]
+
+        polygon_coords = common.get_roi_polygon(valid_rois_gdf, roi_id)
+
+        assert polygon_coords is not None
+        assert isinstance(polygon_coords, list)
+        assert len(polygon_coords) > 0
+        # Check that it's a list of coordinate pairs [x, y]
+        assert all(len(coord) == 2 for coord in polygon_coords)
+        # Check that coordinates are numeric
+        assert all(
+            isinstance(coord[0], (int, float)) and isinstance(coord[1], (int, float))
+            for coord in polygon_coords
+        )
+
+    def test_get_roi_polygon_invalid_id(self, valid_rois_gdf):
+        """Test extracting polygon for non-existent ROI ID."""
+        invalid_id = 99999  # Use an integer ID that doesn't exist
+
+        result = common.get_roi_polygon(valid_rois_gdf, invalid_id)
+
+        assert result is None
+
+    def test_get_roi_polygon_empty_gdf(self):
+        """Test extracting polygon from empty GeoDataFrame."""
+        empty_gdf = gpd.GeoDataFrame(columns=["id", "geometry"], crs="EPSG:4326")
+
+        result = common.get_roi_polygon(empty_gdf, 1)  # Use integer ID
+
+        assert result is None
+
+
+class TestSatelliteUtilities:
+    """Test satellite-related utility functions."""
+
+    @pytest.mark.parametrize(
+        "filename,expected",
+        [
+            (
+                "prefix_suffix_L8.jpg",
+                "L8",
+            ),  # JPG format with satellite in 3rd position (index 2)
+            ("prefix_suffix_L7.jpg", "L7"),
+            ("prefix_suffix_L5.jpg", "L5"),
+            ("prefix_suffix_L9.jpg", "L9"),
+            ("prefix_suffix_S2.jpg", "S2"),
+            ("prefix_suffix_S1.jpg", "S1"),
+            ("invalid_format.jpg", None),  # Invalid format should return None
+            ("short.jpg", None),  # Too short to extract satellite
+        ],
+    )
+    def test_get_satellite_name(self, filename, expected):
+        """Test satellite name extraction from JPG filename format."""
+        result = common.get_satellite_name(filename)
+        assert result == expected
+
+
+class TestDataProcessingUtilities:
+    """Test data processing and filtering functions."""
+
+    def test_merge_dataframes_basic(self):
+        """Test merging two dataframes on default columns."""
+        df1 = pd.DataFrame(
+            {
+                "transect_id": ["T1", "T2", "T3"],
+                "dates": ["2020-01-01", "2020-01-02", "2020-01-03"],
+                "cross_distance": [10, 20, 30],
+            }
+        )
+
+        df2 = pd.DataFrame(
+            {
+                "transect_id": ["T1", "T2", "T4"],
+                "dates": ["2020-01-01", "2020-01-02", "2020-01-04"],
+                "shore_position": [5, 15, 25],
+            }
+        )
+
+        result = common.merge_dataframes(df1, df2)
+
+        assert len(result) == 2  # Only T1 and T2 should match
+        assert "cross_distance" in result.columns
+        assert "shore_position" in result.columns
+        assert set(result["transect_id"]) == {"T1", "T2"}
+
+    def test_merge_dataframes_custom_columns(self):
+        """Test merging dataframes on custom columns."""
+        df1 = pd.DataFrame({"id": ["A", "B", "C"], "value1": [1, 2, 3]})
+
+        df2 = pd.DataFrame({"id": ["A", "B", "D"], "value2": [10, 20, 30]})
+
+        result = common.merge_dataframes(df1, df2, columns_to_merge_on={"id"})
+
+        assert len(result) == 2  # Only A and B should match
+        assert set(result["id"]) == {"A", "B"}
+
+
+class TestFileUtilities:
+    """Test file and path utility functions."""
+
+    def test_extract_date_from_filename_valid_format(self):
+        """Test date extraction from filename with valid format."""
+        filename = "2020-01-15-12-30-45_S2_ID_1_ms.tif"
+        result = common.extract_date_from_filename(filename)
+        assert result == "2020-01-15-12-30-45"
+
+    def test_extract_date_from_filename_partial_format(self):
+        """Test date extraction from filename starting with valid date."""
+        filename = "2024-05-28-22-18-07_some_other_data.jpg"
+        result = common.extract_date_from_filename(filename)
+        assert result == "2024-05-28-22-18-07"
+
+    def test_extract_date_from_filename_no_date(self):
+        """Test date extraction from filename with no recognizable date."""
+        filename = "some_random_file.tif"
+        result = common.extract_date_from_filename(filename)
+        # Should return some default or handle gracefully
+        assert isinstance(result, str)
+
+
+class TestRandomIdGeneration:
+    """Test ID generation utilities."""
+
+    def test_random_prefix_length(self):
+        """Test random prefix generation with specific length."""
+        for length in [1, 3, 5, 10]:
+            prefix = common.random_prefix(length)
+            assert len(prefix) == length
+            assert prefix.isalnum()
+
+    def test_generate_ids_unique(self):
+        """Test that generated IDs are unique."""
+        num_ids = 100
+        prefix_length = 3
+
+        ids = common.generate_ids(num_ids, prefix_length)
+
+        assert len(ids) == num_ids
+        assert len(set(ids)) == num_ids  # All should be unique
+        # IDs have prefix + sequential number (1-3 digits for num_ids=100)
+        assert all(len(id_str) >= prefix_length + 1 for id_str in ids)
+        assert all(
+            len(id_str) <= prefix_length + 3 for id_str in ids
+        )  # Max 3 digits for 100 IDs
+
+    def test_create_unique_ids_gdf(self, standard_polygon_gdf):
+        """Test creating unique IDs for GeoDataFrame."""
+        # Remove existing 'id' column if present
+        gdf_copy = standard_polygon_gdf.copy()
+        if "id" in gdf_copy.columns:
+            gdf_copy = gdf_copy.drop(columns=["id"])
+
+        result = common.create_unique_ids(gdf_copy, prefix_length=4)
+
+        assert "id" in result.columns
+        assert len(result["id"].unique()) == len(result)  # All IDs should be unique
+        # IDs have prefix (4 chars) + sequential number (1-2 digits for small GDF)
+        assert all(
+            len(id_str) >= 5 for id_str in result["id"]
+        )  # At least prefix + 1 digit
+
+
+class TestDataFrameUtilities:
+    """Test DataFrame processing utilities."""
+
+    def test_check_unique_ids_all_unique(self):
+        """Test checking unique IDs when all are unique."""
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": ["A", "B", "C"],
+                "geometry": [Point(0, 0), Point(1, 1), Point(2, 2)],
+            },
+            crs="EPSG:4326",
+        )
+
+        assert common.check_unique_ids(gdf)
+
+    def test_check_unique_ids_duplicates(self):
+        """Test checking unique IDs when duplicates exist."""
+        gdf = gpd.GeoDataFrame(
+            {
+                "id": ["A", "B", "A"],  # Duplicate 'A'
+                "geometry": [Point(0, 0), Point(1, 1), Point(2, 2)],
+            },
+            crs="EPSG:4326",
+        )
+
+        assert not common.check_unique_ids(gdf)
+
+    def test_check_unique_ids_no_id_column(self):
+        """Test checking unique IDs when no 'id' column exists."""
+        gdf = gpd.GeoDataFrame(
+            {
+                "name": ["A", "B", "C"],
+                "geometry": [Point(0, 0), Point(1, 1), Point(2, 2)],
+            },
+            crs="EPSG:4326",
+        )
+
+        assert not common.check_unique_ids(gdf)
+
+
+class TestURLAndDownloadUtilities:
+    """Test URL processing and download utilities."""
+
+    @pytest.mark.parametrize(
+        "coords,expected_lon,expected_lat",
+        [
+            ([(0, 0), (2, 0), (2, 2), (0, 2)], 1.0, 1.0),  # Simple square
+            ([(10, 10), (20, 10), (20, 20), (10, 20)], 15.0, 15.0),  # Offset square
+            ([(-1, -1), (1, -1), (1, 1), (-1, 1)], 0.0, 0.0),  # Centered on origin
+        ],
+    )
+    def test_get_center_point(self, coords, expected_lon, expected_lat):
+        """Test center point calculation for various polygons."""
+        result = common.get_center_point(coords)
+
+        assert len(result) == 2
+        lon, lat = result
+        assert lon == pytest.approx(expected_lon, abs=1e-10)
+        assert lat == pytest.approx(expected_lat, abs=1e-10)
+
+
+class TestConfigurationUtilities:
+    """Test configuration processing utilities."""
+
+    def test_extract_fields_basic(self):
+        """Test extracting specific fields from dictionary."""
+        data = {"field1": "value1", "field2": "value2", "field3": "value3"}
+
+        fields_to_extract = ["field1", "field3"]
+        result = common.extract_fields(data, fields_of_interest=fields_to_extract)
+
+        expected = {"field1": "value1", "field3": "value3"}
+        assert result == expected
+
+    def test_extract_fields_missing_fields(self):
+        """Test extracting fields when some don't exist."""
+        data = {"field1": "value1", "field2": "value2"}
+
+        fields_to_extract = ["field1", "nonexistent_field"]
+        result = common.extract_fields(data, fields_of_interest=fields_to_extract)
+
+        expected = {"field1": "value1"}  # Should only include existing fields
+        assert result == expected
+
+    def test_extract_fields_empty_list(self):
+        """Test extracting fields with empty list."""
+        data = {"field1": "value1", "field2": "value2"}
+
+        result = common.extract_fields(data, fields_of_interest=[])
+
+        # Should return empty dict when no fields to extract
+        assert result == {}
+
+
+# ============================================================================
+# Integration tests for complex workflows
+# ============================================================================
+
+
+class TestWorkflowIntegration:
+    """Test integration of multiple functions in typical workflows."""
+
+    def test_roi_processing_workflow(self, valid_rois_gdf):
+        """Test ROI processing workflow."""
+        # Check if ROI has unique IDs
+        has_unique_ids = common.check_unique_ids(valid_rois_gdf)
+
+        if not has_unique_ids:
+            # Add unique IDs if needed
+            processed_gdf = common.create_unique_ids(valid_rois_gdf)
+            assert common.check_unique_ids(processed_gdf)
+
+        # Calculate ROI area
+        area = common.get_roi_area(valid_rois_gdf)
+        assert area > 0
+        assert isinstance(area, float)
+
+        # Extract polygon coordinates for first ROI
+        first_roi_id = valid_rois_gdf.iloc[0]["id"]
+        polygon_coords = common.get_roi_polygon(valid_rois_gdf, first_roi_id)
+        assert polygon_coords is not None

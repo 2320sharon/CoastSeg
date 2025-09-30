@@ -12,7 +12,6 @@ from shapely.geometry import LineString, Polygon
 from shapely.ops import unary_union
 
 # Project / local
-from coastseg.common import create_unique_ids
 from coastseg.feature import Feature
 
 logger = logging.getLogger(__name__)
@@ -194,8 +193,17 @@ def load_intersecting_transects(
 
     combined_gdf = Feature.concat_clean(gdfs)
 
-    # Final processing with Feature utilities
-    return create_unique_ids(combined_gdf, prefix_length=3)
+    # Use Feature.clean_gdf with unique_ids=True instead of direct create_unique_ids call
+    return Feature.clean_gdf(
+        combined_gdf,
+        columns_to_keep=columns_to_keep,
+        output_crs=crs,
+        create_ids_flag=False,  # Already have IDs from read_masked_clean
+        geometry_types=("LineString", "MultiLineString"),
+        feature_type="transects",
+        unique_ids=True,  # This handles unique ID generation internally
+        ids_as_str=True,
+    )
 
 
 class Transects(Feature):
@@ -344,20 +352,9 @@ class Transects(Feature):
         )
 
         if gdf.empty:
-            logger.warning(f"No transects found within the bounding box. {bbox}")
-            return gdf
+            logger.warning(f"No transects found within bounding box: {bbox.bounds}")
 
-        # Use parent class method for consistent cleaning
-        return self.clean_gdf(
-            gdf,
-            columns_to_keep=list(self.COLUMNS_TO_KEEP),
-            output_crs=self.DEFAULT_CRS,
-            create_ids_flag=True,
-            geometry_types=("LineString", "MultiLineString"),
-            feature_type="transects",
-            unique_ids=True,
-            ids_as_str=True,
-        )
+        return gdf  # Already cleaned by load_intersecting_transects
 
     @classmethod
     def from_bbox(

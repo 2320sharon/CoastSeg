@@ -2,6 +2,7 @@ import datetime
 import json
 import logging
 import os
+import pathlib
 import re
 import shutil
 from contextlib import contextmanager
@@ -52,23 +53,6 @@ def progress_bar_context(
     else:
         # If not using a progress bar, just yield a no-op function
         yield lambda message: None
-
-
-def drop_columns_if_exist(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-    """
-    Drop columns from a DataFrame if they exist.
-
-    Args:
-        df (pd.DataFrame): DataFrame to drop columns from.
-        columns (List[str]): List of column names to drop.
-
-    Returns:
-        pd.DataFrame: DataFrame with columns dropped.
-    """
-    for col in columns:
-        if col in df.columns:
-            df.drop(columns=col, inplace=True)
-    return df
 
 
 def join_model_scores_to_time_series(
@@ -153,7 +137,7 @@ def merge_model_scores(
     score_col = f"{model_type}_model_score"
     threshold_col = f"{model_type}_threshold"
 
-    drop_columns_if_exist(df, [score_col, threshold_col])
+    df.drop(columns=[score_col, threshold_col], errors="ignore", inplace=True)
 
     merge_cols = [merge_on_col, "model_scores"]
     if "threshold" in score_data.columns:
@@ -843,68 +827,6 @@ def find_directory_recursively(path: str = ".", name: str = "RGB") -> str:
     return dir_location
 
 
-def find_files_recursively(
-    path: str = ".", search_pattern: str = "*RGB*", raise_error: bool = False
-) -> List[str]:
-    """
-    Recursively search for files matching the given pattern.
-
-    Args:
-        path (str): The starting directory to search in. Defaults to current directory.
-        search_pattern (str): The search pattern to match against file names. Defaults to "*RGB*".
-        raise_error (bool): Whether to raise an error if no files are found. Defaults to False.
-
-    Returns:
-        List[str]: A list of paths to all files that match the given search pattern.
-
-    Raises:
-        Exception: If no files are found and raise_error is True.
-    """
-    file_locations = []
-    regex = re.compile(search_pattern, re.IGNORECASE)
-    for dirpath, dirnames, filenames in os.walk(path):
-        for filename in filenames:
-            if regex.match(filename):
-                file_location = os.path.join(dirpath, filename)
-                file_locations.append(file_location)
-
-    if not file_locations and raise_error:
-        raise Exception(f"No files matching {search_pattern} could be found at {path}")
-
-    return file_locations
-
-
-def find_files_in_directory(
-    path: str = ".", search_pattern: str = "*RGB*", raise_error: bool = False
-) -> List[str]:
-    """
-    Find files matching the given pattern in the specified directory (non-recursive).
-
-    Args:
-        path (str): The directory to search in. Defaults to current directory.
-        search_pattern (str): The search pattern to match against file names. Defaults to "*RGB*".
-        raise_error (bool): Whether to raise an error if no files are found. Defaults to False.
-
-    Returns:
-        List[str]: A list of paths to all files that match the given search pattern.
-
-    Raises:
-        Exception: If no files are found and raise_error is True.
-    """
-    file_locations = []
-    regex = re.compile(search_pattern, re.IGNORECASE)
-    filenames = os.listdir(path)
-    for filename in filenames:
-        if regex.match(filename):
-            file_location = os.path.join(path, filename)
-            file_locations.append(file_location)
-
-    if not file_locations and raise_error:
-        raise Exception(f"No files matching {search_pattern} could be found at {path}")
-
-    return file_locations
-
-
 def find_file_recursively(path: str = ".", name: str = "RGB") -> str:
     """
     Recursively search for a file with the given name.
@@ -937,28 +859,6 @@ def find_file_recursively(path: str = ".", name: str = "RGB") -> str:
     return file_location
 
 
-def mk_new_dir(name: str, location: str) -> str:
-    """
-    Create a new folder with name_datetime stamp at the specified location.
-
-    Args:
-        name (str): Name of folder to create.
-        location (str): Full path to location to create folder.
-
-    Returns:
-        str: Path to the newly created folder.
-
-    Raises:
-        Exception: If the location provided does not exist.
-    """
-    if os.path.exists(location):
-        new_folder = location + os.sep + name + "_" + generate_datestring()
-        os.mkdir(new_folder)
-        return new_folder
-    else:
-        raise Exception("Location provided does not exist.")
-
-
 def load_json_data_from_file(search_location: str, filename: str) -> dict:
     """
     Load JSON data from a file by searching for the file in the specified location.
@@ -982,7 +882,7 @@ def load_json_data_from_file(search_location: str, filename: str) -> dict:
     return json_data
 
 
-def load_data_from_json(filepath: str) -> dict:
+def load_data_from_json(filepath: Union[str, pathlib.Path]) -> dict:
     """
     Read data from a JSON file and return it as a dictionary.
 
