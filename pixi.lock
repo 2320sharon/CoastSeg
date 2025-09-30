@@ -4677,10 +4677,9 @@ packages:
 - pypi: .
   name: coastseg
   version: 1.6.0
-  sha256: 6bf27ae0bd1036d1b9ae9527919c34a7a691237b0f074805ed53b3e2eb1180a8
+  sha256: 50ecb438e24c97cbc5614377f634ec5ce01e6ce7311b1422190f84cfc9e5ad72
   requires_dist:
   - aiohttp
-  - area
   - chardet
   - dask
   - doodleverse-utils>=0.0.35
