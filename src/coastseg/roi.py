@@ -373,7 +373,7 @@ class ROI(Feature):
             >>> import geopandas as gpd
             >>> from shapely.geometry import Polygon
             >>> from coastseg.roi import ROI
-            >>> 
+            >>>
             >>> # Create test GeoDataFrame with ROIs
             >>> roi_data = {
             ...     'id': ['roi1', 'roi2'],
@@ -383,7 +383,7 @@ class ROI(Feature):
             ...     ]
             ... }
             >>> rois_gdf = gpd.GeoDataFrame(roi_data, crs='EPSG:4326')
-            >>> 
+            >>>
             >>> # Extract single ROI by ID
             >>> single_roi = ROI.extract_roi_by_id(rois_gdf, 'roi1')
             >>> print(single_roi['id'].iloc[0])
@@ -394,7 +394,7 @@ class ROI(Feature):
 
         # Select a single roi by id
         single_roi = gdf[gdf["id"].astype(str) == str(roi_id)]
-        
+
         # If the id was not found in the GeoDataFrame raise an exception
         if single_roi.empty:
             logger.error(f"Id: {roi_id} was not found in {gdf}")
@@ -403,8 +403,10 @@ class ROI(Feature):
                 id_as_int = int(roi_id)
                 raise exceptions.Id_Not_Found(id_as_int)
             except (ValueError, TypeError):
-                raise exceptions.Id_Not_Found(None, f"The ROI id '{roi_id}' does not exist.")
-        
+                raise exceptions.Id_Not_Found(
+                    None, f"The ROI id '{roi_id}' does not exist."
+                )
+
         logger.info(f"single_roi: {single_roi}")
         return single_roi
 

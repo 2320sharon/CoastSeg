@@ -30,17 +30,20 @@ args = parser.parse_args()
 input_directory = args.path
 
 # uncomment the following lines for local testing only
-CoastSeg_location = r"C:\development\doodleverse\coastseg\CoastSeg" # path to CoastSeg
-roi_name = "ID_ztg2_datetime07-01-24__02_39_39" # name of the ROI directory in CoastSeg
-input_directory = os.path.join(CoastSeg_location, "data", roi_name, "jpg_files", "preprocessed", "RGB") # this is the path to the RGB directory of the ROI
+CoastSeg_location = r"C:\development\doodleverse\coastseg\CoastSeg"  # path to CoastSeg
+roi_name = "ID_ztg2_datetime07-01-24__02_39_39"  # name of the ROI directory in CoastSeg
+input_directory = os.path.join(
+    CoastSeg_location, "data", roi_name, "jpg_files", "preprocessed", "RGB"
+)  # this is the path to the RGB directory of the ROI
 
-def test_model(img_types:list, available_models_dict:dict, input_directory:str):
+
+def test_model(img_types: list, available_models_dict: dict, input_directory: str):
     """
     Tests models on different types of images.
     Parameters:
     img_types (list): A list of image types to be tested.
     available_models_dict (dict): A dictionary where keys are image types and values are lists of models available for those image types.
-    input_directory (str): The directory where input images are stored. Should be the RGB directory for the ROI containing the images 
+    input_directory (str): The directory where input images are stored. Should be the RGB directory for the ROI containing the images
     Raises:
     Exception: If session_name is not generated correctly.
     Prints:
@@ -96,26 +99,24 @@ def test_model(img_types:list, available_models_dict:dict, input_directory:str):
                 model_name=model_dict["model_type"],
                 use_GPU="0",
                 use_otsu=model_dict["otsu"],
-                use_tta=model_dict["tta"],
                 percent_no_data=50.0,
             )
 
 
 available_models_dict = {
     "RGB": [
-        "global_segformer_RGB_4class_14036903", # global segformer model
-        "AK_segformer_RGB_4class_14037041", # AK segformer model
+        "global_segformer_RGB_4class_14036903",  # global segformer model
+        "AK_segformer_RGB_4class_14037041",  # AK segformer model
     ],
     "MNDWI": [
-        "global_segformer_MNDWI_4class_14183366", # global segformer model
-        "AK_segformer_MNDWI_4class_14187478", # AK segformer model
+        "global_segformer_MNDWI_4class_14183366",  # global segformer model
+        "AK_segformer_MNDWI_4class_14187478",  # AK segformer model
     ],
     "NDWI": [
-      "global_segformer_NDWI_4class_14172182", # global segformer model
-      "AK_segformer_NDWI_4class_14183210", # AK segformer model
+        "global_segformer_NDWI_4class_14172182",  # global segformer model
+        "AK_segformer_NDWI_4class_14183210",  # AK segformer model
     ],
 }
-
 
 
 img_types = ["RGB", "MNDWI", "NDWI"]

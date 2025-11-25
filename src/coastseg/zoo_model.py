@@ -1293,7 +1293,6 @@ class Zoo_Model:
         model_name: str,
         use_GPU: str,
         use_otsu: bool,
-        use_tta: bool,
         percent_no_data: float,
         coregistered: bool = False,
     ):
@@ -1308,7 +1307,6 @@ class Zoo_Model:
             model_name (str): The name of the model.
             use_GPU (str): Whether to use GPU or not.
             use_otsu (bool): Whether to use Otsu thresholding or not.
-            use_tta (bool): Whether to use test-time augmentation or not.
             percent_no_data (float): The percentage of no data allowed in the image.
             coregistered (bool, optional): Whether the images are coregistered or not. Defaults to False.
 
@@ -1321,7 +1319,6 @@ class Zoo_Model:
         logger.info(f"model_implementation: {model_implementation}")
         logger.info(f"use_GPU: {use_GPU}")
         logger.info(f"use_otsu: {use_otsu}")
-        logger.info(f"use_tta: {use_tta}")
 
         print(f"Running model {model_name}")
         # print(f"self.settings: {self.settings}")
@@ -1341,7 +1338,6 @@ class Zoo_Model:
             "implementation": model_implementation,
             "model_type": model_name,
             "otsu": use_otsu,
-            "tta": use_tta,
             "percent_no_data": percent_no_data,
         }
 
@@ -1365,7 +1361,6 @@ class Zoo_Model:
         model_name: str,
         use_GPU: str,
         use_otsu: bool,
-        use_tta: bool,
         percent_no_data: float,
         coregistered: bool = False,
     ):
@@ -1380,7 +1375,6 @@ class Zoo_Model:
             model_name (str): The name of the model.
             use_GPU (str): Whether to use GPU or not.
             use_otsu (bool): Whether to use Otsu thresholding or not.
-            use_tta (bool): Whether to use test-time augmentation or not.
             percent_no_data (float): The percentage of no data allowed in the image.
             coregistered (bool, optional): Whether the images are coregistered or not. Defaults to False.
 
@@ -1393,7 +1387,6 @@ class Zoo_Model:
         logger.info(f"model_implementation: {model_implementation}")
         logger.info(f"use_GPU: {use_GPU}")
         logger.info(f"use_otsu: {use_otsu}")
-        logger.info(f"use_tta: {use_tta}")
 
         print(f"Running model {model_name}")
         # print(f"self.settings: {self.settings}")
@@ -1413,7 +1406,6 @@ class Zoo_Model:
             "implementation": model_implementation,
             "model_type": model_name,
             "otsu": use_otsu,
-            "tta": use_tta,
             "percent_no_data": percent_no_data,
             "use_local_model": self.settings.get("use_local_model", False),
             "local_model_path": local_model_path,
@@ -1601,7 +1593,6 @@ class Zoo_Model:
             model_name=model_name,
             use_GPU=settings.get("use_GPU", "0"),
             use_otsu=settings.get("otsu", False),
-            use_tta=settings.get("tta", False),
             percent_no_data=settings.get("percent_no_data", 0.50),
             coregistered=coregistered,
         )
@@ -1629,7 +1620,6 @@ class Zoo_Model:
             None
         """
         sample_direc = preprocessed_data["sample_direc"]
-        use_tta = preprocessed_data["tta"]
         use_otsu = preprocessed_data["otsu"]
         # Create list of files of types .npz,.jpg, or .png to run model on
         files_to_segment = self.get_files_for_seg(
@@ -1653,7 +1643,7 @@ class Zoo_Model:
                 NCLASSES=self.NCLASSES,
                 N_DATA_BANDS=self.N_DATA_BANDS,
                 TARGET_SIZE=self.TARGET_SIZE,
-                TESTTIMEAUG=use_tta,
+                TESTTIMEAUG=False,  # always set to false
                 WRITE_MODELMETADATA=False,
                 OTSU_THRESHOLD=use_otsu,
                 profile="meta",
