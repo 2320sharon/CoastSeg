@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 # External Python imports
 import ipywidgets as widgets
+import io
+import contextlib
 from google.auth import exceptions as google_auth_exceptions
 from ipyfilechooser import FileChooser
 from IPython.display import display
@@ -29,7 +31,7 @@ BOX_LAYOUT = widgets.Layout(
     min_height="0px",  # Initial height
     max_height="250px",  # Maximum height
     flex_flow="row",
-    overflow="auto",  # Will add scrollbar if content is too large
+    overflow="visible",  # keep layout from forcing scrollbars on toggle
     display="flex",
     flex="1 1 auto",  # Allows the box to grow based on content
 )
@@ -706,39 +708,54 @@ class UI:
         Returns:
             A VBox widget containing save to file controls.
         """
-        # save to file buttons
-        save_instr = widgets.HTML(
-            value="<h2>Save to file</h2>\
-                Save feature on the map to a geojson file.\
-                <br>Geojson file will be saved to CoastSeg directory.\
-            ",
-            layout=widgets.Layout(padding="0px"),
-        )
+        # Interactive save icon that reveals a dropdown menu when clicked
+        title = widgets.HTML(value="<h3>Save to file</h3>")
 
-        self.save_radio = widgets.Dropdown(
-            options=[
-                "Shoreline",
-                "Transects",
-                "Bbox",
-                "ROIs",
-            ],
-            value="Shoreline",
+        # Icon button that toggles menu visibility
+        self.save_menu_button = widgets.Button(
             description="",
-            disabled=False,
-        )
-
-        self.save_button = widgets.Button(
-            description=f"Save {self.save_radio.value}",
             icon="floppy-o",
+            tooltip="Click to choose feature to save",
+            layout=widgets.Layout(width="36px"),
             style=self.save_style,
         )
-        self.save_button.on_click(self.save_to_file_btn_clicked)
 
-        def save_radio_changed(change: dict):
-            self.save_button.description = f"Save {str(change['new'])} to file"
+        # Dropdown + confirm button (hidden by default)
+        self._save_dropdown = widgets.Dropdown(
+            options=["Shoreline", "Transects", "Bbox", "ROIs"],
+            value="Shoreline",
+            description="",
+            layout=widgets.Layout(width="160px"),
+        )
 
-        self.save_radio.observe(save_radio_changed, "value")
-        save_vbox = widgets.VBox([save_instr, self.save_radio, self.save_button])
+        save_confirm = widgets.Button(description="Save", style=self.save_style)
+
+        save_menu_box = widgets.VBox([self._save_dropdown, save_confirm])
+        save_menu_box.layout.display = "none"
+
+        def toggle_save_menu(btn: widgets.Button) -> None:
+            # Toggle visibility
+            save_menu_box.layout.display = (
+                "flex" if save_menu_box.layout.display == "none" else "none"
+            )
+
+        def confirm_save_action(btn: widgets.Button) -> None:
+            # Build a temporary button-like object and forward to existing handler
+            sel = str(self._save_dropdown.value)
+            temp = widgets.Button(description=f"Save {sel}")
+            # call existing handler to keep behavior consistent
+            self.save_to_file_btn_clicked(temp)
+            # hide menu after action
+            save_menu_box.layout.display = "none"
+
+        self.save_menu_button.on_click(toggle_save_menu)
+        save_confirm.on_click(confirm_save_action)
+
+        controls = widgets.HBox(
+            [self.save_menu_button, save_menu_box],
+            layout=widgets.Layout(align_items="flex-start", gap="8px"),
+        )
+        save_vbox = widgets.VBox([title, controls], layout=widgets.Layout(margin="0px"))
         return save_vbox
 
     def load_feature_on_map_buttons(self) -> widgets.VBox:
@@ -748,31 +765,50 @@ class UI:
             A VBox widget containing load feature controls.
         """
         load_instr = widgets.HTML(
-            value="<h2>Load Feature into Bounding Box</h2>\
-                Loads shoreline or transects into bounding box on map.\
-                </br>If no transects or shorelines exist in this area, then\
-               </br> draw bounding box somewhere else\
-                ",
+            value="<h3>Load Feature from File</h3>",
             layout=widgets.Layout(padding="0px"),
         )
-        self.load_radio = widgets.Dropdown(
-            options=["Shoreline", "Transects"],
-            value="Transects",
+
+        # Icon button to toggle load menu
+        self.load_menu_button = widgets.Button(
             description="",
-            disabled=False,
-        )
-        self.load_button = widgets.Button(
-            description=f"Load {self.load_radio.value}",
             icon="file-o",
+            tooltip="Click to choose feature to load from file",
+            layout=widgets.Layout(width="36px"),
             style=self.load_style,
         )
-        self.load_button.on_click(self.load_button_clicked)
 
-        def handle_load_radio_change(change: dict):
-            self.load_button.description = f"Load {str(change['new'])}"
+        self._load_dropdown = widgets.Dropdown(
+            options=["Shoreline", "Transects", "Bbox", "ROIs"],
+            value="Transects",
+            description="",
+            layout=widgets.Layout(width="160px"),
+        )
+        load_confirm = widgets.Button(description="Load", style=self.load_style)
 
-        self.load_radio.observe(handle_load_radio_change, "value")
-        load_buttons = widgets.VBox([load_instr, self.load_radio, self.load_button])
+        load_menu_box = widgets.VBox([self._load_dropdown, load_confirm])
+        load_menu_box.layout.display = "none"
+
+        def toggle_load_menu(btn: widgets.Button) -> None:
+            load_menu_box.layout.display = (
+                "flex" if load_menu_box.layout.display == "none" else "none"
+            )
+
+        def confirm_load_action(btn: widgets.Button) -> None:
+            sel = str(self._load_dropdown.value)
+            temp = widgets.Button(description=f"Load {sel} file")
+            # forward to existing handler to open file chooser
+            self.load_feature_from_file(temp)
+            load_menu_box.layout.display = "none"
+
+        self.load_menu_button.on_click(toggle_load_menu)
+        load_confirm.on_click(confirm_load_action)
+
+        controls = widgets.HBox(
+            [self.load_menu_button, load_menu_box],
+            layout=widgets.Layout(align_items="flex-start", gap="8px"),
+        )
+        load_buttons = widgets.VBox([load_instr, controls])
         return load_buttons
 
     def draw_control_section(self) -> widgets.VBox:
@@ -904,6 +940,236 @@ class UI:
             layout=widgets.Layout(margin="0px 5px 0px 5px"),
         )  # top right bottom left
 
+    def create_features_menu(self) -> widgets.VBox:
+        """Creates a compact Features menu (Load, Save, Generate ROI, Remove, Remove all).
+
+        The menu follows the notebook recipe: a header, a horizontal menu bar with
+        Load/Save/Generate ROI/Remove/Remove all, dropdowns that appear on demand,
+        a small ROI panel for Generate ROI, and uses existing handlers for actions.
+
+        Returns:
+            widgets.VBox: The assembled features menu.
+        """
+        FEATURE_OPTIONS = ["Shoreline", "Transects", "ROIs", "Bbox"]
+
+        # Header
+        features_header = widgets.Label(
+            value="Features",
+            layout=widgets.Layout(margin="0 0 4px 0", width="100%"),
+        )
+
+        # Buttons
+        btn_load = widgets.Button(
+            description="Load",
+            layout=widgets.Layout(width="80px"),
+            style=self.load_style,
+        )
+        btn_save = widgets.Button(
+            description="Save",
+            layout=widgets.Layout(width="80px"),
+            style=self.save_style,
+        )
+        btn_generate_roi = widgets.Button(
+            description="Generate ROI",
+            layout=widgets.Layout(width="120px"),
+            style=self.action_style,
+        )
+        btn_remove = widgets.Button(
+            description="Remove",
+            layout=widgets.Layout(width="80px"),
+            style=self.remove_style,
+        )
+        btn_remove_all = widgets.Button(
+            description="Remove all",
+            layout=widgets.Layout(width="100px"),
+            style=self.remove_style,
+        )
+
+        # Dropdowns (hidden by default)
+        dd_load = widgets.Dropdown(
+            options=[""] + FEATURE_OPTIONS,
+            description="",
+            layout=widgets.Layout(width="160px", display="none"),
+        )
+        dd_save = widgets.Dropdown(
+            options=[""] + FEATURE_OPTIONS,
+            description="",
+            layout=widgets.Layout(width="160px", display="none"),
+        )
+        dd_remove = widgets.Dropdown(
+            options=[""] + FEATURE_OPTIONS,
+            description="",
+            layout=widgets.Layout(width="160px", display="none"),
+        )
+
+        # ROI panel (hidden by default) - reuse existing units and area widgets
+        roi_units = self.units_radio or widgets.Dropdown(
+            options=["km²", "m²", "ha"], value="km²", description="Units:"
+        )
+        roi_small = self.sm_area_textbox or widgets.FloatText(
+            value=0.0, description="Small ROI:"
+        )
+        roi_large = self.lg_area_textbox or widgets.FloatText(
+            value=20.0, description="Large ROI:"
+        )
+        btn_roi_generate = widgets.Button(
+            description="Generate", style=self.action_style
+        )
+
+        roi_panel = widgets.VBox(
+            [roi_units, roi_small, roi_large, btn_roi_generate],
+            layout=widgets.Layout(
+                border="1px solid gray", padding="6px", display="none"
+            ),
+        )
+
+        # File chooser will be created by existing load handler; we only trigger it
+
+        # small helper to toggle display
+        def toggle(widget: widgets.Widget) -> None:
+            try:
+                widget.layout.display = (
+                    "none" if widget.layout.display != "none" else "block"
+                )
+            except Exception:
+                # some widgets may not have layout or display settable
+                pass
+
+        # runner to call existing handlers and capture stdout into an Output
+        def run_and_capture(
+            handler: Any, btn: widgets.Button, out: widgets.Output
+        ) -> None:
+            out.clear_output(wait=True)
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    # try to call the original undecorated function if available
+                    func = getattr(handler, "__wrapped__", handler)
+                    # bind to self if it's a plain function
+                    if hasattr(func, "__get__"):
+                        func = func.__get__(self, self.__class__)
+                    func(btn)
+            except Exception:
+                import traceback
+
+                traceback.print_exc(file=buf)
+            text = buf.getvalue()
+            if text:
+                with out:
+                    print(text, end="")
+
+        # Wire up buttons
+        def on_click_load_button(b: widgets.Button) -> None:
+            toggle(dd_load)
+
+        # Placeholder to host file chooser directly under the Load dropdown
+        load_file_holder = widgets.VBox([], layout=widgets.Layout(margin="2px 0 0 0"))
+        # Output panels placed directly under each dropdown/button so messages appear nearby
+        load_output = widgets.Output(layout=widgets.Layout(width="260px"))
+        save_output = widgets.Output(layout=widgets.Layout(width="200px"))
+        remove_output = widgets.Output(layout=widgets.Layout(width="200px"))
+        roi_output = widgets.Output(layout=widgets.Layout(width="220px"))
+
+        def on_change_load_dropdown(change: dict) -> None:
+            if change.get("name") != "value":
+                return
+            feature = change.get("new")
+            if not feature:
+                return
+            # forward to existing file-based loader which will show a file chooser
+            temp = widgets.Button(description=f"Load {feature} file")
+            # place chooser directly under the dropdown and route messages to load_output
+            self.load_feature_from_file(
+                temp, target=load_file_holder, output=load_output
+            )
+            # reset & hide dropdown
+            dd_load.value = ""
+            dd_load.layout.display = "none"
+
+        def on_click_save_button(b: widgets.Button) -> None:
+            toggle(dd_save)
+
+        def on_change_save_dropdown(change: dict) -> None:
+            if change.get("name") != "value":
+                return
+            feature = change.get("new")
+            if not feature:
+                return
+            temp = widgets.Button(description=f"Save {feature}")
+            # run handler and capture output into save_output
+            run_and_capture(self.save_to_file_btn_clicked, temp, save_output)
+            dd_save.value = ""
+            dd_save.layout.display = "none"
+
+        def on_click_remove_button(b: widgets.Button) -> None:
+            toggle(dd_remove)
+
+        def on_change_remove_dropdown(change: dict) -> None:
+            if change.get("name") != "value":
+                return
+            feature = change.get("new")
+            if not feature:
+                return
+            temp = widgets.Button(description=f"Remove {feature}")
+            run_and_capture(self.remove_feature_from_map, temp, remove_output)
+            dd_remove.value = ""
+            dd_remove.layout.display = "none"
+
+        def on_click_generate_roi_button(b: widgets.Button) -> None:
+            toggle(roi_panel)
+
+        def on_click_roi_generate(b: widgets.Button) -> None:
+            # capture generate ROI messages into roi_output
+            run_and_capture(self.gen_roi_clicked, b, roi_output)
+            roi_panel.layout.display = "none"
+
+        def on_click_remove_all(b: widgets.Button) -> None:
+            self.remove_all_from_map(b)
+
+        btn_load.on_click(on_click_load_button)
+        dd_load.observe(on_change_load_dropdown, names="value")
+
+        btn_save.on_click(on_click_save_button)
+        dd_save.observe(on_change_save_dropdown, names="value")
+
+        btn_remove.on_click(on_click_remove_button)
+        dd_remove.observe(on_change_remove_dropdown, names="value")
+
+        btn_generate_roi.on_click(on_click_generate_roi_button)
+        btn_roi_generate.on_click(on_click_roi_generate)
+
+        btn_remove_all.on_click(on_click_remove_all)
+
+        # Columns: group each button with its dropdown/panel vertically
+        load_column = widgets.VBox(
+            [btn_load, dd_load, load_output, load_file_holder],
+            layout=widgets.Layout(
+                align_items="flex-start", width="320px", overflow="visible"
+            ),
+        )
+        save_column = widgets.VBox(
+            [btn_save, dd_save, save_output],
+            layout=widgets.Layout(align_items="flex-start"),
+        )
+        generate_column = widgets.VBox(
+            [btn_generate_roi, roi_panel, roi_output],
+            layout=widgets.Layout(align_items="flex-start"),
+        )
+        remove_column = widgets.VBox(
+            [btn_remove, dd_remove, remove_output],
+            layout=widgets.Layout(align_items="flex-start"),
+        )
+
+        menu_bar = widgets.Box(
+            [load_column, save_column, generate_column, remove_column, btn_remove_all],
+            layout=widgets.Layout(
+                display="flex", flex_flow="row wrap", gap="6px", overflow="visible"
+            ),
+        )
+
+        v = widgets.VBox([features_header, menu_bar])
+        return v
+
     def create_dashboard(self) -> Any:
         """Creates a dashboard containing all the buttons, instructions and widgets organized together.
 
@@ -914,11 +1180,8 @@ class UI:
         load_buttons = self.load_feature_on_map_buttons()
         draw_control_section = self.draw_control_section()
         remove_buttons = self.remove_buttons()
-        save_to_file_buttons = self.save_to_file_buttons()
-
-        load_file_vbox = widgets.VBox(
-            [self.load_file_instr, self.load_file_radio, self.load_file_button]
-        )
+        # initialize save/load controls (create widgets and any side effects)
+        self.save_to_file_buttons()
 
         # Group remove controls and extracted shorelines together (red border)
         remove_and_extracted_group = self._bordered_box(
@@ -928,13 +1191,9 @@ class UI:
             margin="0px 8px 0px 8px",
         )
 
-        save_vbox = widgets.VBox(
-            [
-                save_to_file_buttons,
-                load_file_vbox,
-                remove_and_extracted_group,
-            ]
-        )
+        # Features menu (compact Load/Save/Generate ROI/Remove) + extracted shorelines group
+        features_menu = self.create_features_menu()
+        features_column = widgets.VBox([features_menu, remove_and_extracted_group])
 
         config_vbox = widgets.VBox(
             [
@@ -981,7 +1240,10 @@ class UI:
 
         # Put draw controls into its own bordered group (subtle gray)
         draw_controls_group = self._bordered_box(
-            [draw_control_section], color="#9e9e9e", padding="8px", margin="0px 8px 0px 8px"
+            [draw_control_section],
+            color="#9e9e9e",
+            padding="8px",
+            margin="0px 8px 0px 8px",
         )
 
         roi_controls_box = widgets.VBox(
@@ -999,7 +1261,7 @@ class UI:
                 self.get_view_settings_vbox(),
             ]
         )
-        row_1 = widgets.HBox([roi_controls_box, save_vbox, download_vbox])
+        row_1 = widgets.HBox([roi_controls_box, features_column, download_vbox])
         # in this row prints are rendered with UI.debug_view
         row_2 = widgets.VBox([self.clear_debug_button, UI.debug_view])
         self.error_row = widgets.HBox([])
@@ -1290,7 +1552,12 @@ class UI:
         self.settings_html.value = f"""<div style='max-height: 300px;max-width: 280px; overflow-x: auto; overflow-y:  auto; text-align: left;'>{setting_content}</div>"""
 
     @debug_view.capture(clear_output=True)
-    def load_feature_from_file(self, btn: widgets.Button) -> None:
+    def load_feature_from_file(
+        self,
+        btn: widgets.Button,
+        target: Optional[widgets.Box] = None,
+        output: Optional[widgets.Output] = None,
+    ) -> None:
         """Handles loading a feature from file button click event.
 
         Args:
@@ -1303,10 +1570,15 @@ class UI:
         # Prompt user to select a geojson file
         def load_callback(filechooser: FileChooser) -> None:
             try:
-                if filechooser.selected:
-                    print(
-                        f"Loading {btn.description.lower()} this might take a few seconds..."
-                    )
+                if not filechooser.selected:
+                    return
+                out = output or UI.debug_view
+                # initial message
+                with out:
+                    print(f"Loading {btn.description.lower()} — please wait...")
+
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
                     if "shoreline" in btn.description.lower():
                         logger.info(
                             f"Loading shoreline from file: {os.path.abspath(filechooser.selected)}"
@@ -1343,6 +1615,12 @@ class UI:
                             os.path.abspath(filechooser.selected),
                             zoom_to_bounds=True,
                         )
+
+                output_text = buf.getvalue()
+                if output_text:
+                    with out:
+                        print(output_text, end="")
+
             except Exception as error:
                 # renders error message as a box on map
                 exception_handler.handle_exception(error, self.coastseg_map.warning_box)
@@ -1360,10 +1638,27 @@ class UI:
             title = "Select ROI geojson file"
         # create instance of chooser that calls load_callback
         file_chooser = common.create_file_chooser(load_callback, title=title)
-        # clear row and close all widgets in row_4 before adding new file_chooser
-        self.clear_row(self.file_chooser_row)
-        # add instance of file_chooser to row 4
-        self.file_chooser_row.children = [file_chooser]
+        # constrain chooser width so it fits under the dropdown (prevents scrollbars)
+        try:
+            file_chooser.layout.width = "260px"
+            file_chooser.layout.max_width = "260px"
+        except Exception:
+            # some chooser implementations may not support layout assignment
+            pass
+
+        # If a target container is provided, insert chooser there (so it appears under dropdown)
+        if target is not None:
+            # clear target and add chooser
+            try:
+                for i in range(len(target.children)):
+                    target.children[i].close()
+            except Exception:
+                pass
+            target.children = [file_chooser]
+        else:
+            # fallback to legacy behavior: place in the global file chooser row
+            self.clear_row(self.file_chooser_row)
+            self.file_chooser_row.children = [file_chooser]
 
     @debug_view.capture(clear_output=True)
     def remove_feature_from_map(self, btn: widgets.Button) -> None:
