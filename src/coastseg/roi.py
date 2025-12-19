@@ -100,6 +100,60 @@ class ROI(Feature):
                 bbox, shoreline, square_len_lg, square_len_sm
             )
 
+    @property
+    def gdf(self) -> gpd.GeoDataFrame:
+        """
+        Return the ROI GeoDataFrame, creating an empty one with the default CRS if missing.
+
+        Returns:
+            gpd.GeoDataFrame: GeoDataFrame of ROI geometries.
+        """
+
+        if not hasattr(self, "_gdf") or not isinstance(self._gdf, gpd.GeoDataFrame):
+            self._gdf = self._empty_gdf()
+        else:
+            if "geometry" not in self._gdf.columns:
+                temp = self._gdf.copy()
+                temp = temp.set_geometry(gpd.GeoSeries([], crs=self.DEFAULT_CRS))
+                self._gdf = temp
+            elif getattr(self._gdf, "crs", None) is None:
+                self._gdf = self._gdf.set_crs(self.DEFAULT_CRS)
+        return self._gdf
+
+    @gdf.setter
+    def gdf(self, value: Optional[gpd.GeoDataFrame]) -> None:
+        """
+        Set the ROI GeoDataFrame, defaulting to an empty GeoDataFrame when None is provided.
+
+        Args:
+            value (Optional[gpd.GeoDataFrame]): GeoDataFrame to assign or None to reset to empty.
+
+        Raises:
+            TypeError: If value is not a GeoDataFrame or None.
+        """
+
+        if value is None:
+            self._gdf = self._empty_gdf()
+            return
+
+        if not isinstance(value, gpd.GeoDataFrame):
+            raise TypeError("gdf must be a GeoDataFrame or None")
+
+        gdf = value.copy()
+        if "geometry" not in gdf.columns:  # ensure geometry column exists
+            gdf = gdf.set_geometry(gpd.GeoSeries([], crs=self.DEFAULT_CRS))
+        elif getattr(gdf, "crs", None) is None:  # if no CRS set, assign default crs
+            gdf = gdf.set_crs(self.DEFAULT_CRS)
+
+        self._gdf = gdf
+
+    def _empty_gdf(self) -> gpd.GeoDataFrame:
+        """Create an empty GeoDataFrame with a geometry column and default CRS."""
+
+        return gpd.GeoDataFrame(
+            {"geometry": []}, geometry="geometry", crs=self.DEFAULT_CRS
+        )
+
     def __repr__(self) -> str:
         """
         Returns string representation of the ROI object.
