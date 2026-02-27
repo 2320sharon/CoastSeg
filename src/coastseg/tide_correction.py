@@ -648,6 +648,7 @@ def compute_tidal_corrections(
     only_keep_points_on_transects: bool = False,
     model: str = "FES2022",
     tides_file: str = "",
+    tide_regions_file: str = "",
     use_progress_bar: bool = True,
 ) -> None:
     """
@@ -661,6 +662,7 @@ def compute_tidal_corrections(
         only_keep_points_on_transects (bool, optional): If True, only keep points on transects. Defaults to False.
         model (str, optional): Tidal model to use ("FES2022", "FES2014", or ""). Defaults to "FES2022".
         tides_file (str, optional): Path to CSV file containing tide data. Defaults to "".
+        tide_regions_file (str, optional): Path to a custom tide regions GeoJSON file used for clipped model validation and region matching. Defaults to "".
         use_progress_bar (bool, optional): Whether to display progress bar. Defaults to True.
 
     Returns:
@@ -689,6 +691,7 @@ def compute_tidal_corrections(
             use_progress_bar=use_progress_bar,
             model=model,
             tides_file=tides_file,
+            tide_regions_file=tide_regions_file,
         )
     except Exception as e:
         print(f"Tide Model Error \n {e}")
@@ -706,6 +709,7 @@ def correct_all_tides(
     use_progress_bar: bool = True,
     model: str = "FES2022",
     tides_file: str = "",
+    tide_regions_file: str = "",
 ) -> None:
     """
     Corrects tides for all specified regions of interest (ROIs).
@@ -721,19 +725,23 @@ def correct_all_tides(
         use_progress_bar (bool, optional): Whether to display progress bar. Defaults to True.
         model (str, optional): Tide model to use. Defaults to "FES2022".
         tides_file (str, optional): Path to tides file. Defaults to "".
+        tide_regions_file (str, optional): Path to a custom tide regions GeoJSON file. Defaults to "".
 
     Returns:
         None
     """
     model_location = ""
-    tide_regions_file = ""
+    resolved_tide_regions_file = tide_regions_file
     # validate tide model exists at CoastSeg/tide_model
     if model != "":
-        model_location = get_tide_model_location(model=model.lower())
-        # load the regions the tide model was clipped to from geojson file
-        tide_regions_file = file_utilities.load_package_resource(
-            "tide_model", "tide_regions_map.geojson"
+        if not resolved_tide_regions_file:
+            resolved_tide_regions_file = file_utilities.load_package_resource(
+                "tide_model", "tide_regions_map.geojson"
+            )
+        model_location = get_tide_model_location(
+            model=model.lower(), tide_regions_file=resolved_tide_regions_file
         )
+        # load the regions the tide model was clipped to from geojson file
 
     with progress_bar_context(
         use_progress_bar,
@@ -750,7 +758,7 @@ def correct_all_tides(
                 use_progress_bar=use_progress_bar,
                 tides_file=tides_file,
                 model=model,
-                tide_regions_file=tide_regions_file,
+                tide_regions_file=resolved_tide_regions_file,
                 model_location=model_location,
             )
             logger.info(f"{roi_id} was tidally corrected")
@@ -1254,7 +1262,9 @@ def setup_tide_model_config(
     }
 
 
-def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
+def get_tide_model_location(
+    location: str = "", model: str = "fes2022", tide_regions_file: str = ""
+) -> str:
     """
     Validates the existence of a tide model at the specified location and returns the absolute path to the folder.
 
@@ -1268,6 +1278,8 @@ def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
                                 If empty, defaults to "tide_model" directory in the CoastSeg base directory.
         model (str, optional): The tide model to use. Defaults to 'fes2022'.
                               Available options: 'fes2022', 'fes2014'.
+        tide_regions_file (str, optional): Path to a regions GeoJSON file used to validate
+            the number of clipped region directories. Defaults to "".
 
     Returns:
         str: The absolute path of the location if the tide model exists.
@@ -1291,7 +1303,9 @@ def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
         location = os.path.join(base_dir, "tide_model")
 
     logger.info(f"Checking if tide model exists at {location}")
-    if validate_tide_model_exists(location, model=model):
+    if validate_tide_model_exists(
+        location, model=model, tide_regions_file=tide_regions_file
+    ):
         print(
             f"Tide model {model} found at: '{os.path.abspath(location)}' and is valid."
         )
@@ -1302,7 +1316,9 @@ def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
         )
 
 
-def validate_tide_model_exists(location: str, model: str = "fes2022") -> bool:
+def validate_tide_model_exists(
+    location: str, model: str = "fes2022", tide_regions_file: str = ""
+) -> bool:
     """
     Validates if a given directory exists and adheres to the expected tide model structure.
 
@@ -1314,6 +1330,8 @@ def validate_tide_model_exists(location: str, model: str = "fes2022") -> bool:
         location (str): The path to the directory to validate.
         model (str, optional): The tide model name to check. Defaults to 'fes2022'.
                               Available options: 'fes2022', 'fes2014'.
+        tide_regions_file (str, optional): Path to a regions GeoJSON file. When provided,
+            expected region directories are derived from this file. Defaults to "".
 
     Returns:
         bool: True if the directory adheres to the expected tide model structure, False otherwise.
@@ -1332,11 +1350,21 @@ def validate_tide_model_exists(location: str, model: str = "fes2022") -> bool:
         >>> print(is_valid)
         False
     """
-
     location = os.path.abspath(location)
     logger.info(f"Tide model absolute path {location}")
+    expected_region_count = 11
+    if tide_regions_file:
+        regions_gdf = load_regions_from_geojson(tide_regions_file)
+        expected_region_count = len(regions_gdf)
+        if expected_region_count < 1:
+            raise Exception(
+                f"The tide regions file at {tide_regions_file} did not contain any regions."
+            )
+
     # check if tide directory exists and if the model was clipped to the 10 regions
-    if os.path.isdir(location) and contains_sub_directories(location, 10, model):
+    if os.path.isdir(location) and contains_sub_directories(
+        location, expected_region_count - 1, model
+    ):
         return True
     return False
 

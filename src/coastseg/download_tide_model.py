@@ -518,8 +518,11 @@ def write_clipped_data(
     os.makedirs(tide_dir, exist_ok=True)
 
     destination_path = os.path.join(tide_dir, os.path.basename(filename))
-    if not os.path.exists(destination_path):
-        ds.to_netcdf(path=destination_path, mode="w")
+    # @todo review this as this choice might not be correct
+    # we may want to overwrite the file if it already exists because the clipping may be different if the region is different
+    # if not os.path.exists(destination_path):
+    #     ds.to_netcdf(path=destination_path, mode="w")
+    ds.to_netcdf(path=destination_path, mode="w")
 
 
 def clip_and_write_new_nc_files(

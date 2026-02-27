@@ -8,7 +8,17 @@ import os
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Collection, Dict, Iterable, List, Optional, Tuple, Union
+from typing import (
+    Callable,
+    Collection,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    Any,
+)
 
 # Third-party imports
 import geopandas as gpd
@@ -657,6 +667,7 @@ class CoastSeg_Map:
         reference_elevation: float = 0,
         model: str = "FES2022",
         tides_file: str = "",
+        tide_regions_file: str = "",
         use_progress_bar: bool = True,
     ) -> None:
         """
@@ -683,6 +694,8 @@ class CoastSeg_Map:
                     - CSV file containing tide data with columns 'dates', 'transect_id', and 'tide'.
                     - CSV file containing tide data with columns 'dates', 'latitude', 'longitude', and 'tide'.
                     - CSV file containing the transect ids are the columns and the dates as the row indices
+            tide_regions_file (str, optional): Path to a custom tide regions GeoJSON file.
+                If empty, CoastSeg uses the default packaged regions file.
             use_progress_bar (bool, optional): If True, display a progress bar. Defaults to True.
         Returns:
             None
@@ -706,6 +719,7 @@ class CoastSeg_Map:
                 only_keep_points_on_transects=only_keep_points_on_transects,
                 model=model,
                 tides_file=tides_file,
+                tide_regions_file=tide_regions_file,
             )
         except Exception as e:
             if self.map is not None:
@@ -1163,13 +1177,10 @@ class CoastSeg_Map:
         exception_handler.check_if_None(self.rois, "ROI")
         exception_handler.check_if_gdf_empty(self.rois.gdf, "ROI")
 
-
         if selected_ids is None:
             selected_ids = self.get_selected_ids()
 
-
         exception_handler.check_selected_set(selected_ids)
-
 
         # get the start and end date to check available images
         start_date, end_date = self.settings["dates"]
@@ -1533,7 +1544,7 @@ class CoastSeg_Map:
         self,
         rois: Optional[gpd.GeoDataFrame] = None,
         settings: Optional[dict] = None,
-        selected_ids: Optional[set] = None,
+        selected_ids: Optional[Union[set, List]] = None,
         file_path: Optional[str] = None,
     ) -> None:
         """
@@ -1685,7 +1696,6 @@ class CoastSeg_Map:
             Exception: If selected_layer is missing.
         """
         settings = self.get_settings()
-
 
         # if no rois exist on the map do not allow configs to be saved
         exception_handler.config_check_if_none(self.rois, "ROIs")
