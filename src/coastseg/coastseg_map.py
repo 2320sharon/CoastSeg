@@ -1679,7 +1679,7 @@ class CoastSeg_Map:
         roi_ids: Optional[list] = None,
     ) -> None:
         """
-        Saves the configuration settings of the map into two files: config.json and config_gdf.geojson.
+        Saves the configuration settings & the loaded features into two files: config.json and config_gdf.geojson.
 
         Args:
             filepath (Optional[str]): Path to directory to save config files. Defaults to None.
@@ -1710,8 +1710,7 @@ class CoastSeg_Map:
         # if the rois do not have any settings then save the currently loaded settings to the ROIs
         if not self.rois.get_roi_settings():  # type: ignore Validation is done by config_check_if_none
             filtered_gdf = self.rois.gdf[self.rois.gdf["id"].isin(roi_ids)]  # type: ignore Validation is done by config_check_if_none
-            geojson_str = filtered_gdf.to_json()
-            geojson_dict = json.loads(geojson_str)
+            geojson_dict = json.loads(filtered_gdf.to_json())
             base_path = os.path.abspath(core_utilities.get_base_dir())
             filepath_data = filepath or os.path.abspath(os.path.join(base_path, "data"))
             roi_settings = common.create_roi_settings(
@@ -2617,8 +2616,8 @@ class CoastSeg_Map:
             str: The path to the created session.
         """
         # name of the directory where the extracted shorelines will be saved under the session name
-        ROI_directory = self.rois.roi_settings[roi_id]["sitename"]  # type: ignore
-        session_path = file_utilities.create_session_path(session_name, ROI_directory)
+        ROI_directory_name = self.rois.roi_settings[roi_id]["sitename"]  # type: ignore
+        session_path = file_utilities.create_session_path(session_name, ROI_directory_name)
         if save_config:
             self.save_config(session_path)
         return session_path
@@ -2641,12 +2640,12 @@ class CoastSeg_Map:
         # Save extracted shoreline info to session directory
         session_name = self.get_session_name()
         for roi_id in roi_ids:
-            ROI_directory = self.rois.roi_settings[roi_id]["sitename"]
-            # create session directory
+            ROI_directory_name = self.rois.roi_settings[roi_id]["sitename"]
+            # create session directory with session name and roi directory name eg. /sessions/session1/roi1/
             session_path = file_utilities.create_session_path(
-                session_name, ROI_directory
+                session_name, ROI_directory_name
             )
-            # save source data
+            # save config.json and config_gdf.geojson to session folder
             self.save_config(session_path, roi_ids=roi_ids)
             # save extracted shorelines
             extracted_shoreline = self.rois.get_extracted_shoreline(roi_id)

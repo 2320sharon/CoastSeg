@@ -3544,55 +3544,28 @@ def were_rois_downloaded(roi_settings: dict, roi_ids: list) -> bool:
     return is_downloaded
 
 
+#@todo refactor and change so that ROI settings are not getting bad setting from the session
 def create_roi_settings(
     settings: dict,
     selected_rois: dict,
     filepath: str,
     date_str: str = "",
 ) -> dict:
-    """returns a dict of settings for each roi with roi id as the key.
-    Example:
-    "2": {
-            "dates": ["2018-12-01", "2019-03-01"],
-            "sat_list": ["L8"],
-            "sitename": "ID_2_datetime10-19-22__04_00_34",
-            "filepath": "C:\\CoastSeg\\data",
-            "roi_id": "2",
-            "polygon": [
-                [
-                    [-124.16930255115336, 40.8665390046026],
-                    [-124.16950858759564, 40.878247531017706],
-                    [-124.15408259844114, 40.878402930533994],
-                    [-124.1538792781699, 40.8666943403763],
-                    [-124.16930255115336, 40.8665390046026],
-                ]
-            ],
-            "landsat_collection": "C01",
-        },
-        "3": {
-            "dates": ["2018-12-01", "2019-03-01"],
-            "sat_list": ["L8"],
-            "sitename": "ID_3_datetime10-19-22__04_00_34",
-            "filepath": "C:\\CoastSeg\\data",
-            "roi_id": "3",
-            "polygon": [
-                [
-                    [-124.16950858759564, 40.878247531017706],
-                    [-124.16971474532464, 40.88995603272874],
-                    [-124.15428603840094, 40.890111496009816],
-                    [-124.15408259844114, 40.878402930533994],
-                    [-124.16950858759564, 40.878247531017706],
-                ]
-            ],
-            "landsat_collection": "C01",
-        },
+    """Creates roi settings for each roi selected on the map using the settings from coastseg_map
+      and the geojson dict of rois selected. Each roi will have the same settings for the keys in settings.
+
+      It used the settings : ["sat_list","landsat_collection","dates"] to create the roi settings for each roi selected on the map.
+      Each roi will have the same settings for these keys.
 
     Args:
         settings (dict): settings from coastseg_map.
+            The following keys are required for settings: ["sat_list","landsat_collection","dates"]
+            These will be used to create the roi settings for each roi selected on the map. Each roi will have the same settings for these keys.
         Must have keys ["sat_list","landsat_collection","dates"]
-        selected_rois (dict): geojson dict of rois selected
+        selected_rois (dict): geojson dict of rois selected. 
+            Must have "features" key with list of rois as value. Each roi must have "properties" with "id" and "geometry" with "coordinates"
         filepath (str): file path to directory to hold roi data
-        date_str (str, optional): datetime formatted string. Defaults to "".
+        date_str (str, optional): datetime formatted string used to create the sitename Defaults to "".
 
     Returns:
         dict: settings for each roi with roi id as the key

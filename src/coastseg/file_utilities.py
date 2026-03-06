@@ -709,11 +709,16 @@ def create_session_path(session_name: str, ROI_directory_name: str) -> str:
     Returns:
     - str: The path to the newly created session directory.
 
-    Note:
-    - This function assumes the presence of a function named `create_directory` and a logger object named `logger`.
+    Example:
+    session_path = create_session_path("session1", "roi1")
+    print(session_path)  # Output: "/home/user/project/sessions/session1/roi1"
+
+    If the current working directory is "/home/user/project" and the session_name is "session1" and ROI_directory_name is "roi1",
+    the function will create the directory "/home/user/project/sessions/session1/roi1" and return this path.
     """
     base_dir = os.path.abspath(core_utilities.get_base_dir())
     session_path = os.path.join(base_dir, "sessions", session_name)
+    # Create the session directory if it doesn't exist, then create the ROI subdirectory within it
     session_path = create_directory(session_path, ROI_directory_name)
     logger.info(f"Created a session folder at {session_path}")
     return session_path
