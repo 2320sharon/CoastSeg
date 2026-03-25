@@ -14,6 +14,22 @@ from coastseg import common, file_utilities
 # Some of these functions were originally written by Mark Lundine and have been modified for this project.
 
 
+MODEL_CONFIG = {
+    "rgb": {
+        "model_name": "ImageRGBClassifier",
+        "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/image_rgb/best.onnx",
+    },
+    "gray": {
+        "model_name": "ImageGrayClassifier",
+        "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/image_gray/best.onnx",
+    },
+    "segmentation": {
+        "model_name": "ShorelineFilter",
+        "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/segmentation_rgb/best_seg.onnx",
+    },
+}
+
+
 def sigmoid(x: np.ndarray) -> np.ndarray:
     """Numerically stable sigmoid."""
     x = np.asarray(x, dtype=np.float64)
@@ -484,6 +500,38 @@ def run_inference_gray_image_classifier(
     return csv_path
 
 
+def _get_onnx_model(model_key: str) -> str:
+    """Download and return a configured ONNX model path.
+
+    Args:
+        model_key (str): Model identifier in ``MODEL_CONFIG``.
+
+    Returns:
+        str: Full path to the ONNX model file.
+
+    Raises:
+        ValueError: If ``model_key`` is not configured.
+        FileNotFoundError: If the downloaded ONNX model file is missing.
+    """
+    if model_key not in MODEL_CONFIG:
+        raise ValueError(f"Unknown model key: {model_key}")
+
+    config = MODEL_CONFIG[model_key]
+    model_directory = file_utilities.create_directory(
+        common.get_downloaded_models_dir(), config["model_name"]
+    )
+    downloaded_path = pooch.retrieve(
+        url=config["url"],
+        known_hash=None,
+        progressbar=True,
+        path=model_directory,
+    )
+    if os.path.exists(downloaded_path):
+        return downloaded_path
+
+    raise FileNotFoundError(f"No ONNX model found at {downloaded_path}")
+
+
 def get_image_classifier(type: str = "rgb") -> str:
     """
     Download and return the path to a pre-trained image classifier model.
@@ -510,37 +558,10 @@ def get_image_classifier(type: str = "rgb") -> str:
         >>> print(f"Grayscale model downloaded to: {gray_model_path}")
         Grayscale model path: /path/to/downloaded_models/ImageGrayClassifier/best.onnx
     """
-    downloaded_models_path = common.get_downloaded_models_dir()
     model_type = type.lower()
-    model_config = {
-        "rgb": {
-            "model_name": "ImageRGBClassifier",
-            "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/image_rgb/best.onnx",
-        },
-        "gray": {
-            "model_name": "ImageGrayClassifier",
-            "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/image_gray/best.onnx",
-        },
-    }
-
-    if model_type not in model_config:
+    if model_type not in ("rgb", "gray"):
         raise ValueError("type must be either 'rgb' or 'gray'")
-
-    config = model_config[model_type]
-    model_directory = file_utilities.create_directory(
-        downloaded_models_path, config["model_name"]
-    )
-    file_path = pooch.retrieve(
-        url=config["url"],
-        known_hash=None,
-        progressbar=True,
-        path=model_directory,
-    )
-
-    if os.path.exists(file_path):
-        return file_path
-
-    raise FileNotFoundError(f"No ONNX model found at {file_path}")
+    return _get_onnx_model(model_type)
 
 
 def get_segmentation_classifier() -> str:
@@ -561,31 +582,7 @@ def get_segmentation_classifier() -> str:
         >>> print(f"Segmentation classifier downloaded to: {model_path}")
         Segmentation classifier path: /path/to/downloaded_models/ShorelineFilter/best_seg.onnx
     """
-    model_name = "ShorelineFilter"
-    downloaded_models_path = common.get_downloaded_models_dir()
-    model_directory = file_utilities.create_directory(
-        downloaded_models_path, model_name
-    )
-    candidate_names = ["best_seg.onnx", "best.onnx", "model.onnx"]
-    for candidate in candidate_names:
-        candidate_path = os.path.join(model_directory, candidate)
-        if os.path.exists(candidate_path):
-            return candidate_path
-
-    raise FileNotFoundError(
-        f"No ONNX model found in {model_directory}. Expected one of: {candidate_names}"
-    )
-
-    # @todo submit the onnx model to ShorelineFilter then update this URL
-    # # directory to hold downloaded models from Zenodo
-    # file_path = pooch.retrieve(
-    #     # URL to one of Pooch's test files
-    #     url="https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/segmentation_rgb/best_seg.h5",
-    #     known_hash=None,
-    #     progressbar=True,
-    #     path=model_directory,
-    # )
-    # return file_path
+    return _get_onnx_model("segmentation")
 
 
 def run_inference_segmentation_classifier(
