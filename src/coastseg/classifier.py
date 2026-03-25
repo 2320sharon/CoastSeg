@@ -259,7 +259,10 @@ def move_matching_files(
 
 
 def sort_images_with_model(
-    input_directory: str, type: str = "rgb", threshold: float = 0.40
+    input_directory: str,
+    type: str = "rgb",
+    threshold: float = 0.40,
+    print_status: bool = False,
 ) -> None:
     """
     Sort images in a directory using a trained good/bad image classifier model.
@@ -276,6 +279,9 @@ def sort_images_with_model(
         threshold (float): Threshold on sigmoid of model output. Images with scores >= threshold
             are classified as good (e.g., 0.6 means mark images as good if model output is >= 0.6,
             or 60% sure it's a good image). Defaults to 0.40.
+        print_status (bool): If True, print a summary showing that sorting finished,
+            where the classification CSV was saved, and where bad files were moved.
+            Defaults to False.
 
     Returns:
         None
@@ -284,20 +290,28 @@ def sort_images_with_model(
         >>> sort_images_with_model(
         ...     input_directory='C:/Coastseg/data/ID_<roi_id>_datetime<date>/jpg_files/preprocessed/RGB',
         ...     type='rgb',
-        ...     threshold=0.40
+        ...     threshold=0.40,
+        ...     print_status=True,
         ... )
         # Bad images will be moved to a 'bad' subdirectory
     """
     classifier_path = get_image_classifier(type)
+    csv_path = os.path.join(input_directory, "image_classification_results.csv")
+    bad_path = os.path.join(input_directory, "bad")
 
     if type.lower() == "rgb":
-        run_inference_rgb_image_classifier(
+        csv_path = run_inference_rgb_image_classifier(
             classifier_path, input_directory, input_directory, threshold=threshold
         )
     else:
-        run_inference_gray_image_classifier(
+        csv_path = run_inference_gray_image_classifier(
             classifier_path, input_directory, input_directory, threshold=threshold
         )
+
+    if print_status:
+        print(f"Files were sorted in {input_directory}")
+        print(f"Classification CSV saved to {csv_path}")
+        print(f"Bad files were moved to {bad_path}")
 
 
 def sort_images(
