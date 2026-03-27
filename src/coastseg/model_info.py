@@ -94,15 +94,37 @@ class ModelInfo:
     class_mapping: Dict[int, str] = field(default_factory=dict)
     water_class_indices: List[int] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
+        """Initializes derived fields after dataclass construction.
+
+        Resolves the model directory and loads class metadata.
+        """
+        # loads the model directory from the provided name or path, validating existence
         self.model_directory = self._resolve_directory()
         self.load()
 
-    def load(self, extractor: Optional[Callable[[dict], Dict[int, str]]] = None):
+    def load(
+        self, extractor: Optional[Callable[[dict], Dict[int, str]]] = None
+    ) -> None:
+        """Loads class mapping and computes water-related class indices.
+
+        Args:
+            extractor (Optional[Callable[[dict], Dict[int, str]]]): Optional function
+                that extracts class mappings from model card data.
+        """
         self.class_mapping = self._load_class_mapping(extractor)
         self.water_class_indices = self._find_water_classes()
 
     def _resolve_directory(self) -> Optional[str]:
+        """Resolves the model directory from inputs.
+
+        Returns:
+            Optional[str]: Existing model directory path, or None when no model source
+            is provided.
+
+        Raises:
+            FileNotFoundError: If a provided or resolved model directory does not exist.
+        """
         if self.model_directory:
             path = self.model_directory
         elif self.model_name:
@@ -117,6 +139,23 @@ class ModelInfo:
     def _load_class_mapping(
         self, extractor: Optional[Callable[[dict], Dict[int, str]]] = None
     ) -> Dict[int, str]:
+        """Loads class mapping from memory, model card, or defaults.
+
+        Args:
+            extractor (Optional[Callable[[dict], Dict[int, str]]]): Optional parser
+                for model card JSON content.
+
+        Example class mapping:
+            {
+                0: "water",
+                1: "whitewater",
+                2: "sediment",
+                3: "other"
+            }
+
+        Returns:
+            Dict[int, str]: Mapping of class index to class label.
+        """
         if self.class_mapping:
             return self.class_mapping
 
@@ -129,8 +168,10 @@ class ModelInfo:
         )
         model_card = file_utilities.read_json_file(path, raise_error=True)
         try:
+            # load the class mapping using the provided extractor function if available
             if extractor:
                 return extractor(model_card)
+            # load the class mapping from the model card using the default extractor
             return self._default_extractor(model_card)
         except Exception:
             return DEFAULT_CLASS_MAPPING.copy()
@@ -138,10 +179,39 @@ class ModelInfo:
     def _find_water_classes(
         self, water_names: List[str] = ["water", "whitewater"]
     ) -> List[int]:
+        """Finds class indices whose labels represent water.
+
+        Args:
+            water_names (List[str]): Labels treated as water classes.
+
+        Returns:
+            List[int]: Indices matching any label in ``water_names``.
+        """
         return [i for i, name in self.class_mapping.items() if name in water_names]
 
     @staticmethod
     def _default_extractor(data: dict) -> Dict[int, str]:
+        """Extracts class mapping from standard model card sections.
+
+        Example:
+        {
+        "DATASET": {
+            "CLASSES": {
+                "0": "water",
+                "1": "whitewater",
+                "2": "sediment",
+                "3": "other"
+            }
+
+        }
+        }
+        Args:
+            data (dict): Parsed model card JSON.
+
+        Returns:
+            Dict[int, str]: Extracted mapping or the default class mapping when no
+            supported section is found.
+        """
         for section in ("DATASET", "DATASET1"):
             if section in data and "CLASSES" in data[section]:
                 return {int(k): v for k, v in data[section]["CLASSES"].items()}
