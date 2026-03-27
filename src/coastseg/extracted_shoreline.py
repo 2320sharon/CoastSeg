@@ -75,7 +75,7 @@ class SegmentationFilter:
             str: Directory path to the filtered segmentation files (could be same as session_path if not filtered).
 
         Logs:
-            Warnings if filtering is skipped due to missing dependencies or errors.
+            Warnings if filtering is skipped due to errors filtering the segmentations.
         """
         if not enable_filtering:
             logger.info(
@@ -86,8 +86,6 @@ class SegmentationFilter:
         try:
             from coastseg import classifier
 
-            classifier.check_tensorflow()
-
             logger.info(
                 f"Applying segmentation filter for session: {self.session_path}"
             )
@@ -96,11 +94,6 @@ class SegmentationFilter:
                 f"Segmentation filtering complete. Filtered files in: {filtered_dir}"
             )
             return filtered_dir
-
-        except ImportError as e:
-            logger.warning(
-                f"Segmentation filter skipped: TensorFlow or 'classifier' module not available. Error: {e}"
-            )
         except Exception as e:
             logger.warning(f"Segmentation filtering failed due to runtime error: {e}")
 
