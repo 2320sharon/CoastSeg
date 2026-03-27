@@ -23,7 +23,6 @@ from coastseg import (
     extracted_shoreline,
     file_utilities,
     geodata_processing,
-    sessions,
 )
 from coastseg.intersections import save_transects, transect_timeseries
 from coastseg.model_info import ModelInfo
@@ -339,7 +338,7 @@ def run_segmentation_in_external_env(
 
     base_dir = Path(core_utilities.get_base_dir())
     seg_root = base_dir / "segmentation_workflow"
-    seg_script = seg_root / "zoo_segmentation_standalone_v6.py"
+    seg_script = seg_root / "run_zoo_segmentation_models.py"
 
     # Pixi default env python (Windows)
     seg_python = seg_root / ".pixi" / "envs" / "default" / "python.exe"
@@ -1059,7 +1058,6 @@ class Zoo_Model:
         # Check if any of the keys are missing
         # if any keys are missing set the default value
         default_settings = {
-            "sample_direc": None,
             "use_GPU": "0",
             "implementation": "BEST",
             "model_type": "global_segformer_RGB_4class_14036903",
@@ -1290,7 +1288,7 @@ class Zoo_Model:
             roi_directory = os.path.join(roi_directory, "coregistered")
 
         # preprocess data for model
-        input_directory = self.preprocess_data(input_directory, "NDWI", functions=[])
+        input_directory = self.preprocess_data(input_directory, img_type, functions=[])
 
         self.run_model(
             model_setting=settings,
