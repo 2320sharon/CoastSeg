@@ -1,4 +1,3 @@
-import glob
 import json
 import logging
 
@@ -7,28 +6,16 @@ import os
 import re
 import shutil
 from shutil import SameFileError
+from pathlib import Path
 from typing import Any, Collection, Dict, Iterable, List, Optional, Set, Tuple
 
 # Third-party imports
 import geopandas as gpd
 import numpy as np
-import scipy
+import pooch
 import skimage
-import skimage.io as io
-import tensorflow as tf
-import tqdm
-from doodleverse_utils.model_imports import (
-    custom_resunet,
-    custom_unet,
-    dice_coef_loss,
-    segformer,
-    simple_resunet,
-    simple_satunet,
-    simple_unet,
-)
 from osgeo import gdal
 from PIL import Image
-from tensorflow.keras import mixed_precision  # type: ignore
 
 from coastseg import (
     common,
@@ -39,17 +26,405 @@ from coastseg import (
     sessions,
 )
 from coastseg.intersections import save_transects, transect_timeseries
-from coastseg.ml import do_seg
 from coastseg.model_info import ModelInfo
 
 # Local imports
 from . import __version__
 
-# Suppress TensorFlow warnings
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "4"
-
 # Logger setup
 logger = logging.getLogger(__name__)
+
+# mapping of model IDs to Hugging Face repository IDs for the six configured SegFormer models.
+HF_MODEL_REPO_MAP: Dict[str, str] = {
+    "global_segformer_RGB_4class_14036903": "2320sharon/global_segformer_RGB_4class_14036903",
+    "global_segformer_NDWI_4class_14172182": "2320sharon/global_segformer_NDWI_4class_14172182",
+    "AK_segformer_NDWI_4class_14183210": "2320sharon/AK_segformer_NDWI_4class_14183210",
+    "global_segformer_MNDWI_4class_14183366": "2320sharon/global_segformer_MNDWI_4class_14183366",
+    "AK_segformer_MNDWI_4class_14187478": "2320sharon/AK_segformer_MNDWI_4class_14187478",
+    "AK_segformer_RGB_4class_14037041": "2320sharon/AK_segformer_RGB_4class_14037041",
+}
+
+SEGMENTATION_FAILURE_PREFIX = "SEGMENTATION_FAILURE: "
+SEGMENTATION_PROGRESS_PREFIX = "SEGMENTATION_PROGRESS: "
+
+
+def prepare_output_session(session_dir: str, input_dir: str) -> None:
+    # save the config files to the output right away for record keeping
+    logger.info(
+        f"Preparing session directory {session_dir} with config files from input directory {input_dir} for record keeping."
+    )
+    roi_directory = file_utilities.find_parent_directory(input_dir, "ID_", "data")
+    logger.info(
+        f"Identified roi_directory for input directory {input_dir}: {roi_directory}"
+    )
+
+    # create the session directory if it doesn't exist
+    Path(session_dir).mkdir(parents=True, exist_ok=True)
+
+    # if configs do not exist then raise an error and do not save the session
+    if not file_utilities.validate_config_files_exist(roi_directory):
+        raise FileNotFoundError(
+            f"Config files config.json or config_gdf.geojson do not exist in roi directory {roi_directory}"
+        )
+    # modify the config.json to only have the ROI ID that was used and save to session directory
+    roi_id = file_utilities.extract_roi_id(roi_directory)
+    common.save_new_config(
+        os.path.join(roi_directory, "config.json"),
+        roi_id,
+        os.path.join(session_dir, "config.json"),
+    )
+
+    # Copy over the config_gdf.geojson file
+    config_gdf_path = os.path.join(roi_directory, "config_gdf.geojson")
+    if os.path.exists(config_gdf_path):
+        # Read in the GeoJSON file using geopandas
+        gdf = gpd.read_file(config_gdf_path)
+
+        # Project the GeoDataFrame to EPSG:4326
+        gdf_4326 = gdf.to_crs("EPSG:4326")
+
+        # Save the projected GeoDataFrame to a new GeoJSON file
+        gdf_4326.to_file(
+            os.path.join(session_dir, "config_gdf.geojson"), driver="GeoJSON"
+        )
+
+    logger.info(f"Saved config files to session directory: {session_dir}")
+    logger.info(f"Config JSON: {os.path.join(session_dir, 'config.json')}")
+    logger.info(
+        f"Config GDF GeoJSON: {os.path.join(session_dir, 'config_gdf.geojson')}"
+    )
+
+
+def retrieve_model_weights(
+    weights_directory: Optional[str],
+    model_choice: str = "BEST",
+) -> List[str]:
+    """Return model weight file paths for the selected mode.
+
+    Args:
+        weights_directory (Optional[str]): Directory containing model files.
+        model_choice (str): Selection mode. Supported values: "BEST", "ENSEMBLE".
+
+    Returns:
+        List[str]: Ordered absolute paths to .h5 weight files.
+
+    Raises:
+        ValueError: If inputs are invalid or mode is unsupported.
+        FileNotFoundError: If required files are missing.
+        NotADirectoryError: If weights_directory is not a directory.
+    """
+    if not weights_directory:
+        raise ValueError("weights_directory must be provided and non-empty.")
+
+    weights_dir = Path(weights_directory).expanduser().resolve()
+    if not weights_dir.exists():
+        raise FileNotFoundError(f"Weights directory not found: {weights_dir}")
+    if not weights_dir.is_dir():
+        raise NotADirectoryError(f"Not a directory: {weights_dir}")
+
+    mode = model_choice.strip().upper()
+    logger.info("Model choice: %s", mode)
+
+    if mode == "ENSEMBLE":
+        weights = sorted(weights_dir.glob("*.h5"))
+        if not weights:
+            raise FileNotFoundError(f"No .h5 files found in: {weights_dir}")
+        logger.info("Found %d ensemble weight file(s).", len(weights))
+        return [str(path) for path in weights]
+
+    if mode == "BEST":
+        best_file = weights_dir / "BEST_MODEL.txt"
+        if not best_file.exists():
+            raise FileNotFoundError(f"BEST_MODEL.txt not found in: {weights_dir}")
+
+        model_name = best_file.read_text(encoding="utf-8").strip()
+        if not model_name:
+            raise ValueError(f"BEST_MODEL.txt is empty: {best_file}")
+
+        best_weights = Path(model_name)
+        if not best_weights.is_absolute():
+            best_weights = weights_dir / best_weights
+        best_weights = best_weights.resolve()
+
+        if not best_weights.exists() or not best_weights.is_file():
+            raise FileNotFoundError(f"BEST model weights not found: {best_weights}")
+        if best_weights.suffix.lower() != ".h5":
+            raise ValueError(f"BEST model is not an .h5 file: {best_weights}")
+
+        logger.info("Selected BEST model: %s", best_weights)
+        return [str(best_weights)]
+
+    raise ValueError(
+        f"Invalid model_choice '{model_choice}'. Valid choices are 'BEST' or 'ENSEMBLE'."
+    )
+
+
+def get_imagery_directory(img_type: str, RGB_path: str) -> str:
+    """
+    Returns directory of the newly created imagery. Available imagery conversions:
+
+    1. 'NDWI' for 'NIR'
+    2. 'MNDWI' for 'SWIR'
+    3. 'RGB' for 'RGB'
+
+    Note:
+        Directories containing 'NIR','NIR' and 'RGB' imagery must be at the same level as the 'RGB' imagery.
+        ex.
+        home/
+            RGB
+            NIR
+            SWIR
+
+    Args:
+        img_type (str): The type of imagery to generate. Available options: 'RGB', 'NDWI', 'MNDWI'
+        RGB_path (str): The path to the RGB imagery directory.
+
+    Returns:
+        str: The path to the output directory for the specified imagery type.
+    """
+    img_type = img_type.upper()
+    output_path = os.path.dirname(RGB_path)
+    if img_type == "RGB":
+        output_path = RGB_path
+    # default filetype is NIR and if NDWI is selected else filetype to SWIR
+    elif img_type == "NDWI":
+        NIR_path = os.path.join(output_path, "NIR")
+        output_path = RGB_to_infrared(RGB_path, NIR_path, output_path, "NDWI")
+    elif img_type == "MNDWI":
+        SWIR_path = os.path.join(output_path, "SWIR")
+        output_path = RGB_to_infrared(RGB_path, SWIR_path, output_path, "MNDWI")
+    else:
+        raise ValueError(
+            f"{img_type} not reconigzed as one of the valid types 'RGB', 'NDWI', 'MNDWI'"
+        )
+    return output_path
+
+
+def run_segmentation_in_external_env(
+    input_dir: str,
+    session_dir: str,
+    model_path: str,
+    implementation: str = "BEST",
+    cpu_only: bool = True,
+    overwrite: bool = True,
+) -> None:
+    """Run standalone segmentation in segmentation_workflow env."""
+    from coastseg import core_utilities
+    import subprocess
+    from pathlib import Path
+
+    try:
+        from IPython import get_ipython  # type: ignore
+    except Exception:
+        get_ipython = None
+
+    def _is_notebook_session() -> bool:
+        if get_ipython is None:
+            return False
+        try:
+            shell = get_ipython()
+        except Exception:
+            return False
+        if shell is None:
+            return False
+        return "IPKernelApp" in getattr(shell, "config", {})
+
+    def _extract_error_message(stderr_output: str, fallback: str) -> str:
+        for line in stderr_output.splitlines():
+            cleaned = line.strip()
+            if cleaned.startswith(SEGMENTATION_FAILURE_PREFIX):
+                return cleaned.removeprefix(SEGMENTATION_FAILURE_PREFIX).strip()
+
+        useful_lines = []
+        ignored_prefixes = (
+            "warning:",
+            "i0000",
+            "e0000",
+            "traceback",
+            'file "',
+            "the above exception was the direct cause",
+        )
+        for line in stderr_output.splitlines():
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            if cleaned.lower().startswith(ignored_prefixes):
+                continue
+            useful_lines.append(cleaned)
+
+        return useful_lines[-1] if useful_lines else fallback
+
+    def _extract_progress_payload(stderr_line: str) -> dict[str, Any] | None:
+        cleaned = stderr_line.strip()
+        if not cleaned.startswith(SEGMENTATION_PROGRESS_PREFIX):
+            return None
+        payload = cleaned.removeprefix(SEGMENTATION_PROGRESS_PREFIX).strip()
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _raise_segmentation_error(stderr_output: str) -> None:
+        raise RuntimeError(
+            "Standalone segmentation failed: "
+            + _extract_error_message(
+                stderr_output,
+                "See segmentation output above for details.",
+            )
+        )
+
+    def _run_notebook_process() -> None:
+        from tqdm.notebook import tqdm as notebook_tqdm
+
+        progress_bar = notebook_tqdm(
+            total=0,
+            desc="Running predictions",
+            unit="image",
+            leave=True,
+        )
+        stderr_lines: list[str] = []
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(seg_root),
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=env,
+            bufsize=1,
+        )
+
+        assert process.stderr is not None
+        for line in process.stderr:
+            progress_payload = _extract_progress_payload(line)
+            if progress_payload is None:
+                stderr_lines.append(line)
+                continue
+
+            total = int(progress_payload.get("total", 0))
+            current = int(progress_payload.get("current", 0))
+            written = int(progress_payload.get("written", 0))
+            skipped = int(progress_payload.get("skipped", 0))
+            failures = int(progress_payload.get("failures", 0))
+            image_name = str(progress_payload.get("image", ""))
+            if total > 0 and progress_bar.total != total:
+                progress_bar.total = total
+            progress_bar.n = min(current, progress_bar.total or current)
+            postfix: dict[str, int | str] = {
+                "written": written,
+                "skipped": skipped,
+                "failures": failures,
+            }
+            if image_name:
+                postfix["image"] = image_name
+            progress_bar.set_postfix(postfix)
+            progress_bar.refresh()
+
+        return_code = process.wait()
+        progress_bar.close()
+        if return_code != 0:
+            _raise_segmentation_error("".join(stderr_lines))
+
+    def _run_terminal_process() -> None:
+        completed_process = subprocess.run(
+            cmd,
+            cwd=str(seg_root),
+            text=True,
+            stdout=None,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        if completed_process.returncode != 0:
+            _raise_segmentation_error(completed_process.stderr or "")
+
+    base_dir = Path(core_utilities.get_base_dir())
+    seg_root = base_dir / "segmentation_workflow"
+    seg_script = seg_root / "zoo_segmentation_standalone_v6.py"
+
+    # Pixi default env python (Windows)
+    seg_python = seg_root / ".pixi" / "envs" / "default" / "python.exe"
+
+    model_dir = Path(model_path).expanduser().resolve()
+
+    # make the session directory if it doesn't exist
+    Path(session_dir).mkdir(parents=True, exist_ok=True)
+
+    if not seg_python.exists():
+        raise FileNotFoundError(f"Seg env python not found: {seg_python}")
+    if not seg_script.exists():
+        raise FileNotFoundError(f"Seg script not found: {seg_script}")
+    if not model_dir.exists():
+        raise FileNotFoundError(f"Model directory not found: {model_dir}")
+    if not Path(input_dir).exists():
+        raise FileNotFoundError(f"Input directory not found: {input_dir}")
+    if not Path(session_dir).exists():
+        raise FileNotFoundError(f"Session directory not found: {session_dir}")
+
+    cmd = [
+        str(seg_python),
+        str(seg_script),
+        "--input-dir",
+        str(input_dir),
+        "--output-dir",
+        str(session_dir),  # writes masks/summary into session
+        "--model",
+        str(model_dir),
+        "--implementation",
+        implementation.upper(),
+    ]
+    if cpu_only:
+        cmd.append("--cpu-only")
+    if overwrite:
+        cmd.append("--overwrite")
+
+    env = {
+        **os.environ,
+        "TF_CPP_MIN_LOG_LEVEL": "3",
+        "PYTHONWARNINGS": "ignore",
+        "TRANSFORMERS_VERBOSITY": "error",
+        "ABSL_LOG_LEVEL": "3",
+        "GLOG_minloglevel": "3",
+    }
+
+    if _is_notebook_session():
+        _run_notebook_process()
+        return
+
+    _run_terminal_process()
+
+
+def raise_download_model_error(
+    model_dir: str, pending_downloads: Collection[Tuple[str, str]]
+) -> None:
+    """Raise an actionable error for manual model download on rate limits.
+
+    Args:
+        model_dir (str): Destination folder where files must be saved.
+        pending_downloads (Collection[Tuple[str, str]]): Tuples of (save_path, download_url)
+            for files that still need to be downloaded.
+
+    Raises:
+        Exception: Always raised with HTML links and explicit save paths.
+    """
+    save_location = os.path.abspath(model_dir)
+    links_and_paths = [
+        (
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>',
+            save_path,
+        )
+        for save_path, url in pending_downloads
+    ]
+    links_block = "<br>".join(
+        f"{link}<br>save_to: {path}" for link, path in links_and_paths
+    )
+
+    raise Exception(
+        "Model files could not be downloaded due to rate limiting (HTTP 429).<br>"
+        f"Please download each file manually using the links below and save them into {save_location}.<br>"
+        "Use the exact save_to paths shown for each file.<br>"
+        "After saving all files, run the model command again.<br><br>"
+        f"{links_block}"
+    )
 
 
 def build_download_dict(
@@ -106,6 +481,81 @@ def index_available_files(available_files: List[dict]) -> Dict[str, str]:
         Dict[str, str]: Mapping of file keys to their download URLs.
     """
     return {f["key"]: f["links"]["self"] for f in available_files}
+
+
+def get_huggingface_release(repo_id: str) -> Dict[str, Any]:
+    """Return release-like file metadata for a Hugging Face model repository.
+
+    Args:
+        repo_id (str): Hugging Face repository ID, e.g. ``owner/model_name``.
+
+    Returns:
+        Dict[str, Any]: Dictionary with a ``files`` key, where each file has
+            ``key`` and ``links.self`` fields compatible with existing
+            download helpers.
+    """
+    root_url = f"https://huggingface.co/api/models/{repo_id}"
+    response = common.get_response(root_url, stream=False)
+    response.raise_for_status()
+    json_data = response.json()
+
+    files: List[Dict[str, Any]] = []
+    for sibling in json_data.get("siblings", []):
+        filename = sibling.get("rfilename")
+        if not filename:
+            continue
+        files.append(
+            {
+                "key": filename,
+                "links": {
+                    "self": f"https://huggingface.co/{repo_id}/resolve/main/{filename}"
+                },
+            }
+        )
+    return {"files": files}
+
+
+def resolve_model_related_files(
+    model_filename: str, available_filenames: Collection[str]
+) -> List[str]:
+    """Resolve companion JSON/modelcard files for a model weight filename.
+
+    Args:
+        model_filename (str): Weight filename, typically ending in ``.h5``.
+        available_filenames (Collection[str]): Available filenames in the release.
+
+    Returns:
+        List[str]: Existing related filenames including model weights and any
+            resolvable metadata files.
+    """
+    available_set = set(available_filenames)
+    related = [model_filename]
+
+    json_candidates = [
+        model_filename.replace("_fullmodel.h5", ".json"),
+        model_filename.replace(".h5", ".json"),
+    ]
+    modelcard_candidates = [
+        model_filename.replace("_fullmodel.h5", "_modelcard.json").replace(
+            "_segformer", ""
+        ),
+        model_filename.replace("_segformer.h5", "_modelcard.json"),
+        model_filename.replace(".h5", "_modelcard.json"),
+    ]
+
+    json_filename = next(
+        (candidate for candidate in json_candidates if candidate in available_set), None
+    )
+    modelcard_filename = next(
+        (candidate for candidate in modelcard_candidates if candidate in available_set),
+        None,
+    )
+
+    if json_filename:
+        related.append(json_filename)
+    if modelcard_filename:
+        related.append(modelcard_filename)
+    return related
 
 
 def create_new_session_path(session_name: str) -> str:
@@ -205,54 +655,21 @@ def download_files(url_dict: Dict[str, str]) -> None:
             if response.status_code == 429:
                 content = response.text
                 remaining_items = url_items[idx:]
-                downloads_list = "\n".join(
-                    f"{dl_url}\n  save_to: {dl_path}"
-                    for dl_path, dl_url in remaining_items
-                )
-                msg = (
-                    "Rate limit exceeded when downloading from Zenodo. "
-                    "Please download the files manually using the URLs below (one per file) "
-                    "and save each file to the corresponding 'save_to' path:\n\n"
-                    f"{downloads_list}"
-                )
-
                 logger.info(
                     f"Response from API for status_code: {response.status_code}: {content}"
                 )
-                print(msg)
-                logger.info(msg)
-                raise Exception(msg)
+                model_dir = os.path.dirname(save_path)
+                raise_download_model_error(model_dir, remaining_items)
 
             response.raise_for_status()  # will handle non-200s
 
-            content_length = response.headers.get("Content-Length")
-            if content_length is not None:
-                content_length = int(content_length)
-
-                with (
-                    open(save_path, "wb") as fd,
-                    tqdm.auto.tqdm(
-                        total=content_length,
-                        unit="B",
-                        unit_scale=True,
-                        unit_divisor=1024,
-                        desc=f"Downloading {os.path.basename(save_path)}",
-                        initial=0,
-                        ascii=False,
-                        position=0,
-                    ) as pbar,
-                ):
-                    for chunk in response.iter_content(1024):
-                        if not chunk:
-                            break
-                        fd.write(chunk)
-                        pbar.update(len(chunk))
-            else:
-                with open(save_path, "wb") as fd:
-                    for chunk in response.iter_content(1024):
-                        if not chunk:
-                            break
-                        fd.write(chunk)
+            pooch.retrieve(
+                url=url,
+                known_hash=None,
+                fname=os.path.basename(save_path),
+                path=os.path.dirname(save_path),
+                progressbar=False,
+            )
 
 
 def load_good_bad_csv(roi_id: str, roi_settings: Dict[str, Any]) -> Optional[str]:
@@ -323,33 +740,6 @@ def load_roi_settings(
             raise Exception(
                 f"The ROI ID '{roi_id}' did not exist in config.json.\nConfig: {config}"
             )
-
-
-def apply_smooth_otsu_to_folder(folder: str) -> str:
-    """
-    Applies median filter to JPEG images, converts to grayscale, and saves to new folder.
-
-    Args:
-        folder (str): Path to folder containing JPEG images to process.
-
-    Returns:
-        str: Path to new folder containing smoothed images.
-    """
-    new_folder_name = os.path.basename(folder) + "_smooth"
-    new_folder = os.path.join(os.path.dirname(folder), new_folder_name)
-    os.makedirs(new_folder, exist_ok=True)
-    # get all files in folder
-    files = glob.glob(os.path.join(folder, "*jpg"))
-    for file in files:
-        img = Image.open(file)
-        img = img.convert("L")  # convert to grayscale
-        img_arr = np.array(img)
-        img_arr_median_filter = scipy.ndimage.median_filter(img_arr, size=15)
-        # save the median filtered image to the new folder
-        new_file = os.path.join(new_folder, os.path.basename(file))
-        io.imsave(new_file, img_arr_median_filter)
-
-    return new_folder
 
 
 def add_classifer_scores_to_shorelines(
@@ -434,47 +824,6 @@ def get_zenodo_release(zenodo_id: str) -> Dict[str, Any]:
     response = common.get_response(root_url, stream=False)
     response.raise_for_status()
     return response.json()
-
-
-def get_imagery_directory(img_type: str, RGB_path: str) -> str:
-    """
-    Returns directory of the newly created imagery. Available imagery conversions:
-
-    1. 'NDWI' for 'NIR'
-    2. 'MNDWI' for 'SWIR'
-    3. 'RGB' for 'RGB'
-
-    Note:
-        Directories containing 'NIR','NIR' and 'RGB' imagery must be at the same level as the 'RGB' imagery.
-        ex.
-        home/
-            RGB
-            NIR
-            SWIR
-
-    Args:
-        img_type (str): The type of imagery to generate. Available options: 'RGB', 'NDWI', 'MNDWI'
-        RGB_path (str): The path to the RGB imagery directory.
-
-    Returns:
-        str: The path to the output directory for the specified imagery type.
-    """
-    img_type = img_type.upper()
-    output_path = os.path.dirname(RGB_path)
-    if img_type == "RGB":
-        output_path = RGB_path
-    # default filetype is NIR and if NDWI is selected else filetype to SWIR
-    elif img_type == "NDWI":
-        NIR_path = os.path.join(output_path, "NIR")
-        output_path = RGB_to_infrared(RGB_path, NIR_path, output_path, "NDWI")
-    elif img_type == "MNDWI":
-        SWIR_path = os.path.join(output_path, "SWIR")
-        output_path = RGB_to_infrared(RGB_path, SWIR_path, output_path, "MNDWI")
-    else:
-        raise ValueError(
-            f"{img_type} not reconigzed as one of the valid types 'RGB', 'NDWI', 'MNDWI'"
-        )
-    return output_path
 
 
 def matching_datetimes_files(dir1: str, dir2: str) -> Set[str]:
@@ -667,82 +1016,6 @@ def RGB_to_infrared(
     return output_path
 
 
-def get_GPU(num_GPU: str) -> None:
-    """
-    Configures GPU usage for TensorFlow based on provided parameter.
-
-    Args:
-        num_GPU (str): Number of GPUs to use. "0" for CPU only, "1" for single GPU.
-    """
-    num_GPU = str(num_GPU)
-    if num_GPU == "0":
-        logger.info("Not using GPU")
-        print("Not using GPU")
-        # use CPU (not recommended):
-        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    elif num_GPU == "1":
-        print("Using single GPU")
-        logger.info("Using 1 GPU")
-        # use first available GPU
-        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    if int(num_GPU) == 1:
-        # read physical GPUs from machine
-        physical_devices = tf.config.experimental.list_physical_devices("GPU")
-        print(f"physical_devices (GPUs):{physical_devices}")
-        logger.info(f"physical_devices (GPUs):{physical_devices}")
-        if physical_devices:
-            # Restrict TensorFlow to only use the first GPU
-            try:
-                tf.config.experimental.set_visible_devices(physical_devices, "GPU")
-            except RuntimeError as e:
-                # Visible devices must be set at program startup
-                logger.error(e)
-                print(e)
-        # set mixed precision
-        mixed_precision.set_global_policy("mixed_float16")
-        # disable memory growth on all GPUs
-        for i in physical_devices:
-            tf.config.experimental.set_memory_growth(i, True)
-            print(f"visible_devices: {tf.config.get_visible_devices()}")
-            logger.info(f"visible_devices: {tf.config.get_visible_devices()}")
-        # if multiple GPUs are used use mirror strategy
-        if int(num_GPU) > 1:
-            # Create a MirroredStrategy.
-            strategy = tf.distribute.MirroredStrategy(
-                [p.name.split("/physical_device:")[-1] for p in physical_devices],
-                cross_device_ops=tf.distribute.HierarchicalCopyAllReduce(),
-            )
-            print(f"Number of distributed devices: {strategy.num_replicas_in_sync}")
-            logger.info(
-                f"Number of distributed devices: {strategy.num_replicas_in_sync}"
-            )
-
-
-def get_sorted_files_with_extension(
-    sample_direc: str, file_extensions: List[str]
-) -> List[str]:
-    """
-    Get a sorted list of paths to files that have one of the file_extensions.
-    It will return the first set of files that matches the first file_extension, so put the
-    file_extension list in order of priority
-
-    Args:
-        sample_direc: A string representing the directory path to search for images.
-        file_extensions: A list of file extensions to search for.
-
-    Returns:
-        A list of file paths for sample images found in the directory.
-
-    """
-    sample_filenames = []
-    for ext in file_extensions:
-        filenames = sorted(tf.io.gfile.glob(os.path.join(sample_direc, f"*{ext}")))
-        sample_filenames.extend(filenames)
-        if sample_filenames:
-            break
-    return sample_filenames
-
-
 class Zoo_Model:
     """Machine learning model manager for coastal image segmentation and shoreline extraction."""
 
@@ -753,9 +1026,6 @@ class Zoo_Model:
         Sets up GDAL exceptions, initializes model attributes, and creates default settings.
         """
         gdal.UseExceptions()
-        self.weights_directory = None
-        self.model_types = []
-        self.model_list = []
         self.metadata_dict = {}
         self.settings = {}
         # create default settings
@@ -763,7 +1033,9 @@ class Zoo_Model:
 
     def clear_zoo_model(self) -> None:
         """Resets all model attributes to initial state."""
-        self.weights_directory = None
+        self.weights_directory = (
+            None  # directory where model weights are stored (aka h5 files)
+        )
         self.model_types = []
         self.model_list = []
         self.metadata_dict = {}
@@ -793,8 +1065,6 @@ class Zoo_Model:
             "model_type": "global_segformer_RGB_4class_14036903",
             "local_model_path": "",  # local path to the directory containing the model
             "use_local_model": False,  # Use local model (not one from zeneodo)
-            "otsu": False,
-            "tta": False,
             "cloud_thresh": 0.5,  # threshold on maximum cloud cover
             "dist_clouds": 300,  # ditance around clouds where shoreline can't be mapped
             "output_epsg": 4326,  # epsg code of spatial reference system desired for the output
@@ -850,20 +1120,105 @@ class Zoo_Model:
             raise Exception(SETTINGS_NOT_FOUND)
         return self.settings
 
+    def get_weights_directory(self, model_implementation: str, model_id: str) -> str:
+        """
+        Retrieves the directory path where the model weights are stored.
+        This method determines whether to use a local model path or to download the model
+        from a remote source based on the settings provided. If the local model path is
+        specified and exists, it will use that path. Otherwise, it will create a directory
+        for the specific model and download the weights.
+        Args:
+            model_implementation (str): The implementation type of the model either 'BEST' or 'ENSEMBLE'
+            model_id (str): The identifier for the model. This is the zenodo ID located at the end of the URL
+        Returns:
+            str: The directory path where the model weights are stored.
+        Raises:
+            FileNotFoundError: If the local model path is specified but does not exist.
+        """
+        if self.settings.get("use_local_model", False):
+            return self.get_local_model_path()
+        else:
+            # create the model directory & download the model
+            weights_directory = self.get_model_directory(model_id)
+            self.download_model(model_implementation, model_id, weights_directory)
+            return weights_directory
+
+    def get_weights_list(self, model_choice: str = "BEST") -> List[str]:
+        """Returns a list of the model weights files (.h5) within the weights directory.
+
+        Args:
+            model_choice (str, optional): The type of model weights to return.
+                Valid choices are 'ENSEMBLE' (default) to return all available
+                weights files or 'BEST' to return only the best model weights file.
+
+        Returns:
+            list: A list of strings representing the file paths to the model weights
+            files in the weights directory.
+
+        Raises:
+            FileNotFoundError: If the BEST_MODEL.txt file is not found in the weights directory.
+
+        Example:
+            trainer = ModelTrainer(weights_direc='/path/to/weights')
+            weights_list = trainer.get_weights_list(model_choice='ENSEMBLE')
+            print(weights_list)
+            # Output: ['/path/to/weights/model1.h5', '/path/to/weights/model2.h5', ...]
+
+            best_weights_list = trainer.get_weights_list(model_choice='BEST')
+            print(best_weights_list)
+            # Output: ['/path/to/weights/best_model.h5']
+        """
+        return retrieve_model_weights(self.weights_directory, model_choice)
+
+    def resolve_model_directory(self, model_setting: Dict[str, Any]) -> str:
+        """Resolve a runnable model directory for the current settings.
+
+        Args:
+            model_setting (Dict[str, Any]): Model settings for the run.
+
+        Returns:
+            str: Absolute path to a validated model directory.
+
+        Raises:
+            ValueError: If the model type is missing.
+            FileNotFoundError: If required model files are unavailable.
+        """
+        implementation = str(model_setting.get("implementation", "BEST")).upper()
+
+        if model_setting.get("use_local_model", False):
+            model_directory = Path(self.get_local_model_path()).expanduser().resolve()
+        else:
+            model_id = str(model_setting.get("model_type", "")).strip()
+            if not model_id:
+                raise ValueError(
+                    "Model type must be specified before running the model."
+                )
+
+            model_directory = (
+                Path(self.get_model_directory(model_id)).expanduser().resolve()
+            )
+            self.download_model(implementation, model_id, str(model_directory))
+
+        retrieve_model_weights(str(model_directory), implementation)
+        ModelInfo(model_directory=str(model_directory)).load()
+
+        self.weights_directory = str(model_directory)
+        logger.info("Using model directory: %s", model_directory)
+        return str(model_directory)
+
     def preprocess_data(
-        self, src_directory: str, model_dict: dict, img_type: str, functions: list
-    ) -> dict:
+        self, src_directory: str, img_type: str, functions: list
+    ) -> str:
         """
         Preprocesses the data in the source directory and updates the model dictionary with the processed data.
 
         Args:
             src_directory (str): The path to the source directory containing the ROI's data
-            model_dict (dict): The dictionary containing the model configuration and parameters.
             img_type (str): The type of imagery to generate. Must be one of "RGB", "NDWI", "MNDWI".
             functions (list): A list of preprocessing functions to apply sequentially to the data directory.
 
         Returns:
-            dict: The updated model dictionary containing the paths to the processed data.
+            str: The path to the processed data directory.(RGB, NDWI, or MNDWI directory depending on the img_type argument)
         """
         # Step 1: Get full path to directory named 'RGB' containing RGBs
         RGB_path = file_utilities.find_directory_recursively(src_directory, name="RGB")
@@ -875,9 +1230,75 @@ class Zoo_Model:
         for func in functions:
             current_path = func(current_path)
 
-        # Step 4: Store the final processed directory in the model_dict
-        model_dict["sample_direc"] = current_path
-        return model_dict
+        return current_path
+
+    def run_model(
+        self, model_setting: dict, sample_directory: str, session_directory: str
+    ) -> None:
+        model_directory = self.resolve_model_directory(model_setting)
+
+        run_segmentation_in_external_env(
+            input_dir=sample_directory,
+            session_dir=session_directory,
+            model_path=model_directory,
+            implementation=model_setting.get("implementation", "BEST"),
+            cpu_only=(model_setting.get("use_GPU", "0") != "1"),
+            overwrite=True,
+        )
+
+    def run_model_step(
+        self,
+        settings: dict,
+        input_directory: str,
+        session_name: str,
+        coregistered: bool,
+    ) -> None:
+        """
+        Executes a single step of the model using the provided settings and parameters.
+        This method retrieves model configuration from the `settings` dictionary and
+        runs the model with the specified options.
+        Args:
+            settings (dict): Dictionary containing model configuration options.
+                Expected keys include:
+                    - "model_type": Name of the model to use (required).
+                    - "img_type": Type of input images (required).
+                    - "implementation": Model implementation variant (optional, default "BEST").
+                    - "use_GPU": The GPU device to use. Defaults to "0" (optional).
+                    - "percent_no_data": Allowed percentage of no-data pixels (optional).
+            input_directory (str): Path to the directory containing input images.
+            session_name (str): Name of the current session for output organization.
+            coregistered (bool): Whether the input images are coregistered.
+        Raises:
+            ValueError: If required settings ("model_type" or "img_type") are missing.
+        Returns:
+            None
+        """
+
+        img_type = settings.get("img_type")
+        if img_type is None:
+            raise ValueError("Input image type must be specified in settings.")
+
+        roi_directory = file_utilities.find_parent_directory(
+            input_directory, "ID_", "data"
+        )
+        if not roi_directory:
+            raise ValueError(
+                f"The selected directory {input_directory} is not in a ROI directory. Please select a directory that is in a ROI directory that starts with 'ID_'"
+            )
+
+        if coregistered:
+            roi_directory = os.path.join(roi_directory, "coregistered")
+
+        # preprocess data for model
+        input_directory = self.preprocess_data(input_directory, "NDWI", functions=[])
+
+        self.run_model(
+            model_setting=settings,
+            sample_directory=input_directory,
+            session_directory=os.path.join(
+                core_utilities.get_base_dir(), "sessions", session_name
+            ),
+        )
 
     def run_model_and_extract_shorelines(
         self,
@@ -895,6 +1316,63 @@ class Zoo_Model:
 
         Args:
             input_directory (str): The directory containing the input images to run the model on. Typically the RGB directory.
+                - this can also be an ROI directory but the code will look for the RGB directory within it and preprocess the data from there.
+            session_name (str): The name of the session to save the model outputs and extracted shorelines.
+                - This will create a new session directory in the sessions directory.
+            shoreline_path (str, optional): The path to save the extracted shorelines. Defaults to "".
+            transects_path (str, optional): The path to save the extracted transects. Defaults to "".
+            shoreline_extraction_area_path (str, optional): The path to the shoreline extraction area. Defaults to "".
+            coregistered (bool, optional): Whether the input images are coregistered. Defaults to False.
+
+        Raises:
+            ValueError: If the model type is not set in the settings.
+            ValueError: If the input image type is not set in the settings.
+
+        """
+        settings = self.get_settings()
+
+        # Prepare the session directory to save the model outputs and extracted shorelines
+        sessions_path = os.path.join(core_utilities.get_base_dir(), "sessions")
+        session_directory = file_utilities.create_directory(sessions_path, session_name)
+        # saves the config files to the session directory for record keeping.
+        prepare_output_session(session_directory, input_directory)
+
+        # Step 1: Run model
+        self.run_model_step(
+            settings=settings,
+            input_directory=input_directory,
+            session_name=session_name,
+            coregistered=coregistered,
+        )
+
+        # Step 2: Load model info eg model type, class names etc from the model session directory
+        model_info = self.load_model_info(settings)
+
+        # Step 3: Extract shorelines
+        # extract shorelines using the segmented imagery
+        self.extract_shorelines_with_unet(
+            settings,
+            session_directory,
+            session_name,
+            model_info=model_info,
+            shoreline_path=shoreline_path,
+            transects_path=transects_path,
+            shoreline_extraction_area_path=shoreline_extraction_area_path,
+        )
+
+    def extract_shorelines(
+        self,
+        session_name: str,
+        shoreline_path: str = "",
+        transects_path: str = "",
+        shoreline_extraction_area_path: str = "",
+    ):
+        """
+        Runs the model and extracts shorelines using the segmented imagery.
+
+        Assumes the settings have been set using `set_settings` method.
+
+        Args:
             session_name (str): The name of the session to save the model outputs and extracted shorelines.
                 - This will create a new session directory in the sessions directory.
             shoreline_path (str, optional): The path to save the extracted shorelines. Defaults to "".
@@ -909,24 +1387,8 @@ class Zoo_Model:
         """
 
         settings = self.get_settings()
-
-        progress_bar = tqdm.auto.tqdm(
-            range(2),  # type: ignore
-            leave=True,
-        )
-
-        # Step 1: Run model
-        self.run_model_step(
-            settings=settings,
-            input_directory=input_directory,
-            session_name=session_name,
-            coregistered=coregistered,
-            progress=progress_bar,
-        )
-
         # Step 2: Load model info
         model_info = self.load_model_info(settings)
-
         # Step 3: Extract shorelines
         sessions_path = os.path.join(core_utilities.get_base_dir(), "sessions")
         session_directory = file_utilities.create_directory(sessions_path, session_name)
@@ -939,10 +1401,6 @@ class Zoo_Model:
             shoreline_path=shoreline_path,
             transects_path=transects_path,
             shoreline_extraction_area_path=shoreline_extraction_area_path,
-        )
-        progress_bar.update(1)
-        progress_bar.set_description_str(
-            desc="Finished running model and extracting shorelines", refresh=True
         )
 
     def extract_shorelines_with_unet(
@@ -976,7 +1434,6 @@ class Zoo_Model:
         logger.info(f"extract_shoreline_settings: {settings}")
 
         # save the selected model session
-        settings["model_session_path"] = session_path
         self.set_settings(**settings)
         settings = self.get_settings()
         good_bad_csv = None
@@ -997,15 +1454,6 @@ class Zoo_Model:
 
         # read ROI from config geojson file
         roi_gdf = load_roi_gdf_from_session(session_path, roi_id)
-
-        # get roi_id from source directory path in model settings
-        model_settings = file_utilities.load_json_data_from_file(
-            session_path, "model_settings.json"
-        )
-
-        # save model settings to session path
-        model_settings_path = os.path.join(new_session_path, "model_settings.json")
-        file_utilities.to_file(model_settings, model_settings_path)
 
         # load transects and shorelines
         output_epsg = settings["output_epsg"]
@@ -1084,6 +1532,7 @@ class Zoo_Model:
                     pass  # we don't care if the file is the same
         # save extracted shorelines as geojson, detection jpgs, configs, model settings files to the session directory
         common.save_extracted_shorelines(extracted_shorelines, new_session_path)
+        # @todo refactor this along with the good/bad classifier csv code because this is ugly
         # save the classification scores to the extracted shorelines geojson files
         shorelines_lines_location = os.path.join(
             session_path, "extracted_shorelines_lines.geojson"
@@ -1122,323 +1571,6 @@ class Zoo_Model:
             good_bad_seg_csv=good_bad_seg_csv,
         )
 
-    def postprocess_data(
-        self,
-        preprocessed_data: Dict[str, Any],
-        session: sessions.Session,
-        roi_directory: str,
-    ) -> None:
-        """
-        Moves model outputs and copies config files to session directory.
-
-        Args:
-            preprocessed_data (Dict[str, Any]): Dictionary of inputs to the model.
-            session (sessions.Session): Session object to track and save session.
-            roi_directory (str): Directory containing downloaded data for a single ROI.
-
-        Raises:
-            Exception: If no model outputs were generated.
-        """
-        # get roi_ids
-        session_path = session.path
-        outputs_path = os.path.join(preprocessed_data["sample_direc"], "out")
-        if not os.path.exists(outputs_path):
-            logger.warning("No model outputs were generated")
-            print("No model outputs were generated")
-            raise Exception(
-                f"No model outputs were generated. Check if {roi_directory} contained enough data to run the model or try raising the percentage of no data allowed."
-            )
-        logger.info(f"Moving from {outputs_path} files to {session_path}")
-
-        # if configs do not exist then raise an error and do not save the session
-        if not file_utilities.validate_config_files_exist(roi_directory):
-            logger.warning(
-                f"Config files config.json or config_gdf.geojson do not exist in roi directory {roi_directory}"
-            )
-            raise FileNotFoundError(
-                f"Config files config.json or config_gdf.geojson do not exist in roi directory {roi_directory}"
-            )
-        # modify the config.json to only have the ROI ID that was used and save to session directory
-        roi_id = file_utilities.extract_roi_id(roi_directory)
-        common.save_new_config(
-            os.path.join(roi_directory, "config.json"),
-            roi_id,
-            os.path.join(session_path, "config.json"),
-        )
-        # Copy over the config_gdf.geojson file
-        config_gdf_path = os.path.join(roi_directory, "config_gdf.geojson")
-        if os.path.exists(config_gdf_path):
-            # Read in the GeoJSON file using geopandas
-            gdf = gpd.read_file(config_gdf_path)
-
-            # Project the GeoDataFrame to EPSG:4326
-            gdf_4326 = gdf.to_crs("EPSG:4326")
-
-            # Save the projected GeoDataFrame to a new GeoJSON file
-            gdf_4326.to_file(
-                os.path.join(session_path, "config_gdf.geojson"), driver="GeoJSON"
-            )
-        model_settings_path = os.path.join(session_path, "model_settings.json")
-        file_utilities.write_to_json(model_settings_path, preprocessed_data)
-
-        # copy files from out to session folder
-        file_utilities.move_files(outputs_path, session_path, delete_src=True)
-        session.save(session.path)
-
-    def postprocess_data_without_session(
-        self,
-        preprocessed_data: dict,
-        session: sessions.Session,
-    ):
-        """Moves the model outputs from
-        as well copies the config files from the roi directory to the session directory
-
-        Args:
-            preprocessed_data (dict): dictionary of inputs to the model
-            session (sessions.Session): session object that's used to keep track of session
-            saves the session to the sessions directory
-
-            typically starts with "ID_{roi_id}"
-        """
-        # get roi_ids
-        session_path = session.path
-        outputs_path = os.path.join(preprocessed_data["sample_direc"], "out")
-        if not os.path.exists(outputs_path):
-            logger.warning("No model outputs were generated")
-            print("No model outputs were generated")
-            raise Exception(
-                f"No model outputs were generated. Check if {outputs_path} contained enough data to run the model or try raising the percentage of no data allowed."
-            )
-        logger.info(f"Moving from {outputs_path} files to {session_path}")
-
-        model_settings_path = os.path.join(session_path, "model_settings.json")
-        file_utilities.write_to_json(model_settings_path, preprocessed_data)
-
-        # copy files from out to session folder
-        file_utilities.move_files(outputs_path, session_path, delete_src=True)
-        session.save(session.path)
-
-    def get_weights_directory(self, model_implementation: str, model_id: str) -> str:
-        """
-        Retrieves the directory path where the model weights are stored.
-        This method determines whether to use a local model path or to download the model
-        from a remote source based on the settings provided. If the local model path is
-        specified and exists, it will use that path. Otherwise, it will create a directory
-        for the specific model and download the weights.
-        Args:
-            model_implementation (str): The implementation type of the model either 'BEST' or 'ENSEMBLE'
-            model_id (str): The identifier for the model. This is the zenodo ID located at the end of the URL
-        Returns:
-            str: The directory path where the model weights are stored.
-        Raises:
-            FileNotFoundError: If the local model path is specified but does not exist.
-        """
-        if self.settings.get("use_local_model", False):
-            return self.get_local_model_path()
-        else:
-            # create the model directory & download the model
-            weights_directory = self.get_model_directory(model_id)
-            self.download_model(model_implementation, model_id, weights_directory)
-            return weights_directory
-
-    def prepare_model(self, model_implementation: str, model_id: str):
-        """
-        Prepares the model for use by downloading the required files and loading the model.
-
-        Args:
-            model_implementation (str): The model implementation either 'BEST' or 'ENSEMBLE'
-            model_id (str): The ID of the model.
-        """
-        # weights_directory is the directory that contains the model weights, the model card json files and the BEST_MODEL.txt file
-        self.weights_directory = self.get_weights_directory(
-            model_implementation, model_id
-        )
-        logger.info(f"self.weights_directory:{self.weights_directory}")
-
-        weights_list = self.get_weights_list(model_implementation)
-
-        # Load the model from the config files
-        model, model_list, config_files, model_types = self.get_model(weights_list)
-        logger.info(f"self.TARGET_SIZE: {self.TARGET_SIZE}")
-        logger.info(f"self.N_DATA_BANDS: {self.N_DATA_BANDS}")
-        logger.info(f"self.TARGET_SIZE: {self.TARGET_SIZE}")
-
-        self.model_types = model_types
-        self.model_list = model_list
-        self.metadata_dict = self.get_metadatadict(
-            weights_list, config_files, model_types
-        )
-        logger.info(f"self.metadatadict: {self.metadata_dict}")
-
-    def get_metadatadict(
-        self, weights_list: list, config_files: list, model_types: list
-    ) -> dict:
-        """
-        Returns a dictionary containing metadata information.
-
-        Args:
-            weights_list (list): A list of model weights.
-            config_files (list): A list of configuration files.
-            model_types (list): A list of model types.
-
-        Returns:
-            dict: A dictionary containing the metadata information.
-        """
-        metadatadict = {}
-        metadatadict["model_weights"] = weights_list
-        metadatadict["config_files"] = config_files
-        metadatadict["model_types"] = model_types
-        return metadatadict
-
-    def run_model_without_session(
-        self,
-        img_type: str,
-        model_implementation: str,
-        session_name: str,
-        src_directory: str,
-        model_name: str,
-        use_GPU: str,
-        use_otsu: bool,
-        use_tta: bool,
-        percent_no_data: float,
-    ):
-        """
-        Runs the model for image segmentation.
-
-        Args:
-            img_type (str): The type of image.
-            model_implementation (str): The implementation of the model.
-            session_name (str): The name of the session.
-            src_directory (str): The directory of RGB images.
-            model_name (str): The name of the model.
-            use_GPU (str): Whether to use GPU or not.
-            use_otsu (bool): Whether to use Otsu thresholding or not.
-            use_tta (bool): Whether to use test-time augmentation or not.
-            percent_no_data (float): The percentage of no data allowed in the image.
-        Returns:
-            None
-        """
-        logger.info(f"Selected directory of RGBs: {src_directory}")
-        logger.info(f"session name: {session_name}")
-        logger.info(f"model_name: {model_name}")
-        logger.info(f"model_implementation: {model_implementation}")
-        logger.info(f"use_GPU: {use_GPU}")
-        logger.info(f"use_otsu: {use_otsu}")
-        logger.info(f"use_tta: {use_tta}")
-
-        print(f"Running model {model_name}")
-        # print(f"self.settings: {self.settings}")
-        self.prepare_model(model_implementation, model_name)
-
-        # create a session
-        session = sessions.Session()
-        sessions_path = file_utilities.create_directory(
-            core_utilities.get_base_dir(), "sessions"
-        )
-        session.path = file_utilities.create_directory(sessions_path, session_name)
-
-        session.name = session_name
-        model_dict = {
-            "use_GPU": use_GPU,
-            "sample_direc": src_directory,
-            "implementation": model_implementation,
-            "model_type": model_name,
-            "otsu": use_otsu,
-            "tta": use_tta,
-            "percent_no_data": percent_no_data,
-        }
-
-        print(f"Preprocessing the data at {src_directory}")
-        self.compute_segmentation(model_dict, percent_no_data)
-        self.postprocess_data_without_session(model_dict, session)
-        print(f"\n Model results saved to {session.path}")
-
-    def run_model(
-        self,
-        img_type: str,
-        model_implementation: str,
-        session_name: str,
-        src_directory: str,
-        model_name: str,
-        use_GPU: str,
-        use_otsu: bool,
-        use_tta: bool,
-        percent_no_data: float,
-        coregistered: bool = False,
-    ):
-        """
-        Runs the model for image segmentation.
-
-        Args:
-            img_type (str): The type of image.
-            model_implementation (str): The implementation of the model.
-            session_name (str): The name of the session.
-            src_directory (str): The directory of RGB images.
-            model_name (str): The name of the model.
-            use_GPU (str): Whether to use GPU or not.
-            use_otsu (bool): Whether to use Otsu thresholding or not.
-            use_tta (bool): Whether to use test-time augmentation or not.
-            percent_no_data (float): The percentage of no data allowed in the image.
-            coregistered (bool, optional): Whether the images are coregistered or not. Defaults to False.
-
-        Returns:
-            None
-        """
-        logger.info(f"Selected directory of RGBs: {src_directory}")
-        logger.info(f"session name: {session_name}")
-        logger.info(f"model_name: {model_name}")
-        logger.info(f"model_implementation: {model_implementation}")
-        logger.info(f"use_GPU: {use_GPU}")
-        logger.info(f"use_otsu: {use_otsu}")
-        logger.info(f"use_tta: {use_tta}")
-
-        print(f"Running model {model_name}")
-        # print(f"self.settings: {self.settings}")
-        self.prepare_model(model_implementation, model_name)
-
-        # create a session
-        session = sessions.Session()
-        sessions_path = file_utilities.create_directory(
-            core_utilities.get_base_dir(), "sessions"
-        )
-        session.path = file_utilities.create_directory(sessions_path, session_name)
-        session.name = session_name
-        local_model_path = self.get_local_model_path()
-        model_dict = {
-            "use_GPU": use_GPU,
-            "sample_direc": "",
-            "implementation": model_implementation,
-            "model_type": model_name,
-            "otsu": use_otsu,
-            "tta": use_tta,
-            "percent_no_data": percent_no_data,
-            "use_local_model": self.settings.get("use_local_model", False),
-            "local_model_path": local_model_path,
-        }
-        # @todo instead of requiring an ROI directory this could be passed in
-        # get parent roi_directory from the selected imagery directory
-        roi_directory = file_utilities.find_parent_directory(
-            src_directory, "ID_", "data"
-        )
-        if not roi_directory:
-            raise ValueError(
-                f"The selected directory {src_directory} is not in a ROI directory. Please select a directory that is in a ROI directory that starts with 'ID_'"
-            )
-
-        if coregistered:
-            roi_directory = os.path.join(roi_directory, "coregistered")
-
-        print(f"Preprocessing the data at {roi_directory}")
-        model_dict = self.preprocess_data(
-            roi_directory, model_dict, img_type, functions=[]
-        )
-        logger.info(f"model_dict: {model_dict}")
-
-        self.compute_segmentation(model_dict, percent_no_data)
-        self.postprocess_data(model_dict, session, roi_directory)
-        session.add_roi_ids([file_utilities.extract_roi_id(roi_directory)])
-        print(f"\n Model results saved to {session.path}")
-
     def get_model_directory(self, model_id: str):
         """
         Returns the directory path for the specified model ID.
@@ -1451,68 +1583,9 @@ class Zoo_Model:
             print(model_directory)
             /path/to/downloaded/models/14036903
         """
-        # Create a directory to hold the downloaded models
-        downloaded_models_path = common.get_downloaded_models_dir()
-        model_directory = file_utilities.create_directory(
-            downloaded_models_path, model_id
-        )
+        models_root = common.get_downloaded_models_dir()
+        model_directory = file_utilities.create_directory(models_root, model_id)
         return model_directory
-
-    def get_files_for_seg(
-        self,
-        sample_direc: str,
-        avoid_patterns: List[str] = [],
-        percent_no_data: float = 0.50,
-    ) -> list:
-        """
-        Returns a list of files to be segmented.
-
-        The function reads in the image filenames as either (`.npz`) OR (`.jpg`, or `.png`)
-        and returns a sorted list of the file paths.
-
-        Args:
-        - sample_direc (str): The directory containing files to be segmented.
-        - avoid_patterns (List[str], optional): A list of file names to be avoided.Don't include any file extensions. Default is [].
-        - percent_no_data (float, optional): The percentage of no data pixels allowed in an image. Default is 0.50.
-        Returns:
-        - list: A list of full pathes files to be segmented.
-        """
-        logger.info(f"Searching directory for files: {sample_direc}")
-        file_extensions = [".npz", ".jpg", ".png"]
-        model_ready_files = get_sorted_files_with_extension(
-            sample_direc, file_extensions
-        )
-
-        if not model_ready_files:
-            raise FileNotFoundError(
-                f"No files found in {sample_direc} with extensions {file_extensions}"
-            )
-
-        # filter out files whose filenames match any of the avoid_patterns
-        model_ready_files = file_utilities.filter_files(
-            model_ready_files, avoid_patterns
-        )
-
-        # Filter based on no-data pixel percentage
-        initial_count = len(model_ready_files)
-        # filter out files with no data pixels greater than percent_no_data
-        model_ready_files = filter_no_data_pixels(model_ready_files, percent_no_data)
-        filtered_count = initial_count - len(model_ready_files)
-
-        print(
-            f"{filtered_count}/{initial_count} files filtered out "
-            f"due to > {percent_no_data:.0%} no-data pixels."
-        )
-
-        return model_ready_files
-
-    def get_model_name(self) -> str:
-        model_name = self.settings.get("model_type")
-        if not model_name:
-            raise ValueError(
-                "Model type (aka the model name) must be specified in settings."
-            )
-        return model_name
 
     def get_local_model_path(self) -> str:
         """
@@ -1547,310 +1620,15 @@ class Zoo_Model:
         # Otherwise load the model info using the model_type (aka the model folder name) that was downloaded
 
         if settings.get("use_local_model", False):
-            model_path = self.get_local_model_path()
-            model_info = ModelInfo(model_directory=model_path)
+            model_directory = self.get_local_model_path()
         else:
-            model_name = settings.get("model_type")
-            model_info = ModelInfo(
-                model_name=model_name
-            )  # this will load the model info from the downloaded models folder
+            model_directory = self.weights_directory
+            if not model_directory or not os.path.isdir(model_directory):
+                model_directory = self.resolve_model_directory(settings)
 
+        model_info = ModelInfo(model_directory=model_directory)
         model_info.load()
         return model_info
-
-    def run_model_step(
-        self,
-        settings: dict,
-        input_directory: str,
-        session_name: str,
-        coregistered: bool,
-        progress: tqdm.tqdm,
-    ) -> None:
-        """
-        Executes a single step of the model using the provided settings and parameters.
-        This method retrieves model configuration from the `settings` dictionary and
-        runs the model with the specified options. It also provides progress feedback
-        using a tqdm progress bar.
-        Args:
-            settings (dict): Dictionary containing model configuration options.
-                Expected keys include:
-                    - "model_type": Name of the model to use (required).
-                    - "img_type": Type of input images (required).
-                    - "implementation": Model implementation variant (optional, default "BEST").
-                    - "use_GPU": The GPU device to use. Defaults to "0" (optional).
-                    - "otsu": Whether to use Otsu thresholding (optional).
-                    - "tta": Whether to use test-time augmentation (optional).
-                    - "percent_no_data": Allowed percentage of no-data pixels (optional).
-            input_directory (str): Path to the directory containing input images.
-            session_name (str): Name of the current session for output organization.
-            coregistered (bool): Whether the input images are coregistered.
-            progress: tqdm progress bar for tracking the execution progress.
-        Raises:
-            ValueError: If required settings ("model_type" or "img_type") are missing.
-        Returns:
-            None
-        """
-        model_name = self.get_model_name()
-
-        img_type = settings.get("img_type")
-        if img_type is None:
-            raise ValueError("Input image type must be specified in settings.")
-
-        model_implementation = settings.get("implementation", "BEST")
-
-        progress.set_description(f"Running {model_name} model")
-        self.run_model(
-            img_type=img_type,
-            model_implementation=model_implementation,
-            session_name=session_name,
-            src_directory=input_directory,
-            model_name=model_name,
-            use_GPU=settings.get("use_GPU", "0"),
-            use_otsu=settings.get("otsu", False),
-            use_tta=settings.get("tta", False),
-            percent_no_data=settings.get("percent_no_data", 0.50),
-            coregistered=coregistered,
-        )
-        progress.set_description("Model run complete. Extracting shorelines")
-        progress.update(1)
-
-    def compute_segmentation(
-        self,
-        preprocessed_data: dict,
-        percent_no_data: float = 0.50,
-    ):
-        """
-        Compute the segmentation for a given set of preprocessed data.
-
-        Args:
-            preprocessed_data (dict): A dictionary containing preprocessed data.
-                This dictionary should contain the following keys:
-                - sample_direc (str): The directory containing the sample images.
-                - tta (bool): Whether to use test-time augmentation.
-                - otsu (bool): Whether to use Otsu thresholding.
-
-            percent_no_data (float, optional): The max ercentage of no data pixels allowed in the image. Defaults to 0.50.
-
-        Returns:
-            None
-        """
-        sample_direc = preprocessed_data["sample_direc"]
-        use_tta = preprocessed_data["tta"]
-        use_otsu = preprocessed_data["otsu"]
-        # Create list of files of types .npz,.jpg, or .png to run model on
-        files_to_segment = self.get_files_for_seg(
-            sample_direc, avoid_patterns=[], percent_no_data=percent_no_data
-        )
-        logger.info(f"files_to_segment: {files_to_segment}")
-        if self.model_types[0] != "segformer":
-            ### mixed precision
-            from tensorflow.keras import mixed_precision  # type: ignore
-
-            mixed_precision.set_global_policy("mixed_float16")
-        # Compute the segmentation for each of the files
-        print(f"Found {len(files_to_segment)} files to run on model on")
-        for file_to_seg in tqdm.auto.tqdm(files_to_segment, desc="Applying Model"):
-            do_seg(
-                file_to_seg,
-                self.model_list,
-                self.metadata_dict,
-                self.model_types[0],
-                sample_direc=sample_direc,
-                NCLASSES=self.NCLASSES,
-                N_DATA_BANDS=self.N_DATA_BANDS,
-                TARGET_SIZE=self.TARGET_SIZE,
-                TESTTIMEAUG=use_tta,
-                WRITE_MODELMETADATA=False,
-                OTSU_THRESHOLD=use_otsu,
-                profile="meta",
-                apply_smooth=True if "S1" in file_to_seg else False,
-            )
-
-    def get_model(self, weights_list: list):
-        config_files = []
-        logger.info(f"weights_list: {weights_list}")
-        if weights_list == []:
-            raise Exception("No Model Info Passed")
-        for weights in weights_list:
-            # "fullmodel" is for serving on zoo they are smaller and more portable between systems than traditional h5 files
-            # gym makes a h5 file, then you use gym to make a "fullmodel" version then zoo can read "fullmodel" version
-            weights = weights.strip()
-            config_file = weights.replace(".h5", ".json").replace("weights", "config")
-            if "fullmodel" in config_file:
-                config_file = config_file.replace("_fullmodel", "")
-            with open(config_file) as f:
-                config = json.load(f)
-            self.TARGET_SIZE = config.get("TARGET_SIZE")
-            MODEL = config.get("MODEL")
-            self.NCLASSES = config.get("NCLASSES")
-            KERNEL = config.get("KERNEL")
-            STRIDE = config.get("STRIDE")
-            FILTERS = config.get("FILTERS")
-            self.N_DATA_BANDS = config.get("N_DATA_BANDS")
-            DROPOUT = config.get("DROPOUT")
-            DROPOUT_CHANGE_PER_LAYER = config.get("DROPOUT_CHANGE_PER_LAYER")
-            DROPOUT_TYPE = config.get("DROPOUT_TYPE")
-            USE_DROPOUT_ON_UPSAMPLING = config.get("USE_DROPOUT_ON_UPSAMPLING")
-            try:
-                model = tf.keras.models.load_model(weights)
-                #  nclasses=NCLASSES, may have to replace nclasses with NCLASSES
-            except BaseException:
-                if MODEL == "resunet":
-                    model = custom_resunet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        FILTERS,
-                        nclasses=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        kernel_size=(KERNEL, KERNEL),
-                        strides=STRIDE,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                    )
-                elif MODEL == "unet":
-                    model = custom_unet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        FILTERS,
-                        nclasses=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        kernel_size=(KERNEL, KERNEL),
-                        strides=STRIDE,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                    )
-
-                elif MODEL == "simple_resunet":
-                    # num_filters = 8 # initial filters
-                    model = simple_resunet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        kernel=(2, 2),
-                        num_classes=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        activation="relu",
-                        use_batch_norm=True,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                        filters=FILTERS,  # 8,
-                        num_layers=4,
-                        strides=(1, 1),
-                    )
-                # 346,564
-                elif MODEL == "simple_unet":
-                    model = simple_unet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        kernel=(2, 2),
-                        num_classes=[
-                            self.NCLASSES + 1 if self.NCLASSES == 1 else self.NCLASSES
-                        ][0],
-                        activation="relu",
-                        use_batch_norm=True,
-                        dropout=DROPOUT,  # 0.1,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,  # 0.0,
-                        dropout_type=DROPOUT_TYPE,  # "standard",
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,  # False,
-                        filters=FILTERS,  # 8,
-                        num_layers=4,
-                        strides=(1, 1),
-                    )
-                elif MODEL == "satunet":
-                    model = simple_satunet(
-                        (self.TARGET_SIZE[0], self.TARGET_SIZE[1], self.N_DATA_BANDS),
-                        kernel=(2, 2),
-                        num_classes=self.NCLASSES,  # [NCLASSES+1 if NCLASSES==1 else NCLASSES][0],
-                        activation="relu",
-                        use_batch_norm=True,
-                        dropout=DROPOUT,
-                        dropout_change_per_layer=DROPOUT_CHANGE_PER_LAYER,
-                        dropout_type=DROPOUT_TYPE,
-                        use_dropout_on_upsampling=USE_DROPOUT_ON_UPSAMPLING,
-                        filters=FILTERS,
-                        num_layers=4,
-                        strides=(1, 1),
-                    )
-                elif MODEL == "segformer":
-                    id2label = {}
-                    for k in range(self.NCLASSES):
-                        id2label[k] = str(k)
-                    model = segformer(id2label, num_classes=self.NCLASSES)
-                    model.compile(optimizer="adam")
-                # 242,812
-                else:
-                    raise Exception(
-                        f"An unknown model type {MODEL} was received. Please select a valid model.\n \
-                        Model must be one of 'unet', 'resunet', 'segformer', or 'satunet'"
-                    )
-
-                # Load in the custom loss function from doodleverse_utils
-                model.compile(
-                    optimizer="adam", loss=dice_coef_loss(self.NCLASSES)
-                )  # , metrics = [iou_multi(self.NCLASSESNCLASSES), dice_multi(self.NCLASSESNCLASSES)])
-
-                # If model is a tuple (e.g., Segformer), extract the actual model before loading weights
-                if isinstance(model, tuple):
-                    model_obj = model[0]
-                else:
-                    model_obj = model
-                model_obj.load_weights(weights)
-
-            self.model_types.append(MODEL)
-            self.model_list.append(model)
-            config_files.append(config_file)
-        return model, self.model_list, config_files, self.model_types
-
-    def get_weights_list(self, model_choice: str = "ENSEMBLE") -> List[str]:
-        """Returns a list of the model weights files (.h5) within the weights directory.
-
-        Args:
-            model_choice (str, optional): The type of model weights to return.
-                Valid choices are 'ENSEMBLE' (default) to return all available
-                weights files or 'BEST' to return only the best model weights file.
-
-        Returns:
-            list: A list of strings representing the file paths to the model weights
-            files in the weights directory.
-
-        Raises:
-            FileNotFoundError: If the BEST_MODEL.txt file is not found in the weights directory.
-
-        Example:
-            trainer = ModelTrainer(weights_direc='/path/to/weights')
-            weights_list = trainer.get_weights_list(model_choice='ENSEMBLE')
-            print(weights_list)
-            # Output: ['/path/to/weights/model1.h5', '/path/to/weights/model2.h5', ...]
-
-            best_weights_list = trainer.get_weights_list(model_choice='BEST')
-            print(best_weights_list)
-            # Output: ['/path/to/weights/best_model.h5']
-        """
-        logger.info(f"{model_choice}")
-        if model_choice == "ENSEMBLE":
-            weights_list = glob.glob(os.path.join(self.weights_directory, "*.h5"))
-            logger.info(f"weights_list: {weights_list}")
-            logger.info(f"{len(weights_list)} sets of model weights were found ")
-            return weights_list
-        elif model_choice == "BEST":
-            # read model name (fullmodel.h5) from BEST_MODEL.txt
-            with open(os.path.join(self.weights_directory, "BEST_MODEL.txt")) as f:
-                model_name = f.readline()
-            logger.info(f"model_name: {model_name}")
-            # remove any leading or trailing whitespace and newline characters
-            model_name = model_name.strip()
-            weights_list = [os.path.join(self.weights_directory, model_name)]
-            logger.info(f"weights_list: {weights_list}")
-            logger.info(f"{len(weights_list)} sets of model weights were found ")
-            return weights_list
-        else:
-            raise ValueError(
-                f"Invalid model_choice: {model_choice}. Valid choices are 'ENSEMBLE' or 'BEST'."
-            )
 
     def download_best(
         self, available_files: List[dict], model_path: str, model_id: str
@@ -1885,16 +1663,9 @@ class Zoo_Model:
         with open(best_txt_local, "r") as f:
             best_model_filename = f.read().strip()
 
-        best_json_filename = best_model_filename.replace("_fullmodel.h5", ".json")
-        best_modelcard_filename = best_model_filename.replace(
-            "_fullmodel.h5", "_modelcard.json"
-        ).replace("_segformer", "")
-
-        needed_files = [
-            best_model_filename,
-            best_json_filename,
-            best_modelcard_filename,
-        ]
+        needed_files = resolve_model_related_files(
+            best_model_filename, file_index.keys()
+        )
 
         # Build dict of missing files and download
         download_dict = build_download_dict(
@@ -1927,14 +1698,12 @@ class Zoo_Model:
         if not model_names:
             raise Exception(f"Cannot find any .h5 files at {model_id}")
 
-        # Derived JSON and modelcard names
-        json_names = [name.replace("_fullmodel.h5", ".json") for name in model_names]
-        modelcard_names = [
-            name.replace("_fullmodel.h5", "_modelcard.json").replace("_segformer", "")
-            for name in model_names
-        ]
-
-        needed_files = model_names + json_names + modelcard_names
+        needed_files: List[str] = []
+        for model_name in model_names:
+            needed_files.extend(
+                resolve_model_related_files(model_name, file_index.keys())
+            )
+        needed_files = list(dict.fromkeys(needed_files))
 
         # Build dict of missing files and download
         download_dict = build_download_dict(
@@ -1948,24 +1717,30 @@ class Zoo_Model:
         download_files(download_dict)
 
     def download_model(self, model_choice: str, model_id: str, model_path: str) -> None:
-        """downloads model specified by zenodo id in model_id.
+        """Download model weights and metadata for a model identifier.
 
-        Downloads best model is model_choice = 'BEST' or all models in
-        zenodo release if model_choice = 'ENSEMBLE'
+        Downloads best model if ``model_choice='BEST'`` or all models when
+        ``model_choice='ENSEMBLE'``.
 
         Args:
             model_choice (str): 'BEST' or 'ENSEMBLE'
-            model_id (str): name of model followed by underscore zenodo_id ex.'orthoCT_RGB_2class_7574784'
+            model_id (str): Model identifier.
             model_path (str): path to directory to save the downloaded files to
         """
-        # Extract the Zenodo ID from the dataset ID
-        zenodo_id = model_id.split("_")[-1]
-        # get list of files available in zenodo release
-        json_content = get_zenodo_release(zenodo_id)
+        normalized_model_id = model_id.strip()
+
+        repo_id = HF_MODEL_REPO_MAP.get(normalized_model_id)
+        if repo_id:
+            json_content = get_huggingface_release(repo_id)
+        else:
+            # Legacy fallback for historical Zenodo-backed model IDs.
+            zenodo_id = normalized_model_id.split("_")[-1]
+            json_content = get_zenodo_release(zenodo_id)
+
         available_files = json_content["files"]
 
         # Download the best model if best or all models if ensemble
         if model_choice.upper() == "BEST":
-            self.download_best(available_files, model_path, model_id)
+            self.download_best(available_files, model_path, normalized_model_id)
         elif model_choice.upper() == "ENSEMBLE":
-            self.download_ensemble(available_files, model_path, model_id)
+            self.download_ensemble(available_files, model_path, normalized_model_id)
