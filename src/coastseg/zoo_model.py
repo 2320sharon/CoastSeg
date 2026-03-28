@@ -1062,7 +1062,6 @@ class Zoo_Model:
             "implementation": "BEST",
             "model_type": "global_segformer_RGB_4class_14036903",
             "local_model_path": "",  # local path to the directory containing the model
-            "use_local_model": False,  # Use local model (not one from zeneodo)
             "cloud_thresh": 0.5,  # threshold on maximum cloud cover
             "dist_clouds": 300,  # ditance around clouds where shoreline can't be mapped
             "output_epsg": 4326,  # epsg code of spatial reference system desired for the output
@@ -1089,7 +1088,7 @@ class Zoo_Model:
             "apply_cloud_mask": True,  # whether to apply cloud mask to images or not
             "drop_intersection_pts": False,  # whether to drop intersection points not on the transect
             "coastseg_version": __version__,  # version of coastseg used to generate the data
-            "apply_segmentation_filter": True,  # whether to apply to sort the segmentations as good or bad
+            "apply_segmentation_filter": False,  # whether to apply to sort the segmentations as good or bad
         }
         if kwargs:
             self.settings.update({key: value for key, value in kwargs.items()})
@@ -1126,20 +1125,25 @@ class Zoo_Model:
         specified and exists, it will use that path. Otherwise, it will create a directory
         for the specific model and download the weights.
         Args:
-            model_implementation (str): The implementation type of the model either 'BEST' or 'ENSEMBLE'
-            model_id (str): The identifier for the model. This is the zenodo ID located at the end of the URL
+            model_implementation (str): Model selection mode, e.g. ``BEST`` or ``ENSEMBLE``.
+            model_id (str): Model identifier used to build/download the model directory.
+
         Returns:
-            str: The directory path where the model weights are stored.
+            str: Absolute path to a model directory containing model weights.
+
         Raises:
-            FileNotFoundError: If the local model path is specified but does not exist.
+            FileNotFoundError: If ``local_model_path`` is set but does not exist.
         """
-        if self.settings.get("use_local_model", False):
-            return self.get_local_model_path()
-        else:
-            # create the model directory & download the model
-            weights_directory = self.get_model_directory(model_id)
-            self.download_model(model_implementation, model_id, weights_directory)
-            return weights_directory
+        local_model_path = self.get_local_model_path()
+        if local_model_path:
+            resolved_local_path = str(Path(local_model_path).expanduser().resolve())
+            self.weights_directory = resolved_local_path
+            return resolved_local_path
+
+        weights_directory = self.get_model_directory(model_id)
+        self.download_model(model_implementation, model_id, weights_directory)
+        self.weights_directory = str(Path(weights_directory).expanduser().resolve())
+        return self.weights_directory
 
     def get_weights_list(self, model_choice: str = "BEST") -> List[str]:
         """Returns a list of the model weights files (.h5) within the weights directory.
@@ -1183,8 +1187,9 @@ class Zoo_Model:
         """
         implementation = str(model_setting.get("implementation", "BEST")).upper()
 
-        if model_setting.get("use_local_model", False):
-            model_directory = Path(self.get_local_model_path()).expanduser().resolve()
+        local_model_path = self.get_local_model_path(model_setting)
+        if local_model_path:
+            model_directory = Path(local_model_path)
         else:
             model_id = str(model_setting.get("model_type", "")).strip()
             if not model_id:
@@ -1585,15 +1590,21 @@ class Zoo_Model:
         model_directory = file_utilities.create_directory(models_root, model_id)
         return model_directory
 
-    def get_local_model_path(self) -> str:
-        """
-        Returns the local model path if it exists, otherwise returns an empty string.
+    def get_local_model_path(self, settings: Optional[Dict[str, Any]] = None) -> str:
+        """Return validated local model path from settings, if configured.
+
+        Args:
+            settings (Optional[Dict[str, Any]]): Settings source. Uses ``self.settings`` when None.
 
         Returns:
-            str: The local model path or an empty string if not set.
+            str: Resolved local model path or empty string.
+
+        Raises:
+            FileNotFoundError: If ``local_model_path`` is configured but does not exist.
         """
-        model_path = self.settings.get("local_model_path", "")
-        if model_path == "":
+        source_settings = settings or self.settings
+        model_path = str(source_settings.get("local_model_path", "")).strip()
+        if not model_path:
             return ""
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -1601,24 +1612,22 @@ class Zoo_Model:
             )
         return model_path
 
-    def load_model_info(self, settings: dict) -> ModelInfo:
-        """
-        Load the model information based on settings.
+    def load_model_info(self, settings: Dict[str, Any]) -> ModelInfo:
+        """Load model metadata from local path when provided, else from resolved weights.
 
         Args:
-            settings (dict): Settings dictionary.
+            settings (Dict[str, Any]): Model run settings.
 
         Returns:
-            ModelInfo: Loaded model information.
+            ModelInfo: Loaded model metadata.
 
         Raises:
-            FileNotFoundError: If a local model path is specified but does not exist.
+            FileNotFoundError: If ``local_model_path`` is set but is not a directory.
         """
-        # if a local model path was use then load the model info from the local path
-        # Otherwise load the model info using the model_type (aka the model folder name) that was downloaded
-
-        if settings.get("use_local_model", False):
-            model_directory = self.get_local_model_path()
+        local_model_path = self.get_local_model_path(settings)
+        if local_model_path:
+            model_directory = local_model_path
+            self.weights_directory = local_model_path
         else:
             model_directory = self.weights_directory
             if not model_directory or not os.path.isdir(model_directory):
