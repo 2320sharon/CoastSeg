@@ -16,6 +16,8 @@ import numpy as np
 from PIL import Image
 from tqdm.auto import tqdm
 
+from transformers import TFSegformerForSemanticSegmentation
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("PYTHONWARNINGS", "ignore")
 os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
@@ -561,6 +563,28 @@ def _resolve_class_mapping(
     return default_mapping
 
 
+def segformer(
+    id2label,
+    num_classes=2,
+):
+    """
+    https://keras.io/examples/vision/segformer/
+    https://huggingface.co/nvidia/mit-b0
+    """
+
+    label2id = {label: id for id, label in id2label.items()}
+    model_checkpoint = "nvidia/mit-b0"
+
+    model = TFSegformerForSemanticSegmentation.from_pretrained(
+        model_checkpoint,
+        num_labels=num_classes,
+        id2label=id2label,
+        label2id=label2id,
+        ignore_mismatched_sizes=True,
+    )
+    return model
+
+
 def _build_custom_model(config: dict[str, Any]) -> Any:
     """Build a SegFormer model when direct load fails.
 
@@ -574,15 +598,6 @@ def _build_custom_model(config: dict[str, Any]) -> Any:
         ImportError: If required optional dependency is missing.
         ValueError: If model type is not segformer.
     """
-    try:
-        from doodleverse_utils.model_imports import (  # type: ignore
-            segformer,
-        )
-    except ImportError as exc:
-        raise ImportError(
-            "SegFormer models require doodleverse_utils. "
-            "Install with: pip install doodleverse-utils"
-        ) from exc
 
     target_size = tuple(config.get("TARGET_SIZE", [512, 512]))
     model_type = str(config.get("MODEL", "")).lower()
