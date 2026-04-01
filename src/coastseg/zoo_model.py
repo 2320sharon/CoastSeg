@@ -207,7 +207,24 @@ def run_segmentation_in_external_env(
     cpu_only: bool = True,
     overwrite: bool = True,
 ) -> None:
-    """Run standalone segmentation in segmentation_workflow env."""
+    """Run standalone segmentation in the segmentation_workflow environment.
+    Runs the run_zoo_segmentation_models.py script in the segmentation_workflow folder as a subprocess, using the Pixi default environment python on Windows.
+
+    Warning: This function will not work if the segmentation_workflow environment is not set up correctly or if the run_zoo_segmentation_models.py script is missing.
+
+    Args:
+        input_dir (str): Directory containing imagery inputs.
+        session_dir (str): Directory where segmentation outputs are written.
+        model_path (str): Directory containing model files.
+        implementation (str): Segmentation implementation mode.
+        cpu_only (bool): If True, force CPU-only inference.
+        overwrite (bool): If True, overwrite existing outputs.
+
+    Raises:
+        FileNotFoundError: If required files or directories are missing.
+        RuntimeError: If standalone segmentation fails.
+        ValueError: If environment selection is invalid.
+    """
     from coastseg import core_utilities
     import subprocess
     from pathlib import Path
@@ -1365,40 +1382,68 @@ class Zoo_Model:
 
     def extract_shorelines(
         self,
-        session_name: str,
+        session_path: str,
         shoreline_path: str = "",
         transects_path: str = "",
         shoreline_extraction_area_path: str = "",
     ):
         """
-        Runs the model and extracts shorelines using the segmented imagery.
+        Extracts shorelines using the segmented imagery.
 
-        Assumes the settings have been set using `set_settings` method.
+         Assumes the settings have been set using `set_settings` method.
 
-        Args:
-            session_name (str): The name of the session to save the model outputs and extracted shorelines.
-                - This will create a new session directory in the sessions directory.
-            shoreline_path (str, optional): The path to save the extracted shorelines. Defaults to "".
-            transects_path (str, optional): The path to save the extracted transects. Defaults to "".
-            shoreline_extraction_area_path (str, optional): The path to the shoreline extraction area. Defaults to "".
-            coregistered (bool, optional): Whether the input images are coregistered. Defaults to False.
+         Args:
+             session_path (str): The path to the session directory containing the model outputs and extracted shorelines.
+                 - This will create a new session directory in the sessions directory.
+             shoreline_path (str, optional): The path to save the extracted shorelines. Defaults to "".
+             transects_path (str, optional): The path to save the extracted transects. Defaults to "".
+             shoreline_extraction_area_path (str, optional): The path to the shoreline extraction area. Defaults to "".
+             coregistered (bool, optional): Whether the input images are coregistered. Defaults to False.
 
-        Raises:
-            ValueError: If the model type is not set in the settings.
-            ValueError: If the input image type is not set in the settings.
+         Raises:
+             ValueError: If the model type is not set in the settings.
+             ValueError: If the input image type is not set in the settings.
 
         """
-
+        # read the session name from the session path
+        session_name = os.path.basename(session_path)
+        try:
+            model_settings_path = file_utilities.find_file_by_regex(
+                session_path, r"^model_settings\.json$"
+            )
+            model_settings = file_utilities.read_json_file(
+                model_settings_path, raise_error=True
+            )
+            if isinstance(model_settings, dict):
+                self.set_settings(**model_settings)
+        except FileNotFoundError:
+            logger.warning("model_settings.json not found in session: %s", session_path)
         settings = self.get_settings()
-        # Step 2: Load model info
-        model_info = self.load_model_info(settings)
-        # Step 3: Extract shorelines
-        sessions_path = os.path.join(core_utilities.get_base_dir(), "sessions")
-        session_directory = file_utilities.create_directory(sessions_path, session_name)
+
+        # Step 1: get the path to the model_info.json file from the model session directory
+        model_info_path = file_utilities.find_file_by_regex(
+            session_path, r"^model_info\.json$"
+        )
+        # Step 2: Load the model info from the model session directory
+        model_info = ModelInfo(model_info_path=model_info_path)
+        model_info.load_from_model_info_file()  # explicit optional load
+        logger.info(f"model directory: {model_info.model_directory}")
+        logger.info(f"class mapping: {model_info.class_mapping}")
+        logger.info(f"water class indices: {model_info.water_class_indices}")
+        logger.info(f"input directory: {model_info.input_directory}")
+        # Step 3: Save the config.json and config_gdf.geojson files from the input directory to the new session directory for record keeping.
+        input_directory = model_info.input_directory
+        if not input_directory:
+            raise ValueError(
+                "model_info.json is missing input_directory. Cannot prepare output session."
+            )
+        prepare_output_session(session_path, input_directory)
+
+        # Step 4: Extract shorelines
         # extract shorelines using the segmented imagery
         self.extract_shorelines_with_unet(
             settings,
-            session_directory,
+            session_path,
             session_name,
             model_info=model_info,
             shoreline_path=shoreline_path,
