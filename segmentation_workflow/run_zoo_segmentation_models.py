@@ -40,6 +40,13 @@ except Exception:
 FAILURE_PREFIX = "SEGMENTATION_FAILURE: "
 PROGRESS_PREFIX = "SEGMENTATION_PROGRESS: "
 
+MODEL_SETTINGS_DEFAULTS: dict[str, str] = {
+    "use_GPU": "0",
+    "implementation": "BEST",
+    "model_type": "global_segformer_RGB_4class_14036903",
+    "img_type": "RGB",
+}
+
 
 def median_smooth(img: np.ndarray, size: int = 15) -> np.ndarray:
     """Apply a median filter to an image.
@@ -144,7 +151,7 @@ class SegmentationConfig:
 
     input_dir: Path
     output_dir: Path
-    model_name_or_path: str
+    model_path: str
     implementation: str = "BEST"
     image_extensions: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
     overwrite: bool = False
@@ -362,20 +369,20 @@ def collect_image_paths(input_dir: Path, image_extensions: Sequence[str]) -> lis
     )
 
 
-def _is_model_directory(model_name_or_path: str) -> bool:
+def _is_model_directory(model_path: str) -> bool:
     """Check whether a path looks like a model directory.
 
     Args:
-        model_name_or_path (str): Candidate model directory path.
+        model_path (str): Candidate model directory path.
 
     Returns:
         bool: True if directory exists and has both `.h5` and `.json` files.
     """
-    model_path = Path(model_name_or_path)
-    if not model_path.is_dir():
+    resolved_model_path = Path(model_path)
+    if not resolved_model_path.is_dir():
         return False
-    has_h5 = any(model_path.glob("*.h5"))
-    has_json = any(model_path.glob("*.json"))
+    has_h5 = any(resolved_model_path.glob("*.h5"))
+    has_json = any(resolved_model_path.glob("*.json"))
     return has_h5 and has_json
 
 
@@ -825,13 +832,13 @@ def predict_mask(
 
 
 def load_inference_backend(
-    model_name_or_path: str,
+    model_path: str,
     implementation: str,
 ) -> InferenceBackend:
     """Load inference backend from a model directory.
 
     Args:
-        model_name_or_path (str): Model directory path.
+        model_path (str): Model directory path.
         implementation (str): `BEST` or `ENSEMBLE` selection mode.
 
     Returns:
@@ -840,11 +847,11 @@ def load_inference_backend(
     Raises:
         ValueError: If the model path is not a valid model directory.
     """
-    if not _is_model_directory(model_name_or_path):
+    if not _is_model_directory(model_path):
         raise ValueError(
             "--model must point to a model directory containing .h5 and .json files"
         )
-    return load_models(Path(model_name_or_path), implementation)
+    return load_models(Path(model_path), implementation)
 
 
 def _label_to_colors(
@@ -972,6 +979,92 @@ def _write_summary(summary: dict[str, object], output_dir: Path) -> None:
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
+def _write_model_settings_json(config: SegmentationConfig) -> Path:
+    """Write ``model_settings.json`` for downstream shoreline extraction.
+
+    Args:
+        config (SegmentationConfig): Runtime segmentation config.
+
+    Returns:
+        Path: Written model settings JSON path.
+    """
+    resolved_model_path = Path(config.model_path).expanduser().resolve()
+    model_type = (
+        resolved_model_path.name.strip() or MODEL_SETTINGS_DEFAULTS["model_type"]
+    )
+    payload = {
+        "use_GPU": "1" if config.use_gpu else MODEL_SETTINGS_DEFAULTS["use_GPU"],
+        "implementation": str(config.implementation).upper(),
+        "model_type": model_type, # this is the model name 
+        "img_type": MODEL_SETTINGS_DEFAULTS["img_type"],
+    }
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    model_settings_path = config.output_dir / "model_settings.json"
+    model_settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return model_settings_path
+
+
+def _extract_water_class_indices(
+    class_mapping: dict[int, str],
+    water_names: tuple[str, ...] = ("water", "whitewater"),
+) -> list[int]:
+    """Resolve water-class indices from a class mapping.
+
+    Args:
+        class_mapping (dict[int, str]): Class index-to-name mapping.
+        water_names (tuple[str, ...]): Class names that represent water.
+
+    Returns:
+        list[int]: Sorted list of matching water-class indices.
+    """
+    normalized_names = {name.lower() for name in water_names}
+    resolved = [
+        class_index
+        for class_index, class_name in class_mapping.items()
+        if str(class_name).lower() in normalized_names
+    ]
+    return sorted(resolved)
+
+
+def _write_model_info_json(
+    config: SegmentationConfig,
+    backend: InferenceBackend,
+) -> Path:
+    """Write model metadata needed by CoastSeg's ModelInfo loader.
+
+    Args:
+        config (SegmentationConfig): Runtime segmentation config.
+        backend (InferenceBackend): Loaded inference backend.
+
+    Returns:
+        Path: Written model info JSON path.
+    """
+    class_mapping = backend.models[0].class_mapping if backend.models else {}
+    water_class_indices = _extract_water_class_indices(class_mapping)
+    water_classes = [
+        class_mapping[class_index]
+        for class_index in water_class_indices
+        if class_index in class_mapping
+    ]
+
+    model_info_payload = {
+        "model_directory": str(Path(config.model_path).expanduser().resolve()),
+        "input_directory": str(config.input_dir),
+        "class_mapping": {str(key): value for key, value in class_mapping.items()},
+        "water_class_indices": water_class_indices,
+        "water_classes": water_classes,
+    }
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    model_info_path = config.output_dir / "model_info.json"
+    model_info_path.write_text(
+        json.dumps(model_info_payload, indent=2),
+        encoding="utf-8",
+    )
+    return model_info_path
+
+
 def run_segmentation_workflow(config: SegmentationConfig) -> dict[str, object]:
     """Run end-to-end segmentation over all images in input_dir.
 
@@ -1014,9 +1107,14 @@ def run_segmentation_workflow(config: SegmentationConfig) -> dict[str, object]:
 
         # load the inference backend once before processing images
         backend = load_inference_backend(
-            config.model_name_or_path,
+            config.model_path,
             config.implementation,
         )
+
+        _write_model_settings_json(config)
+
+        # Persist model metadata before prediction starts so downstream tools can load it.
+        _write_model_info_json(config, backend)
 
         progress_bar = tqdm(
             image_paths,
@@ -1116,23 +1214,27 @@ def build_arg_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument(
+        "-i",
         "--input-dir",
         required=True,
         type=Path,
         help="Directory containing input images.",
     )
     parser.add_argument(
+        "-o",
         "--output-dir",
         required=True,
         type=Path,
         help="Directory where prediction masks and summary JSON are saved.",
     )
     parser.add_argument(
+        "-m",
         "--model",
         required=True,
         help="Model directory containing .h5 weights and .json config files needed for inference.",
     )
     parser.add_argument(
+        "-I",
         "--implementation",
         default="BEST",
         choices=["BEST", "ENSEMBLE", "best", "ensemble"],
@@ -1142,11 +1244,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "-w",
         "--overwrite",
         action="store_true",
         help="Overwrite existing mask files.",
     )
     parser.add_argument(
+        "-c",
         "--cpu-only",
         action="store_true",
         help="Force TensorFlow to run on CPU.",
@@ -1171,7 +1275,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     config = SegmentationConfig(
         input_dir=args.input_dir,
         output_dir=args.output_dir,
-        model_name_or_path=args.model,
+        model_path=args.model,
         implementation=str(args.implementation).upper(),
         overwrite=args.overwrite,
         use_gpu=not args.cpu_only,
