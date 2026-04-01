@@ -1,3 +1,45 @@
+# Run standalone CoastSeg zoo model segmentation on a directory of images.
+#
+# Usage:
+#   python run_zoo_segmentation_models.py -i INPUT_DIR -o OUTPUT_DIR -m MODEL_DIR [options]
+#
+# Required parameters:
+#   -i, --input-dir INPUT_DIR
+#       Directory containing input images to segment.(RGB directory within CoastSeg/data/ID_xxx_datetime_xxx/jpg_files/preprocessed/RGB)
+#   -o, --output-dir OUTPUT_DIR
+#       Directory where prediction masks (_predseg.png), NPZ files,model_settings.json,model_info.json and
+#       segmentation_summary.json are saved.
+#       This is the session directory that the model predictions are saved to. eg. CoastSeg/sessions/your_session_name
+#   -m, --model MODEL_DIR
+#       Model directory containing .h5 weight files and matching .json config files.
+#       This is the directory of the model to run. eg. CoastSeg/models/global_segformer_RGB_4class_14036903
+#
+# Optional parameters:
+#   -I, --implementation {BEST,ENSEMBLE}
+#       Model selection mode. Default: BEST.
+#       BEST  — loads the single model listed in BEST_MODEL.txt.
+#       ENSEMBLE — loads all .h5 files in the model directory and averages predictions.
+#   -w, --overwrite
+#       Re-run and overwrite prediction masks that already exist.
+#   -c, --cpu-only
+#       Force TensorFlow to run on CPU (disables GPU).
+#
+# Examples:
+# Note \ is used for line continuation in these examples. When running the command, you can write it as one line without the \ character.
+#
+#   python run_zoo_segmentation_models.py \
+#       -i CoastSeg/data/ID_xxx_datetime_xxx/jpg_files/preprocessed/RGB  -o CoastSeg/sessions/your_session_name -m /models/global_segformer_RGB_4class_14036903
+#
+#   python run_zoo_segmentation_models.py \
+#       -i CoastSeg/data/ID_xxx_datetime_xxx/jpg_files/preprocessed/RGB -o CoastSeg/sessions/your_session_name -m /models/global_segformer_RGB_4class_14036903 \
+#       -I ENSEMBLE -w -c
+#
+# Output:
+#   For each input image, two files are written to OUTPUT_DIR:
+#     <image_stem>_predseg.png  — colorized class mask
+#     <image_stem>_res.npz      — compressed array with class labels and metadata
+#   A segmentation_summary.json and model_settings.json are also written to OUTPUT_DIR.
+
 from __future__ import annotations
 
 import argparse
@@ -995,7 +1037,7 @@ def _write_model_settings_json(config: SegmentationConfig) -> Path:
     payload = {
         "use_GPU": "1" if config.use_gpu else MODEL_SETTINGS_DEFAULTS["use_GPU"],
         "implementation": str(config.implementation).upper(),
-        "model_type": model_type, # this is the model name 
+        "model_type": model_type,  # this is the model name
         "img_type": MODEL_SETTINGS_DEFAULTS["img_type"],
     }
 
