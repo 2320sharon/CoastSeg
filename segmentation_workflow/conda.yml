@@ -1,0 +1,10 @@
+name: segmentation_workflow
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pillow
+  - pip
+  - pip:
+      - tensorflow==2.15.1
+      - transformers==4.57.6

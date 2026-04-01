@@ -1,9 +1,9 @@
 [project]
-authors = [{name = "Sharon Fitzpatrick", email = "SF2309@Gmail.Com"}]
+authors = [{name = "Sharon Batiste", email = "sharonbatiste24@gmail.com"}]
 dependencies = ["tensorflow==2.15.*", "transformers>=4.48.3,<5"]
 
 name = "segmentation_workflow"# isolated_tensorflow
-requires-python = "==3.10"
+requires-python = "<=3.11"
 version = "0.1.0"
 
 [build-system]
@@ -12,7 +12,7 @@ requires = ["hatchling"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["win-64"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 
 [tool.pixi.tasks]
 
