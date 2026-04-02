@@ -18,3 +18,4 @@ platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 
 [tool.pixi.dependencies]
 pillow = ">=12.1.1,<13"
+pip = "*"
