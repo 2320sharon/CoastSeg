@@ -44,12 +44,12 @@ dependencies = [
   "jupyterlab>=3.0.0",
   "leafmap",
   "nest-asyncio",
-  "netcdf4",
   "pooch",
   "protobuf",
   "pytmd<2.2.0",
   "xarray",
   "pytz",
+  "netcdf4",
 ]
 license = {file = "LICENSE"}
 requires-python = ">=3.10,<3.13"
@@ -70,6 +70,7 @@ coastseg = {path = ".", editable = true}
 # this tells pixi to install these packages (they are the same as the dependencies) from the conda-forge channel
 # Note: pytmd is purposely not included here because it causes conflicts when installed from conda-forge
 [tool.pixi.dependencies]
+netcdf4 = "*" # prefer to have this installed from conda-forge because it can cause conflicts on MacOS when installed from pip
 onnxruntime = "*"
 aiohttp = "*"
 area = "*"
