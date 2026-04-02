@@ -45,6 +45,7 @@ HF_MODEL_REPO_MAP: Dict[str, str] = {
 
 SEGMENTATION_FAILURE_PREFIX = "SEGMENTATION_FAILURE: "
 SEGMENTATION_PROGRESS_PREFIX = "SEGMENTATION_PROGRESS: "
+SEGMENTATION_PROGRESS_ENV_VAR = "COASTSEG_EMIT_PROGRESS"
 
 
 def prepare_output_session(session_dir: str, input_dir: str) -> None:
@@ -293,12 +294,8 @@ def run_segmentation_in_external_env(
     def _run_notebook_process() -> None:
         from tqdm.notebook import tqdm as notebook_tqdm
 
-        progress_bar = notebook_tqdm(
-            total=0,
-            desc="Running predictions",
-            unit="image",
-            leave=True,
-        )
+        # Create the notebook bar lazily so the first rendered total is the real image count.
+        progress_bar = None
         stderr_lines: list[str] = []
         process = subprocess.Popen(
             cmd,
@@ -323,8 +320,17 @@ def run_segmentation_in_external_env(
             skipped = int(progress_payload.get("skipped", 0))
             failures = int(progress_payload.get("failures", 0))
             image_name = str(progress_payload.get("image", ""))
-            if total > 0 and progress_bar.total != total:
+            if progress_bar is None:
+                progress_bar = notebook_tqdm(
+                    total=total,
+                    desc="Running predictions",
+                    unit="image",
+                    leave=True,
+                )
+            elif total > 0 and progress_bar.total != total:
+                # tqdm stores the full expected work on .total
                 progress_bar.total = total
+            # tqdm stores the completed work on `.n`; refresh() redraws the same widget.
             progress_bar.n = min(current, progress_bar.total or current)
             postfix: dict[str, int | str] = {
                 "written": written,
@@ -337,7 +343,8 @@ def run_segmentation_in_external_env(
             progress_bar.refresh()
 
         return_code = process.wait()
-        progress_bar.close()
+        if progress_bar is not None:
+            progress_bar.close()
         if return_code != 0:
             _raise_segmentation_error("".join(stderr_lines))
 
@@ -403,6 +410,8 @@ def run_segmentation_in_external_env(
     }
 
     if _is_notebook_session():
+        # Ask the child script to emit structured progress lines for this notebook parent.
+        env[SEGMENTATION_PROGRESS_ENV_VAR] = "1"
         _run_notebook_process()
         return
 

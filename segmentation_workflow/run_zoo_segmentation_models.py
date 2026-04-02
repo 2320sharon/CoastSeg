@@ -56,7 +56,7 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 from PIL import Image
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from transformers import TFSegformerForSemanticSegmentation
 
@@ -81,6 +81,7 @@ except Exception:
 
 FAILURE_PREFIX = "SEGMENTATION_FAILURE: "
 PROGRESS_PREFIX = "SEGMENTATION_PROGRESS: "
+PROGRESS_ENV_VAR = "COASTSEG_EMIT_PROGRESS"
 
 MODEL_SETTINGS_DEFAULTS: dict[str, str] = {
     "use_GPU": "0",
@@ -158,6 +159,14 @@ def _emit_progress(
     image: str = "",
 ) -> None:
     """Emit structured progress events for parent-process consumers."""
+    # Only emit machine-readable progress when a parent notebook process asked for it.
+    if os.environ.get(PROGRESS_ENV_VAR, "").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
     payload = {
         "current": current,
         "total": total,
@@ -179,11 +188,17 @@ def _update_progress(
     image: str = "",
 ) -> None:
     """Sync terminal tqdm state and structured parent progress updates."""
+    if progress_bar.total != total:
+        # Keep tqdm's total in sync in case the caller learns the real image count later.
+        progress_bar.total = total
+    # tqdm uses `.n` as the current completed count shown in the bar.
+    progress_bar.n = min(current, total)
     progress_bar.set_postfix(
         written=written,
         skipped=skipped,
         failures=failures,
     )
+    progress_bar.refresh()
     _emit_progress(current, total, written, skipped, failures, image)
 
 
@@ -1127,6 +1142,7 @@ def run_segmentation_workflow(config: SegmentationConfig) -> dict[str, object]:
     npz_written = 0
     skipped = 0
     workflow_error: str | None = None
+    progress_bar: tqdm | None = None
 
     try:
         if not config.input_dir.exists():
@@ -1147,6 +1163,21 @@ def run_segmentation_workflow(config: SegmentationConfig) -> dict[str, object]:
             )
         ]
 
+        total_images = len(image_paths)
+        progress_bar = tqdm(
+            # The script-owned bar is only for direct terminal runs.
+            total=total_images,
+            desc="Running predictions",
+            unit="image",
+            dynamic_ncols=True,
+            leave=True,
+            file=sys.stdout,
+            # Non-interactive stdout cannot redraw in place, so disable the local bar there.
+            disable=not sys.stdout.isatty(),
+        )
+        # Publish the real total before model loading so notebook parents avoid a temporary 0/0 bar.
+        _update_progress(progress_bar, 0, total_images, written, skipped, len(failures))
+
         # load the inference backend once before processing images
         backend = load_inference_backend(
             config.model_path,
@@ -1158,17 +1189,7 @@ def run_segmentation_workflow(config: SegmentationConfig) -> dict[str, object]:
         # Persist model metadata before prediction starts so downstream tools can load it.
         _write_model_info_json(config, backend)
 
-        progress_bar = tqdm(
-            image_paths,
-            desc="Running predictions",
-            unit="image",
-            dynamic_ncols=True,
-            leave=True,
-            file=sys.stdout,
-        )
-        total_images = len(image_paths)
-        _emit_progress(0, total_images, written, skipped, len(failures))
-        for index, image_path in enumerate(progress_bar, start=1):
+        for index, image_path in enumerate(image_paths, start=1):
             # Infer output path and skip if it exists and overwrite is False
             output_path = infer_output_path(
                 image_path, config.input_dir, config.output_dir
@@ -1224,6 +1245,8 @@ def run_segmentation_workflow(config: SegmentationConfig) -> dict[str, object]:
         workflow_error = str(exc)
         raise
     finally:
+        if progress_bar is not None:
+            progress_bar.close()
         summary: dict[str, object] = {
             "config": {
                 **asdict(config),
