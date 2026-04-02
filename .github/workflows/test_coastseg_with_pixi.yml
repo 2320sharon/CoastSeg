@@ -1,25 +1,3 @@
-on:
-  push:
-    branches: [main, develop, isolate_segmentation_code]
-  pull_request:
-    branches: [main, develop, isolate_segmentation_code]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-name: Test CoastSeg Pixi Installation (pixi run test)
-
-jobs:
-  test:
-    name: ${{ matrix.os }}, ${{ matrix.environment }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        environment: [test-py310, test-py311, test-py312, test-py313]
-
 name: Test CoastSeg Pixi Installation (pixi run test)
 
 on:
