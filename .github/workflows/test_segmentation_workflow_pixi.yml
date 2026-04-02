@@ -50,5 +50,6 @@ jobs:
         run: |
           pixi run python --version
           pixi run python -m pip --version
+          pixi run import_smoke
           pixi run python -m compileall run_zoo_segmentation_models.py
           pixi run python run_zoo_segmentation_models.py --help
