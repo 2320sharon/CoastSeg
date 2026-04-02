@@ -12,38 +12,48 @@ name: Test CoastSeg Pixi Installation (pixi run test)
 
 jobs:
   test:
-    name: ${{ matrix.os }}, Python ${{ matrix.python-version }}
+    name: ${{ matrix.os }}, ${{ matrix.environment }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        environment: [test-py310, test-py311, test-py312, test-py313]
+
+name: Test CoastSeg Pixi Installation (pixi run test)
+
+on:
+  push:
+    branches: [main, develop, isolate_segmentation_code]
+  pull_request:
+    branches: [main, develop, isolate_segmentation_code]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Pixi
-        uses: prefix-dev/setup-pixi@v0.9.3
+        uses: prefix-dev/setup-pixi@v0.9.4
         with:
-          # Use a recent Pixi version
-          pixi-version: v0.59.0
-
-          # Make sure Pixi uses your pyproject.toml as manifest
+          pixi-version: v0.66.0
           manifest-path: pyproject.toml
-
-          # Pre-install and cache the test environment
           environments: test
-
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'develop' }}
+          locked: true
 
-          # Resolve per matrix entry to allow Python-version matrix testing.
-          locked: false
-
-      - name: Set matrix Python in Pixi env
-        run: pixi add --environment test "python==${{ matrix.python-version }}.*"
-
-      - name: "Run tests (Pixi env: test)"
+      - name: Run tests with Pixi
         run: pixi run -e test run_tests
