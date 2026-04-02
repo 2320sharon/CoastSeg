@@ -1166,10 +1166,10 @@ class Zoo_Model:
             self.weights_directory = resolved_local_path
             return resolved_local_path
 
-        weights_directory = self.get_model_directory(model_id)
-        self.download_model(model_implementation, model_id, weights_directory)
-        self.weights_directory = str(Path(weights_directory).expanduser().resolve())
-        return self.weights_directory
+        weights_directory, _ = self.ensure_model_downloaded(
+            model_implementation, model_id
+        )
+        return weights_directory
 
     def get_weights_list(self, model_choice: str = "BEST") -> List[str]:
         """Returns a list of the model weights files (.h5) within the weights directory.
@@ -1223,10 +1223,9 @@ class Zoo_Model:
                     "Model type must be specified before running the model."
                 )
 
-            model_directory = (
-                Path(self.get_model_directory(model_id)).expanduser().resolve()
+            model_directory = Path(
+                self.ensure_model_downloaded(implementation, model_id)[0]
             )
-            self.download_model(implementation, model_id, str(model_directory))
 
         retrieve_model_weights(str(model_directory), implementation)
         ModelInfo(model_directory=str(model_directory)).load()
@@ -1234,6 +1233,27 @@ class Zoo_Model:
         self.weights_directory = str(model_directory)
         logger.info("Using model directory: %s", model_directory)
         return str(model_directory)
+
+    def ensure_model_downloaded(
+        self, model_choice: str, model_id: str
+    ) -> Tuple[str, bool]:
+        """Ensure the selected model files exist locally.
+
+        Args:
+            model_choice (str): Download mode, either ``BEST`` or ``ENSEMBLE``.
+            model_id (str): Model identifier.
+
+        Returns:
+            Tuple[str, bool]: Resolved model directory and whether files were downloaded.
+        """
+        model_directory = (
+            Path(self.get_model_directory(model_id)).expanduser().resolve()
+        )
+        downloaded = self.download_model(model_choice, model_id, str(model_directory))
+        # Validate the directory after download so callers can rely on a runnable model path.
+        retrieve_model_weights(str(model_directory), model_choice)
+        self.weights_directory = str(model_directory)
+        return str(model_directory), downloaded
 
     def preprocess_data(
         self, src_directory: str, img_type: str, functions: list
@@ -1693,7 +1713,7 @@ class Zoo_Model:
 
     def download_best(
         self, available_files: List[dict], model_path: str, model_id: str
-    ):
+    ) -> bool:
         """
         Downloads the best model file and its corresponding JSON and classes.txt files from the given list of available files.
 
@@ -1709,16 +1729,19 @@ class Zoo_Model:
             None
         """
         file_index = index_available_files(available_files)
+        downloaded_any = False
 
         # Ensure BEST_MODEL.txt exists locally
         best_txt_local = os.path.join(model_path, "BEST_MODEL.txt")
         if not os.path.isfile(best_txt_local):
+            # BEST downloads are driven by this pointer file, so fetch it before resolving weights.
             # Build and download JUST BEST_MODEL.txt
             best_txt_dict = build_download_dict(
                 ["BEST_MODEL.txt"], file_index, model_id, model_path
             )
             if best_txt_dict:
                 download_files(best_txt_dict)
+                downloaded_any = True
 
         # Read which model is "best"
         with open(best_txt_local, "r") as f:
@@ -1734,10 +1757,13 @@ class Zoo_Model:
         )
         if download_dict:
             download_files(download_dict)
+            downloaded_any = True
+
+        return downloaded_any
 
     def download_ensemble(
         self, available_files: List[dict], model_path: str, model_id: str
-    ):
+    ) -> bool:
         """
         Downloads all the model files and their corresponding JSON and classes.txt files from the given list of available files, for an ensemble model.
 
@@ -1772,12 +1798,13 @@ class Zoo_Model:
         )
         if not download_dict:
             logger.info("All ensemble model files already exist locally.")
-            return
+            return False
 
         logger.info(f"Downloading ensemble files: {list(download_dict.keys())}")
         download_files(download_dict)
+        return True
 
-    def download_model(self, model_choice: str, model_id: str, model_path: str) -> None:
+    def download_model(self, model_choice: str, model_id: str, model_path: str) -> bool:
         """Download model weights and metadata for a model identifier.
 
         Downloads best model if ``model_choice='BEST'`` or all models when
@@ -1787,6 +1814,9 @@ class Zoo_Model:
             model_choice (str): 'BEST' or 'ENSEMBLE'
             model_id (str): Model identifier.
             model_path (str): path to directory to save the downloaded files to
+
+        Returns:
+            bool: True if any files were downloaded, else False.
         """
         normalized_model_id = model_id.strip()
 
@@ -1802,6 +1832,12 @@ class Zoo_Model:
 
         # Download the best model if best or all models if ensemble
         if model_choice.upper() == "BEST":
-            self.download_best(available_files, model_path, normalized_model_id)
-        elif model_choice.upper() == "ENSEMBLE":
-            self.download_ensemble(available_files, model_path, normalized_model_id)
+            return self.download_best(available_files, model_path, normalized_model_id)
+        if model_choice.upper() == "ENSEMBLE":
+            return self.download_ensemble(
+                available_files, model_path, normalized_model_id
+            )
+
+        raise ValueError(
+            f"Invalid model_choice '{model_choice}'. Valid choices are 'BEST' or 'ENSEMBLE'."
+        )

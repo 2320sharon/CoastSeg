@@ -1,3 +1,5 @@
+import contextlib
+import io
 import logging
 import os
 from typing import Optional
@@ -41,6 +43,8 @@ TEXT_ALIGN = "text-align: center;"
 
 class UI_Models:
     # all instances of UI will share the same debug_view
+    # Keep model download status separate so download messages do not mix with run output.
+    model_download_view = Output(layout={"border": "1px solid black"})
     extract_shorelines_view = Output(layout={"border": "1px solid black"})
     tidal_correction_view = Output(layout={"border": "1px solid black"})
 
@@ -288,6 +292,7 @@ class UI_Models:
         settings = {
             "model_input": self.model_input_dropdown,
             "model_type": self.model_dropdown,
+            "download_model": self.download_model_button,
         }
         # create settings vbox
         return VBox([widget for widget_name, widget in settings.items()])
@@ -324,7 +329,13 @@ class UI_Models:
         step_1 = HBox(
             [
                 HBox([self.step_1_instr], layout=layout),
-                self.get_model_settings_accordion(),
+                VBox(
+                    [
+                        self.get_model_settings_accordion(),
+                        # Show only the final download result directly under model selection.
+                        UI_Models.model_download_view,
+                    ]
+                ),
             ]
         )
         # step 2: Select Settings
@@ -562,6 +573,13 @@ class UI_Models:
         )
         self.use_select_images_button.on_click(self.use_select_images_button_clicked)
 
+        self.download_model_button = Button(
+            description="Download Model",
+            style=load_style,
+            icon="download",
+        )
+        self.download_model_button.on_click(self.download_model_button_clicked)
+
         self.select_extracted_shorelines_session_button = Button(
             description="Select Session",
             style=load_style,
@@ -718,6 +736,47 @@ class UI_Models:
             self.model_dropdown.options = self.NDWI_models
 
         self.model_dict["img_type"] = change["new"]
+
+    @model_download_view.capture(clear_output=True)
+    def download_model_button_clicked(self, button: Button) -> None:
+        """Download the currently selected model and report the final status."""
+        model_name_selected = str(self.model_dict.get("model_type", "")).strip()
+        implementation = str(self.model_dict.get("implementation", "BEST")).upper()
+        if not model_name_selected:
+            self.launch_error_box(
+                "Cannot Download Model",
+                "Select a model before downloading.",
+                position=1,
+            )
+            return
+
+        button.disabled = True
+        try:
+            # Suppress downloader chatter so the notebook only shows the final status line.
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    model_location, downloaded = (
+                        self.zoo_model_instance.ensure_model_downloaded(
+                            implementation, model_name_selected
+                        )
+                    )
+        except Exception as error:
+            self.launch_error_box(
+                "Model Download Failed",
+                f"An error occurred while downloading the model: {error}",
+                position=1,
+            )
+            return
+        finally:
+            button.disabled = False
+
+        UI_Models.model_download_view.clear_output(wait=True)
+        if downloaded:
+            print(
+                f"The {model_name_selected} was downloaded and saved to {model_location}"
+            )
+        else:
+            print(f"The {model_name_selected} already exists at {model_location}")
 
     @extract_shorelines_view.capture(clear_output=True)
     def run_model_button_clicked(self, button: Button) -> None:
