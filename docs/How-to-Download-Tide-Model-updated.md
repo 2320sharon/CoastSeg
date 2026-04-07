@@ -24,9 +24,12 @@ Be aware that AVISO may update their registration guide at any time and this pag
 ![image](https://github.com/Doodleverse/CoastSeg/assets/61564689/bf5382f0-6bc0-4867-893d-c8f84a3d3760)
 
 ### Step 5: Confirm Your Subscription
-- **Check Your Subscriptions:** In the "Your current subscriptions" section, ensure that the **FES (Finite Element Solution - Oceanic Tides Heights)** model is listed. This confirms that you've successfully subscribed to the desired model.
+- **Check Your Subscriptions:** Under **My AVISO+** select **My Products**, ensure that under **Your current subscriptions**: it lists **FES (Finite Element Solution - Oceanic Tides Heights)**. This confirms that you've successfully subscribed to the desired model.
 
-![FES_products](https://github.com/user-attachments/assets/87d23089-1f46-43c7-bb96-d1850dc7a9c4)
+![FES_products](https://github.com/user-attachments/assets/40d2e377-679b-4ec8-a054-6970c484e6c4)
+![FES_subscription_under_my_products_page](https://github.com/user-attachments/assets/786bc5ee-a5a3-4896-919a-d9f604527486)
+
+
 
 # Part 2: Download and Clip the Tide Model
 
