@@ -1,155 +1,291 @@
-This guide is designed to help you easily update CoastSeg, whether you're updating to a specific version, the latest version, applying a patch, or updating code and notebooks from GitHub.
+# Update CoastSeg
 
-## Step 1: Activate the Environment
+Use this guide to update CoastSeg in the environment you already use:
 
----
+- Conda install
+- Pip install
+- Pixi install
+- Local git clone
 
-1. Open your terminal or Anaconda Prompt.
-   ```bash
-     conda activate coastseg
-   ```
+If you are not sure which method you used, check the commands you normally run to start CoastSeg:
 
-## Step 2: Update the CoastSeg Version Installed
+- `conda activate coastseg` usually means a Conda environment
+- `pip install coastseg` usually means a pip environment
+- `pixi shell` means a Pixi environment backed by your local git clone
 
----
+!!! note
+   Pixi installs CoastSeg from your local git clone. If you use Pixi, updating the git clone is part of updating CoastSeg.
 
-### Option 1: Update via Conda
+## Before You Start
 
-Use the following command to update CoastSeg. This command will fetch the latest version of CoastSeg available in the Conda channels that you have access to.
+- Open a terminal.
+- If you use Conda or Miniforge, make sure Conda is available in that terminal.
+- Decide what you want to update:
+   - Only the installed CoastSeg package
+   - Your local CoastSeg git clone
+   - Both the package and the git clone
 
-```bash
-  conda update coastseg
-```
+## Choose Your Update Path
 
-- If you're looking for a specific version of CoastSeg, you can specify it directly by using
+| If you installed CoastSeg with... | Update this way | Also update your git clone? |
+| --- | --- | --- |
+| `conda install coastseg` | [Update a Conda Environment](#update-a-conda-environment) | Only if you also work from a local clone |
+| `pip install coastseg` | [Update a Pip Environment](#update-a-pip-environment) | Only if you also work from a local clone |
+| `pixi shell` | [Update a Pixi Environment](#update-a-pixi-environment) | Yes. Pixi uses your local clone |
+| `git clone ...CoastSeg.git` | [Update a Git Clone](#update-a-git-clone) | Yes |
 
-  ```bash
-    conda install coastseg=<version>
-  ```
+## Update a Git Clone
 
-- Replace <version> with the desired version number, such as 1.2.3
+Use this section if you want the latest notebooks, scripts, docs, or source code from GitHub.
 
-### Option 2: Update via Pip
+This is required for Pixi installs and optional for Conda or pip installs.
 
-**Update to the Latest Version**
-
-1.**Install the latest version of CoastSeg from PyPi:**
-
-- Use the command below to upgrade to the latest version, which includes all recent features and fixes:
-
-```bash
-  pip install coastseg --upgrade
-```
-
-- Don't worry if you see the warning message below. This is normal
-
-```bash
-  "ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts."
-```
-
-2.**Install jsonschema**
-
-- To ensure functionality in Jupyter notebooks, install the required jsonschema version:
+**Go to your CoastSeg clone**
 
 ```bash
- pip install jsonschema==4.19.0 --user
+cd <coastseg_location>
 ```
 
-**Update to a Specific Version**
-
-1.**Install a Specific Version of CoastSeg from PyPi:**
-
-- If you need to install a particular version, use the command below and replace <version> with the desired version number (e.g., 1.1.26).
-
-  ```bash
-   pip install coastseg==<version>
-  ```
-
-- Don't worry if you see the warning message below. This is normal
+**Check that `origin` points to the CoastSeg repository**
 
 ```bash
-  "ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts."
-```
-
-2. **Install jsonschema**
-
-   -This is necessary to run coastseg in a jupyter notebook.
-
-```bash
- pip install jsonschema==4.19.0 --user
-```
-
-## Step 3: Update Code and Notebooks from GitHub</h2>
-
----
-
-(Optional) Follow these steps if you want the latest notebooks or code updates from the CoastSeg GitHub repository.
-
-### Step 1: Open CoastSeg in Anaconda
-
-1.Open Anaconda Prompt
-
-2.Activate the coastseg environment
-
-```bash
-  conda activate coastseg
-```
-
-3.Go to your coastseg location
-
-```bash
-cd <coastseg location>
-```
-
-### Step 2: Check for a Remote Connection to CoastSeg Repository
-
--Run the command below. In the output of this command you should see `origin  https://github.com/Doodleverse/CoastSeg.git (fetch)`
-
-```
 git remote -v
 ```
 
-![git remote output](https://github.com/SatelliteShorelines/CoastSeg/assets/61564689/adbb9783-0f0e-4081-ad3f-cbfb00964a9d)
+You should see something like:
 
-- If you don't see this output, then run the following command
-  ```bash
-   git remote add origin  https://github.com/Doodleverse/CoastSeg.git
-   git pull origin main
-  ```
-
-### Step 3: Pull the Latest Changes
-
-1.  Run the command below
-    ```
-     git pull origin main
-    ```
-2.  If you recieve an error message like the one shown below then proceed to 3, otherwise go to [Go to Step 4: Verify Update Success](#step-4-verify-update-success)
-
-    ```
-        Please commit your changes or stash them before you merge
-        Aborting
-    ```
-
-    <img width="437" alt="git_pull_fail" src="https://github.com/SatelliteShorelines/CoastSeg/assets/61564689/fd7ebceb-11f4-4c68-8aad-19f4d5f85030">
-
-3.  Run the command below:
-
--**WARNING** This will clear out anything you have written to the `certifications.json` make sure to save that file to a new location then move it back when you're done upgrading
-
-```
-       git fetch origin
-       git reset --hard origin/main
-       git pull origin main
+```text
+origin  https://github.com/SatelliteShorelines/CoastSeg.git (fetch)
+origin  https://github.com/SatelliteShorelines/CoastSeg.git (push)
 ```
 
-### Step 4: Verify Update Success
+If `origin` is missing, add it:
 
+```bash
+git remote add origin https://github.com/SatelliteShorelines/CoastSeg.git
 ```
+
+**Check for local changes**
+
+```bash
 git status
 ```
 
-- This command should return the following message
-- ```
-  On branch main
-  Your branch is up to date with 'origin/main'.
-  ```
+If Git says your working tree is clean, pull the latest changes:
+
+```bash
+git pull origin main
+```
+
+**If `git pull` fails because you changed local files**
+
+If you want to keep your local changes, stash them first:
+
+```bash
+git stash push -u
+git pull origin main
+git stash pop
+```
+
+**Last resort: force your clone to match GitHub**
+
+Only use this if you want to discard local changes in the clone.
+
+!!! warning
+   This will discard local changes in the clone. If you want to keep anything, copy it somewhere safe first. This is especially important for files like `certifications.json` or any notebooks, scripts, or settings you edited locally.
+
+```bash
+git fetch origin
+git reset --hard origin/main
+```
+
+## Update a Conda Environment
+
+Use this section if you installed CoastSeg from Conda or conda-forge.
+
+**Activate the environment**
+
+```bash
+conda activate coastseg
+```
+
+**Update to the latest CoastSeg version**
+
+```bash
+conda update coastseg
+```
+
+**Install a specific CoastSeg version**
+
+Replace `<version>` with the version you want, for example `1.2.3`.
+
+```bash
+conda install coastseg=<version>
+```
+
+**Verify the update**
+
+```bash
+python -c "import coastseg; print('CoastSeg import OK')"
+```
+
+## Update a Pip Environment
+
+Use this section if you installed CoastSeg with `pip install coastseg`.
+
+**Activate the environment**
+
+If you use Conda to manage the Python environment, activate it first:
+
+```bash
+conda activate coastseg
+```
+
+If you use a virtual environment instead, activate that environment before running pip.
+
+**Update to the latest CoastSeg version**
+
+```bash
+pip install --upgrade coastseg
+```
+
+**Install a specific CoastSeg version**
+
+Replace `<version>` with the version you want, for example `1.1.26`.
+
+```bash
+pip install coastseg==<version>
+```
+
+**About pip dependency warnings**
+
+You may see a message like this during the update:
+
+```text
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed.
+```
+
+This warning is common in older Python environments. If CoastSeg imports correctly after the update, the installation may still be usable.
+
+**Verify the update**
+
+```bash
+python -c "import coastseg; print('CoastSeg import OK')"
+```
+
+## Update a Pixi Environment
+
+Use this section if you start CoastSeg with `pixi shell`.
+
+!!! warning
+   Do not run `pip install` or `conda install` inside a Pixi environment.
+
+- Pixi installs CoastSeg from your local git clone
+- Updating the clone is part of updating CoastSeg
+- Pixi environments should be updated with `git pull`, `pixi install`, and `pixi shell`
+
+**Go to your CoastSeg clone**
+
+```bash
+cd <coastseg_location>
+```
+
+Make sure this folder contains `pyproject.toml` and `pixi.lock`.
+
+**Pull the latest code**
+
+```bash
+git pull origin main
+```
+
+If your clone uses a different default branch, replace `main` with that branch name.
+
+**Refresh the Pixi environment**
+
+For the default environment:
+
+```bash
+pixi install
+pixi shell
+```
+
+If you use the zoo workflow or another named Pixi environment, activate that environment after the install:
+
+```bash
+pixi install
+pixi shell -e all
+```
+
+**Verify the update**
+
+```bash
+python -c "import coastseg; print('CoastSeg import OK')"
+```
+
+**If the Pixi environment looks broken**
+
+If you previously ran `pip install` or `conda install` inside the Pixi environment and now get import errors, rebuild it from the repo root:
+
+```bash
+pixi clean
+pixi install
+```
+
+If that still does not fix the issue, remove the `.pixi` folder and recreate the environment:
+
+```bash
+pixi install
+```
+
+## Recommended Update Workflows
+
+**I installed CoastSeg with Conda**
+
+```bash
+conda activate coastseg
+conda update coastseg
+python -c "import coastseg; print('CoastSeg import OK')"
+```
+
+**I installed CoastSeg with pip**
+
+```bash
+conda activate coastseg
+pip install --upgrade coastseg
+python -c "import coastseg; print('CoastSeg import OK')"
+```
+
+**I installed CoastSeg with Pixi**
+
+```bash
+cd <coastseg_location>
+git pull origin main
+pixi install
+pixi shell
+python -c "import coastseg; print('CoastSeg import OK')"
+```
+
+**I only want the latest notebooks and source code from GitHub**
+
+```bash
+cd <coastseg_location>
+git pull origin main
+```
+
+## Verify Everything Worked
+
+These checks are usually enough:
+
+```bash
+python -c "import coastseg; print('CoastSeg import OK')"
+git status
+```
+
+Expected git output after a successful clone update:
+
+```text
+On branch main
+Your branch is up to date with 'origin/main'.
+```
+
+If you still have update problems after following the matching section above, re-check that you updated the same environment you actually use to run CoastSeg.

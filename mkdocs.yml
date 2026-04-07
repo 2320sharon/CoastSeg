@@ -52,6 +52,7 @@ nav:
   - Installation:
       - Basic Installation Guide: basic-install-guide.md
       - How to Install Pixi: how-to-install-pixi.md
+      - How to Install the Zoo Workflow: install-zoo-workflow.md
       - How to Install MiniForge: install-miniforge.md
       - Secure Installation Guide: secure-install-guide.md
       - Mac Installation Guide: mac-install-guide.md
