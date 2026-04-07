@@ -1,23 +1,36 @@
-# How to Use the Zoo Notebook
-- ⚠️ Ensure you have downloaded data from Google Earth Engine before running Zoo models
-- ⚠️ Zoo notebook runs one region of interest (ROI) at a time
+# How to Run Zoo Models
 
-# Before you begin 
-Follow the installation instructions in [Install the Zoo Workflow](install-zoo-workflow.md) before using the zoo workflow models.
+Use this guide to run CoastSeg zoo models on imagery you already downloaded.
 
-# Phase 1: Install the Models 
-1. Activate the CoastSeg Environment `conda activate CoastSeg`
-2. Run the `SDS_zoo_classifier.ipynb` notebook and download a model using the download button
-	- Alternatively,  use the `download_zoo_model.py` script to download one of the available zoo models. Follow this guide for more details on how to download models using the script [How to Download Models](how-to-download-zoo-models.md)
-3. Validate the model you downloaded is at `CoastSeg/models`
+!!! note
+	Before you start:
 
-# Phase 2: Run the models
+	- Download your imagery from Google Earth Engine first.
+	- The zoo workflow processes one region of interest (ROI) at a time.
+	- Install the zoo workflow first by following [Install the Zoo Workflow](install-zoo-workflow.md).
 
-## 1. Activate the environment
+## Phase 1: Download a Model
 
-Choose one option.
+Before you can run the zoo workflow, you need to download at least one model.
 
-### Pixi (Recommended)
+1. Activate your main CoastSeg environment.
+
+	```bash
+	conda activate coastseg
+	```
+
+2. Open the notebook `SDS_zoo_classifier.ipynb`.
+3. Use the download button in the notebook to download a model.
+
+	- You can also download a model with the script `download_zoo_model.py`. If you want to use the script instead of the notebook, see [How to Download Models](how-to-download-zoo-models.md).
+
+4. Confirm that the model folder was saved in `CoastSeg/models`.
+
+## Phase 2: Activate the Zoo Environment
+
+Choose one setup method.
+
+### Option 1: Pixi (Recommended)
 
 ```bash
 cd <coastseg_location>
@@ -25,32 +38,26 @@ cd segmentation_workflow
 pixi shell
 ```
 
-`pixi shell` installs the environment on first run, then activates it.
-- This command is like running `conda activate` & `conda install` at the same time
+On the first run, `pixi shell` installs the environment and then activates it.
 
-### Conda
+You will know the environment is active when you see `(segmentation_workflow)` in the terminal.
+
+### Option 2: Conda
 
 ```bash
+cd <coastseg_location>
 cd segmentation_workflow
 conda activate segmentation_workflow
 ```
 
-## 2. Run the Models
+## Phase 3: Run the Models
 
-First, move into the workflow directory and make sure the environment is active.
+Before running the command below, make sure:
 
-```bash
-cd segmentation_workflow
-```
+- The `(segmentation_workflow)` environment is active
+- You are inside the `segmentation_workflow` folder
 
-Activate the environment with either `pixi shell` or `conda activate segmentation_workflow`.
-
-### CLI Command
-
-Defaults:
-
-- `--implementation BEST`
-- GPU is used if available
+### Command
 
 ```bash
 python run_zoo_segmentation_models.py \
@@ -62,11 +69,16 @@ python run_zoo_segmentation_models.py \
 	[--cpu-only]
 ```
 
-### Parameters
+### What the command means
 
-- `-i`, `--input-dir`: Folder containing input images (`jpg`, `png`, or `tif`).
-- `-o`, `--output-dir`: Destination for prediction masks and `segmentation_summary.json`.
-- `-m`, `--model`: Model directory containing the `.h5` weights and `.json` config files.
+- `-i`, `--input-dir`: Folder containing the input images. These can be `jpg`, `png`, or `tif` files.
+- `-o`, `--output-dir`: Folder where the model outputs will be saved.
+- `-m`, `--model`: Folder containing the model files, including the `.h5` weights and `.json` config files.
+
+### Default behavior
+
+- `--implementation BEST` is used unless you choose something else
+- A GPU is used automatically if one is available
 
 ### Example
 
@@ -77,7 +89,7 @@ python run_zoo_segmentation_models.py \
 	-m "C:\path\to\model_dir"
 ```
 
-### Real Example
+### Real example
 
 ```bash
 python run_zoo_segmentation_models.py \
@@ -86,29 +98,53 @@ python run_zoo_segmentation_models.py \
 	-m "C:\CoastSeg\models\global_segformer_RGB_4class_14036903"
 ```
 
-- This example will run the `global_segformer_RGB_4class_14036903` on the images in the directory `C:\CoastSeg\data\ID_rnv2_datetime01-16-26__03_50_41\jpg_files\preprocessed\RGB` and save the segmentations to the directory `"C:\CoastSeg\sessions\model_outputs_session`
+This example runs the model `global_segformer_RGB_4class_14036903` on the images in `C:\CoastSeg\data\ID_rnv2_datetime01-16-26__03_50_41\jpg_files\preprocessed\RGB` and saves the results to `C:\CoastSeg\sessions\model_outputs_session`.
 
 ## Outputs
 
-The workflow writes all outputs to `<output_dir>`.
+All results are written to `<output_dir>`.
 
-For each input image, it creates:
+For each input image, the workflow creates:
 
-- `<image_stem>_predseg.png`: A colorized segmentation mask.
-- `<image_stem>_res.npz`: A compressed NumPy file containing the predicted labels and metadata.
+- `<image_stem>_predseg.png`: A colorized segmentation mask
+- `<image_stem>_res.npz`: A compressed NumPy file containing the predicted labels and metadata
 
-It also writes these run-level files:
+It also creates these summary files for the full run:
 
-- `model_settings.json`: The segmentation settings used for the run, including the implementation mode, model type, and GPU setting.
-- `model_info.json`: Metadata about the model, including the model directory, class names, and water-class indices.
-- `segmentation_summary.json`: A summary of the run, including the total number of images processed, masks written, NPZ files written, skipped files, and any failures.
+- `model_settings.json`: The settings used for the run, including implementation mode, model type, and GPU usage
+- `model_info.json`: Information about the model, including the model directory, class names, and water-class indices
+- `segmentation_summary.json`: A summary of the run, including processed images, output files, skipped files, and failures
 
-The output folder keeps the same relative folder structure as the input folder, with each predicted mask saved as `_predseg.png` and each companion data file saved as `_res.npz`.
+The output folder keeps the same relative folder structure as the input folder.
 
+## Phase 4: Extract Shorelines from the Segmentations
 
-# Phase 3: Extract Shorelines from the Segmentations
+After the model finishes, you can extract shorelines from the segmentation outputs.
 
-1. Deactivate the `segmentation_workflow` environment
-2. Go back to the CoastSeg environment `cd ..`
-3. Run the script `3_zoo_workflow_extract_shorelines.py`
-- Follow the instructions in the script by opening it in a code editor like VSCode
+To do this, use the script `3_zoo_workflow_extract_shorelines.py` in the main CoastSeg folder.
+
+1. Exit or deactivate the `segmentation_workflow` environment.
+2. Go back to the main CoastSeg folder.
+
+	```bash
+	cd ..
+	```
+
+3. Activate your main CoastSeg environment.
+
+	Use one of these options:
+
+	```bash
+	conda activate CoastSeg
+	```
+
+	or
+
+	```bash
+	pixi shell
+	```
+
+4. Open `3_zoo_workflow_extract_shorelines.py` in a code editor such as VS Code.
+	- Read the instructions in the script for a guide on how to use it.
+5. Update the script so it points to the folder containing your segmentation outputs.
+6. Run the script.
