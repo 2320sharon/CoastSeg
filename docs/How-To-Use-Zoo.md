@@ -2,6 +2,13 @@
 - ⚠️ Ensure you have downloaded data from Google Earth Engine before running Zoo models
 - ⚠️ Zoo notebook runs one region of interest (ROI) at a time
 
+## ⚠️  WARNING (please read) ⚠️
+To use the full functionality of `SDS_zoo_classifier.ipynb`, you must install the zoo workflow with Pixi. Before following this guide, complete the setup steps in [How to Install the Segmentation (Zoo) Workflow](install-zoo-workflow.md).
+
+If you cannot use Pixi and must use Conda, you can still download models from this notebook, but you cannot run the models inside the notebook. Instead, follow [How to Run Models](How-To-Run-Models.md) to run the zoo models in a separate Conda environment. This limitation exists because the model requirements are not compatible with the core CoastSeg environment.
+
+The rest of this guide assumes you followed the instructions in [How to Install the Segmentation (Zoo) Workflow](install-zoo-workflow.md) and have already created the pixi environment for `segmentation_workflow` and have switched back to the main CoastSeg environment `(coastseg)`.
+
 ## Run Start Up Cell
 ![zoo_run_cell](https://github.com/user-attachments/assets/f67ccc77-7a59-401e-a0a7-ba15d4fba7cf)
 
