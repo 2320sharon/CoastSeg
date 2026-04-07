@@ -60,7 +60,7 @@ CoastSeg extract shorelines from your imagery by checking if the water line inte
 
 1. Draw a bounding box
 2. Click load transects
-   - Guide on how to do this here [How to Load Transects on the Map](https://github.com/Doodleverse/CoastSeg/wiki/3.-How-to-Use-the-Map#how-to-delete-shorelines-from-the-map:~:text=your%20feature%20again.-,How%20to%20Load%20Transects%20on%20the%20Map,-To%20load%20transects)
+   - Guide on how to do this here [How to Load Transects on the Map](https://satelliteshorelines.github.io/CoastSeg/map_guide/#how-to-load-transects-on-the-map)
 
 **Option 2 : Load Your Own Transects**
 

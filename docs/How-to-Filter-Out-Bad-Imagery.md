@@ -3,7 +3,7 @@
 
 To extract the best shorelines, it's essential to use only high-quality imagery, which means filtering out any poor-quality images. You should filter out bad imagery in `data/roi_id/jpg_files/preprocessed/RGB` by moving any undesirable images to a designated subdirectory named 'bad'.
 
-Filtering the RGB images does not delete any TIFF files but helps to improve the efficiency of shoreline extraction and enhance the quality of the extracted shorelines. For more information on the shoreline extraction process, check out the [wiki page about the shoreline extraction process](https://github.com/Doodleverse/CoastSeg/wiki/6.-How-to-Extract-Shorelines).
+Filtering the RGB images does not delete any TIFF files but helps to improve the efficiency of shoreline extraction and enhance the quality of the extracted shorelines. For more information on the shoreline extraction process, check out the [wiki page about the shoreline extraction process](https://satelliteshorelines.github.io/CoastSeg/extract_shorelines/).
 
 
 ## Step-by-Step Guide
@@ -62,4 +62,4 @@ In this example, you can see that ROI 3 is located within the `CoastSeg/data` fo
 
 ### 4. Test Shoreline Extraction
 
-Load your ROIs in CoastSeg and run `extract shorelines` again. None of the images that were sorted into the 'bad' directory will have their shorelines extracted. For more details, refer to the guide [How to Extract Shorelines](https://github.com/Doodleverse/CoastSeg/wiki/6.-How-to-Extract-Shorelines).
+Load your ROIs in CoastSeg and run `extract shorelines` again. None of the images that were sorted into the 'bad' directory will have their shorelines extracted. For more details, refer to the guide [How to Extract Shorelines](https://satelliteshorelines.github.io/CoastSeg/extract_shorelines/).
