@@ -1,11 +1,15 @@
 ## Install CoastSeg with Pixi
 
 **Pixi warning (please read)**
-- Keep your local CoastSeg repo **up to date**, or you will use an **outdated** CoastSeg.
-- This is an **editable install**: Pixi builds CoastSeg from the code in your **local git clone**.
-- ⚠️⚠️⚠️**Do not run `pip install` or `conda install` inside a Pixi environment.** It can permanently break the environment.⚠️⚠️⚠️
-  - Usually this is fine but if you start getting import errors use the advice below
-  - If that happens: delete the `.pixi/` folder and re-run `pixi shell --locked` to reinstall all the dependencies
+
+1. Keep your local CoastSeg repo **up to date**, or you will use an **outdated** CoastSeg.
+
+2. This is an **editable install**: Pixi builds CoastSeg from the code in your **local git clone** (aka the CoastSeg folder).
+
+3. ⚠️⚠️⚠️**Do not run `pip install` or `conda install` inside a Pixi environment.** It can permanently break the environment.⚠️⚠️⚠️
+    - Usually this is fine but if you start getting import errors use the advice below
+
+    - If that happens: delete the `.pixi/` folder and re-run `pixi shell --locked` to reinstall all the dependencies
 
 ## Table of Contents
 
@@ -42,7 +46,7 @@ Visit the [Pixi installation page](https://pixi.sh/latest/) and follow instructi
 3. Create + activate the Pixi environment
     - This is like  `conda install` + `conda activate` in one step, it reads  CoastSeg’s `pixi.lock` file to build the environment and then activates it
     ```
-    pixi shell --frozen
+    pixi shell
     ```
 4. Verify it worked
 
@@ -89,7 +93,7 @@ Then follow the steps in [Basic Pixi install](#basic-pixi-install-recommended) (
 
 ## Upgrade your Pixi environment (get the latest CoastSeg)
 
-> ❗ Reminder (Pixi installed via conda): If you installed Pixi inside > a conda environment (for example coastseg_pixi), activate that conda > environment before running any pixi commands:
+> ❗ Reminder (Pixi installed via conda): If you installed Pixi inside > a conda environment (for example coastseg_pixi), activate that conda environment before running any pixi commands:
 
 ```
 conda activate coastseg_pixi
@@ -133,7 +137,7 @@ conda activate coastseg_pixi
 4. Re-create/update the environment from the updated lockfile
     
     ```
-    pixi shell --frozen
+    pixi shell 
     ```
 
 5. Verify the upgrade
