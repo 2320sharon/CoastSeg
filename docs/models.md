@@ -10,21 +10,9 @@ Anyone is encouraged to contribute models. Please visit [Segmentation Zoo](https
 
 ## Installation Instructions
 
----
+Follow the installation instructions in [Install the Zoo Workflow](install-zoo-workflow.md) before using the zoo workflow models.
 
-You'll need to follow the optional set of installation instructions to install the dependencies `tensorflow` and `transformers` into the `coastseg` environment in order to run the models.
 
-**Warning**: The zoo workflow does not support Mac currently due to tensorflow and Mac having numerous compatibility issues. If you would like to help our team support Mac please submit an issue.
-
-**Install Additional Dependencies**
-
-- Only install these dependencies if you plan to use CoastSeg's Zoo workflow notebook.
-- **Warning** installing tensorflow will not work correctly on Mac see for more details [Mac install guide](https://satelliteshorelines.github.io/CoastSeg/mac-install-guide/)
-
-```bash
-pip install tensorflow
-pip install transformers
-```
 
 ## Model-Compatible Spectral Indices
 

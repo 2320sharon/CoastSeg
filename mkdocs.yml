@@ -101,8 +101,8 @@ nav:
   - API Reference:
       - How to use CoastSeg API: CoastSeg-API-Guide.md
   - Zoo:
-      - The CoastSeg Zoo Workflow: models.md
-      - How to Use the Zoo Workflow: How-To-Use-Zoo.md
+      - Available Models: models.md
+      - How to Use the Segmentation (Zoo) Workflow: How-To-Use-Zoo.md
   - Scripts:
       - How to Use Scripts: How-to-Use-Scripts.md
       - How to Flip Transects: How-to-Use-Flip-Transects.md

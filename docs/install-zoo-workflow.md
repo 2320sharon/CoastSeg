@@ -46,11 +46,8 @@ Conda also works, but we do not recommend it.
     cd <CoastSeg_location>
     cd segmentation_workflow
     ```
-
 3. Install the Conda environment using the instructions in `segmentation_workflow`.
-
-```bash
-conda install -f conda.yml
-```
-
+    ```bash
+    conda env create -f conda.yml
+    ```
 This workflow works fine, but Pixi is the recommended setup for the zoo workflow.
