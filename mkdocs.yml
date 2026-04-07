@@ -53,7 +53,6 @@ nav:
       - Basic Installation Guide: basic-install-guide.md
       - How to Install Pixi: how-to-install-pixi.md
       - How to Install MiniForge: install-miniforge.md
-      - How to Switch from Anaconda to MiniForge: transition_from_conda_to_miniconda.md
       - Secure Installation Guide: secure-install-guide.md
       - Mac Installation Guide: mac-install-guide.md
       - Update Guide: update-guide.md
