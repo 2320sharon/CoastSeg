@@ -1,6 +1,6 @@
 import os
 import warnings
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import geopandas as gpd
 import numpy as np
@@ -20,15 +20,15 @@ warnings.filterwarnings("ignore")
 
 
 def add_classifier_scores_to_transects(
-    session_path: str, good_bad_csv: str, good_bad_seg_csv: str
+    session_path: str, good_bad_csv: Optional[str], good_bad_seg_csv: Optional[str]
 ) -> None:
     """
     Adds new columns to the geojson file with the model scores from the image_classification_results.csv and segmentation_classification_results.csv files.
 
     Args:
         session_path (str): Path to the session directory.
-        good_bad_csv (str): The path to the image_classification_results.csv file.
-        good_bad_seg_csv (str): The path to the segmentation_classification_results.csv file.
+        good_bad_csv (Optional[str]): The path to the image_classification_results.csv file.
+        good_bad_seg_csv (Optional[str]): The path to the segmentation_classification_results.csv file.
 
     Returns:
         None
@@ -603,8 +603,8 @@ def save_transects(
     transect_timeseries_df: pd.DataFrame,
     settings: dict,
     ext: str = "raw",
-    good_bad_csv: str = "",
-    good_bad_seg_csv: str = "",
+    good_bad_csv: Optional[str] = "",
+    good_bad_seg_csv: Optional[str] = "",
 ) -> None:
     """Saves the transect timeseries to a CSV file, the transects as a dictionary to a JSON file, and the transect settings to a JSON file.
 

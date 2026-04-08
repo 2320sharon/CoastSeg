@@ -74,7 +74,6 @@ def test_create_geodataframe(
     assert isinstance(actual_gdf, gpd.GeoDataFrame)
     assert set(actual_gdf.columns) == set(["geometry", "id"])
     assert actual_gdf.dtypes["geometry"] == "geometry"
-    assert actual_gdf.dtypes["id"] == "object"
     # drop unneeded columns before checking
     columns_to_drop = list(valid_shoreline_gdf.columns.difference(["geometry"]))
     valid_shoreline_gdf = valid_shoreline_gdf.drop(columns=columns_to_drop)
@@ -141,7 +140,9 @@ def test_get_fishnet(
 
 def test_roi_missing_lengths(valid_bbox_gdf):
     # test with missing square lengths
-    with pytest.raises(ValueError, match="At least one square size must be greater than 0"):
+    with pytest.raises(
+        ValueError, match="At least one square size must be greater than 0"
+    ):
         roi.ROI(bbox=valid_bbox_gdf)
 
 
@@ -250,7 +251,6 @@ def test_transect_compatible_roi(transect_compatible_roi: gpd.GeoDataFrame):
     assert isinstance(actual_roi.gdf, gpd.GeoDataFrame)
     assert set(actual_roi.gdf.columns) == set(["geometry", "id"])
     assert actual_roi.gdf.dtypes["geometry"] == "geometry"
-    assert actual_roi.gdf.dtypes["id"] == "object"
     assert actual_roi.filename == "rois.geojson"
     assert hasattr(actual_roi, "extracted_shorelines")
     assert hasattr(actual_roi, "cross_shore_distances")

@@ -106,9 +106,14 @@ class No_Extracted_Shoreline(Exception):
         id: Optional[str] = "",
         msg: str = "The ROI does not have a shoreline to extract.",
     ):
-        self.msg = msg
-        if id:
+        default_msg = "The ROI does not have a shoreline to extract."
+
+        if id and msg != default_msg:
+            self.msg = f"The ROI id {id} does not have a shoreline to extract. {msg}"
+        elif id:
             self.msg = f"The ROI id {id} does not have a shoreline to extract."
+        else:
+            self.msg = msg
         super().__init__(self.msg)
 
     def __str__(self):

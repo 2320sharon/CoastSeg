@@ -38,7 +38,7 @@ settings = {
     "image_size_filter": True,  # filter images into bad folder if the images are less than 60% of the expected area. If False, no images will be filtered
     "apply_cloud_mask": True,  # apply cloud mask to the imagery. If False, the cloud mask will not be applied.
     "min_roi_coverage": 0.8,  # minimum percentage of the ROI that must be covered by the imagery to be considered valid
-    "download_cloud_thres": 0.8,  # threshold for the cloud cover percentage to download the imagery. If the cloud cover is less than this value, the image will be downloaded.
+    "download_cloud_thresh": 0.8,  # threshold for the cloud cover percentage to download the imagery. If the cloud cover is less than this value, the image will be downloaded.
 }
 
 # # download the imagery for that ROI to the /data folder

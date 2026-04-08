@@ -1,9 +1,8 @@
 import pytest
-import pkg_resources
+from importlib import resources
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import LineString, Polygon
-import os
 from unittest.mock import patch
 from ipyleaflet import GeoJSON
 
@@ -19,9 +18,9 @@ from coastseg.exceptions import InvalidGeometryType
 
 def test_load_intersecting_transects(triangle_polygon_gdf):
     rectangle = triangle_polygon_gdf
-    file_path = pkg_resources.resource_filename("coastseg", "transects")
-    transect_dir = file_path
-    transect_files = os.listdir(transect_dir)
+    transect_root = resources.files("coastseg").joinpath("transects")
+    transect_dir = str(transect_root)
+    transect_files = [path.name for path in transect_root.iterdir()]
     result = load_intersecting_transects(rectangle, transect_files, transect_dir)
     assert isinstance(result, gpd.GeoDataFrame), "Output should be a GeoDataFrame"
     assert all(
