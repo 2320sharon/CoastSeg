@@ -45,6 +45,8 @@ class UI_Models:
     # all instances of UI will share the same debug_view
     # Keep model download status separate so download messages do not mix with run output.
     model_download_view = Output(layout={"border": "1px solid black"})
+    # Keep model download status separate so download messages do not mix with run output.
+    model_download_view = Output(layout={"border": "1px solid black"})
     extract_shorelines_view = Output(layout={"border": "1px solid black"})
     tidal_correction_view = Output(layout={"border": "1px solid black"})
 
