@@ -1,0 +1,22 @@
+[project]
+authors = [{name = "Sharon Batiste", email = "sharonbatiste24@gmail.com"}]
+dependencies = ["tensorflow==2.15.*", "transformers>=4.48.3,<5"]
+
+name = "segmentation_workflow"# isolated_tensorflow
+requires-python = "<=3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+[tool.pixi.tasks]
+import_smoke = "python -c \"import importlib, os, warnings; os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3'); warnings.filterwarnings('ignore'); from transformers import TFSegformerForSemanticSegmentation; tf = importlib.import_module('tensorflow'); import run_zoo_segmentation_models; print('tensorflow', tf.__version__); print('transformers import ok'); print('module import ok')\""
+
+[tool.pixi.dependencies]
+pillow = ">=12.1.1,<13"
+pip = "*"

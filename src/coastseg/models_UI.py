@@ -1,3 +1,5 @@
+import contextlib
+import io
 import logging
 import os
 from typing import Optional
@@ -41,6 +43,10 @@ TEXT_ALIGN = "text-align: center;"
 
 class UI_Models:
     # all instances of UI will share the same debug_view
+    # Keep model download status separate so download messages do not mix with run output.
+    model_download_view = Output(layout={"border": "1px solid black"})
+    # Keep model download status separate so download messages do not mix with run output.
+    model_download_view = Output(layout={"border": "1px solid black"})
     extract_shorelines_view = Output(layout={"border": "1px solid black"})
     tidal_correction_view = Output(layout={"border": "1px solid black"})
 
@@ -50,9 +56,9 @@ class UI_Models:
         """
         self.settings_dashboard = settings_UI.Settings_UI()
         self.zoo_model_instance = zoo_model.Zoo_Model()
-        instructions = "Upload a GeoJSON file that contains either transects or shorelines.\
-        If no file is provided, the CoastSeg will automatically attempt to load an available file for you.\
-        In the event that no transects or shorelines are available within the specified region, an error will occur."
+        instructions = "This step is optional. Upload a GeoJSON file containing transects, shorelines, or a shoreline extraction area only if you want to override the default files CoastSeg loads automatically.\
+        If no file is provided, CoastSeg will attempt to load available shorelines and transects for you.\
+        If no compatible default files exist for the selected region, you will need to upload your own files."
         self.fileuploader = FileUploader(
             title="",
             instructions=instructions,
@@ -88,6 +94,7 @@ class UI_Models:
         self.shoreline_session_directory = ""
         self.model_session_directory = ""
         self.shoreline_session_name = ""
+        self.segmentation_session_directory = ""
 
         # Declare widgets and on click callbacks
         self._create_HTML_widgets()
@@ -288,6 +295,7 @@ class UI_Models:
         settings = {
             "model_input": self.model_input_dropdown,
             "model_type": self.model_dropdown,
+            "download_model": self.download_model_button,
         }
         # create settings vbox
         return VBox([widget for widget_name, widget in settings.items()])
@@ -317,22 +325,16 @@ class UI_Models:
         Create and display the main UI dashboard with all widgets and steps.
         """
         self.file_row = HBox([])
+        self.segmentation_file_row = HBox([])
         self.extracted_shoreline_file_row = HBox([])
         self.tidal_correct_file_row = HBox([])
         layout = Layout(max_width="270px", overflow="auto", padding="0px 10px 0px 0px")
-        # step 1: Select a Model
+        # step 1: Select Settings
         step_1 = HBox(
-            [
-                HBox([self.step_1_instr], layout=layout),
-                self.get_model_settings_accordion(),
-            ]
-        )
-        # step 2: Select Settings
-        step_2 = HBox(
             [
                 VBox(
                     [
-                        self.step_2_instr,
+                        self.step_1_instr,
                         self.save_settings_btn,
                     ],
                     layout=layout,
@@ -341,23 +343,64 @@ class UI_Models:
                 self.get_view_settings_vbox(),
             ]
         )
-
-        # step 3 : Upload Files
-        step_3 = HBox(
+        # step 2: Upload Files
+        step_2 = HBox(
             [
-                HBox([self.step_3_instr], layout=layout),
+                HBox([self.step_2_instr], layout=layout),
                 self.fileuploader.get_FileUploader_widget(),
             ]
         )
 
-        # step 4 : Extract Shorelines with Model
-        step_4 = VBox(
+        run_model_workflow = VBox(
             [
-                self.step_4_instr,
+                self.run_model_workflow_instr,
+                VBox(
+                    [
+                        self.get_model_settings_accordion(),
+                        # Show only the final download result directly under model selection.
+                        UI_Models.model_download_view,
+                    ],
+                ),
                 self.get_session_selection(),
                 self.use_select_images_button,
                 self.file_row,
                 self.extract_shorelines_button,
+            ],
+            layout=Layout(
+                border="2px solid #69add1",
+                padding="14px",
+                margin="0px 12px 0px 0px",
+                min_width="355px",
+                flex="1 1 355px",
+                align_items="flex-start",
+            ),
+        )
+
+        extract_from_folder_workflow = VBox(
+            [
+                self.extract_from_folder_workflow_instr,
+                self.use_select_segmentation_session_button,
+                self.segmentation_file_row,
+                self.extract_from_segmentation_button,
+            ],
+            layout=Layout(
+                border="2px solid #c061ff",
+                padding="14px",
+                margin="0px",
+                min_width="355px",
+                flex="1 1 355px",
+                align_items="flex-start",
+            ),
+        )
+
+        # step 3 : Choose Workflow
+        step_3 = VBox(
+            [
+                self.step_3_instr,
+                HBox(
+                    [run_model_workflow, extract_from_folder_workflow],
+                    layout=Layout(flex_flow="row wrap", align_items="stretch"),
+                ),
             ]
         )
 
@@ -376,7 +419,6 @@ class UI_Models:
             step_1,
             step_2,
             step_3,
-            step_4,
             HBox(
                 [self.clear_extract_shorelines_btn(), UI_Models.extract_shorelines_view]
             ),
@@ -548,19 +590,52 @@ class UI_Models:
 
         # Extract Shorelines button: extracts shorelines from model outputs
         self.extract_shorelines_button = Button(
-            description="Extract Shorelines",
-            style=action_style,
+            description="Run Model + Extract Shorelines",
+            style=dict(button_color="#0b7285"),
             icon="fa-bolt",
+            layout=Layout(width="320px", min_width="320px"),
+            tooltip="Run the model on selected imagery, then extract shorelines.",
         )
         self.extract_shorelines_button.on_click(self.run_model_button_clicked)
+
+        self.extract_from_segmentation_button = Button(
+            description="Extract Shorelines From Folder",
+            style=dict(button_color="#8e44ad"),
+            icon="fa-folder-open",
+            layout=Layout(width="320px", min_width="320px"),
+            tooltip="Skip model execution and extract shorelines from an existing segmentation folder.",
+        )
+        self.extract_from_segmentation_button.on_click(
+            self.extract_from_segmentation_button_clicked
+        )
 
         # Select Images button: selects a directory of images to run the model on
         self.use_select_images_button = Button(
             description="Select Images",
             style=load_style,
             icon="fa-file-image-o",
+            layout=Layout(width="320px", min_width="320px"),
+            tooltip="Choose the imagery directory used for the run-model workflow.",
         )
         self.use_select_images_button.on_click(self.use_select_images_button_clicked)
+
+        self.use_select_segmentation_session_button = Button(
+            description="Select Segmentation Folder",
+            style=load_style,
+            icon="fa-folder-open",
+            layout=Layout(width="320px", min_width="320px"),
+            tooltip="Choose an existing segmentation output folder for extraction-only workflow.",
+        )
+        self.use_select_segmentation_session_button.on_click(
+            self.use_select_segmentation_session_button_clicked
+        )
+
+        self.download_model_button = Button(
+            description="Download Model",
+            style=load_style,
+            icon="download",
+        )
+        self.download_model_button.on_click(self.download_model_button_clicked)
 
         self.select_extracted_shorelines_session_button = Button(
             description="Select Session",
@@ -577,44 +652,50 @@ class UI_Models:
         self.line_widget = HTML(
             value="____________________________________________________"
         )
-        # step 1: Select a Model
+        # step 1: Select Settings
         self.step_1_instr = HTML(
-            value="<h2>Step 1: Select a Model</h2>\
-            <b>1.</b> Select the Model Input: RGB, MNDWI or NDWI\
-            <br> - The NDWI and MNDWI will be automatically created using available RGB imagery\
-            <br><b>2.</b> Select a model.\
-            ",
-            layout=Layout(margin="0px 0px 0px 0px"),
-        )
-        # step 2: Select Settings
-        self.step_2_instr = HTML(
-            value="<h2>Step 2: Select Settings</h2>\
+            value="<h2>Step 1: Select Settings</h2>\
             <b>1.</b> Adjust the settings used to extract shorelines from the satellite imagery\
             <br><b>2.</b> Click save to save the settings\
             ",
             layout=Layout(margin="0px 0px 0px 0px"),
         )
-        # step 3 : Upload Files
+        # step 2: Upload Files
+        self.step_2_instr = HTML(
+            value="<h2>Step 2: Upload Files</h2>\
+            <b>This step is optional.</b> Skip it if you want CoastSeg to use the automatically loaded shorelines and transects.\
+            <br>If both the transects and shorelines are in the same 'config_gdf.geojson' you will need to upload it for both reference shoreline and transects.\
+            <br>1. <b>Upload a Reference Shoreline (Optional): </b> Upload a GeoJSON file containing a reference shoreline.\
+            <br>2. <b>Upload Transects (Optional): </b> Upload a GeoJSON file containing transects.\
+            <br>3. <b>Preview uploaded files:</b> The map on the right will show uploaded shorelines, transects, or shoreline extraction areas.",
+            layout=Layout(margin="0px 0px 0px 0px"),
+        )
+        # step 3 : Choose Workflow
         self.step_3_instr = HTML(
-            value="<h2>Step 3: Upload Files</h2>\
-            - If both the transects and shorelines are in the same 'config_gdf.geojson' you will need to upload it for both reference shoreline and transects   \
-            <br>1. <b>Upload a Reference Shoreline (Optional): </b> Upload GeoJSON file containing a reference shoreline\
-            <br>2. <b>Upload a Transects (Optional): </b>Upload GeoJSON file containing transects\
+            value="<h2>Step 3: Choose One Workflow</h2>\
+            <b>Pick exactly one option below.</b> The left workflow runs a model on imagery, while the right workflow reuses an existing segmentation folder. If you switch workflows, CoastSeg removes the previous folder selection from the other workflow so only one source is active at a time.\
             ",
             layout=Layout(margin="0px 0px 0px 0px"),
         )
-        # step 4 : Extract Shorelines with Model
-        self.step_4_instr = HTML(
-            value="<h2>Step 4: Extract Shorelines with Model</h2>\
-            <b>1. Session Name:</b> Enter a name.A folder with this name will be created in the 'sessions' directory.\
-            <br><b>2. Select Images:</b> Select the RGB directory from a ROI directory with downloaded imagery from the 'data' directory.\
-            <br><b>3. Run Model:</b> Click this button to apply the model on imagery. Outputs are saved under your session name in the 'sessions' directory.\
-            ",
-            layout=Layout(margin="0px 0px 0px 0px"),
+        self.run_model_workflow_instr = HTML(
+            value="<h3 style='margin:0 0 8px 0;color:#69add1;'>Workflow A: Run Model Then Extract</h3>\
+            <b>Use this when you have imagery only.</b>\
+            <br><b>1. Select a model:</b> Choose the model input, model, and optional advanced model settings. Download the model if needed.\
+            <br><b>2. Name the session:</b> Enter a session name. This becomes the name of a folder in CoastSeg/sessions that will contain the model outputs and extracted shorelines.\
+            <br><b>3. Choose imagery:</b> Select the RGB directory from CoastSeg/data for an ROI that was already downloaded.\
+            <br><b>4. Run processing:</b> Click 'Run Model + Extract Shorelines' to segment the imagery and extract shorelines in one workflow.\
+            <br><span style='color:#f4a261;'><b>Warning:</b> This workflow only works if the Pixi environment for CoastSeg/segmentation_workflow is installed and ready to run.</span>",
+            layout=Layout(margin="0px 0px 10px 0px"),
+        )
+
+        self.extract_from_folder_workflow_instr = HTML(
+            value="<h3 style='margin:0 0 8px 0;color:#c061ff;'>Workflow B: Extract From Existing Segmentations</h3>\
+            <b>Use this when segmentation outputs already exist.</b> Choose the folder containing segmentation outputs, model_info.json, and model_settings.json, then extract shorelines without running the model again.",
+            layout=Layout(margin="0px 0px 10px 0px"),
         )
         # step 5 : Tidal Correction
         self.step_5_instr = HTML(
-            value="<h2>Step 5 : Tidal Correction</h2>\
+            value="<h2>Step 4 : Tidal Correction</h2>\
             - The tide model must have been downloaded to CoastSeg/tide_model for tidal correction to work. Follow the guide to download the tide model: https://github.com/SatelliteShorelines/CoastSeg/wiki/09.-How-to-Download-Tide-Model \
             - Ensure shorelines are extracted prior to tidal correction. Not all imagery will contain extractable shorelines, thus, tidal correction may not be possible.\
             <br><b>1. Select a Session: </b> Choose a session from the 'sessions' directory containing extracted shorelines.\
@@ -719,6 +800,47 @@ class UI_Models:
 
         self.model_dict["img_type"] = change["new"]
 
+    @model_download_view.capture(clear_output=True)
+    def download_model_button_clicked(self, button: Button) -> None:
+        """Download the currently selected model and report the final status."""
+        model_name_selected = str(self.model_dict.get("model_type", "")).strip()
+        implementation = str(self.model_dict.get("implementation", "BEST")).upper()
+        if not model_name_selected:
+            self.launch_error_box(
+                "Cannot Download Model",
+                "Select a model before downloading.",
+                position=1,
+            )
+            return
+
+        button.disabled = True
+        try:
+            # Suppress downloader chatter so the notebook only shows the final status line.
+            with contextlib.redirect_stdout(io.StringIO()):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    model_location, downloaded = (
+                        self.zoo_model_instance.ensure_model_downloaded(
+                            implementation, model_name_selected
+                        )
+                    )
+        except Exception as error:
+            self.launch_error_box(
+                "Model Download Failed",
+                f"An error occurred while downloading the model: {error}",
+                position=1,
+            )
+            return
+        finally:
+            button.disabled = False
+
+        UI_Models.model_download_view.clear_output(wait=True)
+        if downloaded:
+            print(
+                f"The {model_name_selected} was downloaded and saved to {model_location}"
+            )
+        else:
+            print(f"The {model_name_selected} already exists at {model_location}")
+
     @extract_shorelines_view.capture(clear_output=True)
     def run_model_button_clicked(self, button: Button) -> None:
         """
@@ -752,6 +874,12 @@ class UI_Models:
             )
             return
 
+        if self.segmentation_session_directory:
+            self.clear_selected_segmentation_directory()
+            print(
+                "Run-model mode was selected, so the previously selected segmentation folder was cleared before processing."
+            )
+
         print("Running the model. Please wait.")
         zoo_model_instance = self.get_model_instance()
 
@@ -768,6 +896,116 @@ class UI_Models:
             transects_path=transects_path,
             shoreline_extraction_area_path=shoreline_extraction_area_path,
         )
+
+    def clear_selected_image_directory(self) -> None:
+        """Clear the currently selected imagery directory."""
+        self.model_dict["sample_direc"] = None
+        if hasattr(self, "file_row"):
+            common.clear_row(self.file_row)
+
+    def clear_selected_segmentation_directory(self) -> None:
+        """Clear the currently selected segmentation session directory."""
+        self.segmentation_session_directory = ""
+        if hasattr(self, "segmentation_file_row"):
+            common.clear_row(self.segmentation_file_row)
+
+    def get_selected_directory_from_row(self, row: HBox) -> str:
+        """Return the currently selected directory from a chooser row, if any."""
+        if not row.children:
+            return ""
+
+        chooser_container = row.children[0]
+        if not hasattr(chooser_container, "children") or not chooser_container.children:
+            return ""
+
+        chooser = chooser_container.children[0]
+        if isinstance(chooser, FileChooser) and chooser.selected:
+            return os.path.abspath(chooser.selected)
+        return ""
+
+    def resolve_segmentation_session_directory(self) -> str:
+        """Resolve the segmentation session directory from saved state or active chooser."""
+        if self.segmentation_session_directory:
+            return self.segmentation_session_directory
+
+        session_path = self.get_selected_directory_from_row(self.segmentation_file_row)
+        if not session_path:
+            return ""
+
+        self.load_segmentation_session_settings(session_path)
+        self.clear_selected_image_directory()
+        self.segmentation_session_directory = session_path
+        print(
+            "Existing-segmentation mode selected. Any previously selected image directory was cleared."
+        )
+        print(
+            "Shorelines will be extracted from this folder using the model settings saved in that folder:\n"
+            f"{session_path}"
+        )
+        return session_path
+
+    def launch_segmentation_folder_error(self, error: Exception) -> None:
+        """Show a specific warning for segmentation-folder validation errors."""
+        error_message = str(error)
+        if isinstance(error, FileNotFoundError) and (
+            "model_settings.json" in error_message or "model_info.json" in error_message
+        ):
+            self.launch_error_box(
+                "Missing Segmentation Metadata",
+                error_message,
+                position=1,
+            )
+            return
+
+        self.launch_error_box(
+            "Invalid Segmentation Folder",
+            f"Select a folder that contains the segmentation outputs, model_info.json, and model_settings.json. {error}",
+            position=1,
+        )
+
+    def get_segmentation_metadata_paths(self, session_path: str) -> tuple[str, str]:
+        """Return required metadata file paths for a segmentation session."""
+        missing_files: list[str] = []
+
+        try:
+            model_settings_path = file_utilities.find_file_by_regex(
+                session_path, r"^model_settings\.json$"
+            )
+        except FileNotFoundError:
+            model_settings_path = ""
+            missing_files.append("model_settings.json")
+
+        try:
+            model_info_path = file_utilities.find_file_by_regex(
+                session_path, r"^model_info\.json$"
+            )
+        except FileNotFoundError:
+            model_info_path = ""
+            missing_files.append("model_info.json")
+
+        if missing_files:
+            if len(missing_files) == 2:
+                raise FileNotFoundError(
+                    "The selected folder is missing required segmentation metadata files: model_settings.json and model_info.json. Select a segmentation output folder that contains both files"
+                )
+            raise FileNotFoundError(
+                f"The selected folder is missing required segmentation metadata file: {missing_files[0]}. Select a segmentation output folder that contains this file."
+            )
+
+        return model_settings_path, model_info_path
+
+    def load_segmentation_session_settings(self, session_path: str) -> None:
+        """Load model settings from an existing segmentation session folder."""
+        model_settings_path, _ = self.get_segmentation_metadata_paths(session_path)
+        model_settings = file_utilities.read_json_file(
+            model_settings_path, raise_error=True
+        )
+        if not model_settings:
+            raise ValueError(
+                f"model_settings.json was empty in the segmentation folder: {session_path}"
+            )
+        self.zoo_model_instance.set_settings(**model_settings)
+        self.update_displayed_settings()
 
     @extract_shorelines_view.capture(clear_output=True)
     def select_RGB_callback(self, filechooser: FileChooser) -> None:
@@ -794,9 +1032,13 @@ class UI_Models:
                 )
                 self.model_dict["sample_direc"] = ""
             else:
+                self.clear_selected_segmentation_directory()
                 self.model_dict["sample_direc"] = str(sample_direc)
                 self.zoo_model_instance.set_settings(sample_direc=str(sample_direc))
                 self.save_updated_settings()
+                print(
+                    "Run-model mode selected. Any previously selected segmentation folder was cleared."
+                )
 
     @extract_shorelines_view.capture(clear_output=True)
     def use_select_images_button_clicked(self, button: Button) -> None:
@@ -814,6 +1056,80 @@ class UI_Models:
         common.clear_row(self.file_row)
         # add instance of file_chooser to self.file_row
         self.file_row.children = [file_chooser]
+
+    @extract_shorelines_view.capture(clear_output=True)
+    def select_segmentation_session_callback(self, filechooser: FileChooser) -> None:
+        """Handle directory selection for extracting shorelines from segmentations."""
+        if not filechooser.selected:
+            return
+
+        session_path = os.path.abspath(filechooser.selected)
+        try:
+            self.load_segmentation_session_settings(session_path)
+        except Exception as error:
+            self.segmentation_session_directory = ""
+            self.launch_segmentation_folder_error(error)
+            return
+
+        self.clear_selected_image_directory()
+        self.segmentation_session_directory = session_path
+        print(
+            "Existing-segmentation mode selected. Any previously selected image directory was cleared."
+        )
+        print(
+            "Shorelines will be extracted from this folder using the model settings saved in that folder:\n"
+            f"{session_path}"
+        )
+
+    @extract_shorelines_view.capture(clear_output=True)
+    def use_select_segmentation_session_button_clicked(self, button: Button) -> None:
+        """Prompt for a segmentation session directory."""
+        file_chooser = common.create_dir_chooser(
+            self.select_segmentation_session_callback,
+            title="Select folder of segmentation outputs",
+            starting_directory="sessions",
+        )
+        common.clear_row(self.segmentation_file_row)
+        self.segmentation_file_row.children = [file_chooser]
+
+    @extract_shorelines_view.capture(clear_output=True)
+    def extract_from_segmentation_button_clicked(self, button: Button) -> None:
+        """Extract shorelines from a previously generated segmentation folder."""
+        try:
+            session_path = self.resolve_segmentation_session_directory()
+        except Exception as error:
+            self.segmentation_session_directory = ""
+            self.launch_segmentation_folder_error(error)
+            return
+
+        if not session_path:
+            self.launch_error_box(
+                "Cannot Extract From Folder",
+                "You must click 'Select Segmentation Folder' first.",
+                position=1,
+            )
+            return
+
+        if self.model_dict["sample_direc"]:
+            self.clear_selected_image_directory()
+            print(
+                "A segmentation folder was selected, so the previously selected image directory was cleared before extraction."
+            )
+
+        print(
+            "Extracting shorelines from the selected segmentation folder. Please wait."
+        )
+        transects_path = self.fileuploader.files_dict.get("transects", "")
+        shoreline_path = self.fileuploader.files_dict.get("shorelines", "")
+        shoreline_extraction_area_path = self.fileuploader.files_dict.get(
+            "shoreline extraction area", ""
+        )
+        self.zoo_model_instance.extract_shorelines(
+            session_path=session_path,
+            shoreline_path=shoreline_path,
+            transects_path=transects_path,
+            shoreline_extraction_area_path=shoreline_extraction_area_path,
+        )
 
     @tidal_correction_view.capture(clear_output=True)
     def selected_shoreline_session_callback(self, filechooser: FileChooser) -> None:

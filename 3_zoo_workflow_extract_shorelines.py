@@ -5,20 +5,27 @@ from coastseg.tide_correction import compute_tidal_corrections
 from coastseg import file_utilities
 
 # Script instructions:
-#   This script is for Pixi users only.
-#   It uses the segmentation workflow pixi environment managed in CoastSeg/segmentation_workflow to run a local model.
+#   This script only extracts shorelines from existing segmentation outputs.
+#   It does NOT run segmentation models.
 #
-#   Before running this script, install the Pixi environment:
-#     1) cd segmentation_workflow
-#     2) pixi install
+#   Before running this script, first run:
+#     segmentation_workflow/run_zoo_segmentation_models.py
+#   Follow the setup/run steps in:
+#     segmentation_workflow/how_to_run_models.md
 #
-#   Then run this script from the CoastSeg repository root.
-#
-#   If you do NOT use Pixi, use this script instead:
-#     3_zoo_workflow_extract_shorelines.py
+#   Then set `session_path` below to the folder created by
+#   run_zoo_segmentation_models.py that contains the segmentation results
+#   (for example, the folder with *_predseg.png files and summary metadata).
 
-# The Zoo Model is a machine learning model that can be used to extract shorelines from satellite imagery.
-# This script will only run a single ROI at a time. If you want to run multiple ROIs, you will need to run this script multiple times.
+# This script uses CoastSeg's zoo-model shoreline extraction workflow.
+# It processes one ROI/session at a time.
+
+
+# 1. ENTER THE DIRECTORY WHERE THE SEGMENTATION MODEL PREDICTIONS ARE STORED
+# ---------------------------
+# - Enter location of directory containing the segmentations from run_zoo_segmentation_models.py
+# - Example path : 'CoastSeg\sessions\model_predictions'
+session_path = r""
 
 # Extract Shoreline Settings
 settings = {
@@ -32,31 +39,10 @@ settings = {
 }
 
 
-# The model can be run using the following settings:
-model_setting = {
-    "img_type": "RGB",  # Available options: "RGB", "MNDWI", "NDWI". Make sure the model name is compatible with the image type
-    "use_GPU": "0",  # 0 or 1. 0 means no GPU
-    "implementation": "BEST",  # BEST or ENSEMBLE. BEST is recommended for most users. ENSEMBLE can be used to run multiple models and ensemble the results
-    "model_type": "global_segformer_RGB_4class_14037041",  # model name
-    "local_model_path": r"",  # Enter path to local model eg. C:\CoastSeg\src\coastseg\downloaded_models\global_segformer_RGB_4class_14037041
-    "apply_segmentation_filter": False,  # apply segmentation filter to the model outputs to sort them into good or bad
-}
-
-# 1. Set the User configuration Settings
-# ---------------------------
-# a. ENTER THE NAME OF THE SESSION TO SAVE THE MODEL PREDICTIONS TO
-session_name = "sample_session_demo_local_model"
-# b. ENTER THE DIRECTORY WHERE THE INPUT IMAGES ARE STORED
-# -  Enter location of directory containing RGB imagery within coastseg. Note this is the RGB folder within the CoastSeg/data directory
-# - Example path t : 'CoastSeg\data\ID_zyh1_datetime06-11-24__03_02_55\jpg_files\preprocessed\RGB'
-input_directory = r""
-
 # 2. Save the settings to the model instance
 # -----------------
 # Create an instance of the zoo model to run the model predictions
 zoo_model_instance = zoo_model.Zoo_Model()
-# save settings to the zoo model instance
-settings.update(model_setting)
 # save the settings to the model instance
 zoo_model_instance.set_settings(**settings)
 
@@ -68,17 +54,17 @@ shoreline_extraction_area_path = (
     ""  # path to the shoreline extraction area geojson file (optional)
 )
 
-
-# 3. Run the model and extract shorelines
+# 3. Extract shorelines from existing segmentations
 # -------------------------------------
-zoo_model_instance.run_model_and_extract_shorelines(
-    input_directory,
-    session_name=session_name,
+# This step does not run segmentation models; it only extracts shorelines.
+# First run segmentation_workflow/run_zoo_segmentation_models.py.
+# Set `session_path` to that output folder (the folder with *_predseg.png files).
+zoo_model_instance.extract_shorelines(
+    session_path=session_path,
     shoreline_path=shoreline_path,
     transects_path=transects_path,
     shoreline_extraction_area_path=shoreline_extraction_area_path,
 )
-
 
 # 4. OPTIONAL: Run Tide Correction
 # ------------------------------------------
