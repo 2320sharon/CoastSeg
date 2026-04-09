@@ -49,6 +49,11 @@ pd.set_option("mode.chained_assignment", None)
 logger = logging.getLogger(__name__)
 __all__ = ["Extracted_Shoreline"]
 
+NO_SEGMENTATIONS_PASSED_FILTER_MESSAGE = (
+    "No segmentations passed the segmentation filter. No shorelines will be extracted."
+)
+NO_SEGMENTATIONS_FOUND_MESSAGE = "No segmentations found to extract shorelines from. No shorelines will be extracted."
+
 
 class SegmentationFilter:
     """
@@ -75,7 +80,7 @@ class SegmentationFilter:
             str: Directory path to the filtered segmentation files (could be same as session_path if not filtered).
 
         Logs:
-            Warnings if filtering is skipped due to missing dependencies or errors.
+            Warnings if filtering is skipped due to errors filtering the segmentations.
         """
         if not enable_filtering:
             logger.info(
@@ -86,8 +91,6 @@ class SegmentationFilter:
         try:
             from coastseg import classifier
 
-            classifier.check_tensorflow()
-
             logger.info(
                 f"Applying segmentation filter for session: {self.session_path}"
             )
@@ -96,11 +99,6 @@ class SegmentationFilter:
                 f"Segmentation filtering complete. Filtered files in: {filtered_dir}"
             )
             return filtered_dir
-
-        except ImportError as e:
-            logger.warning(
-                f"Segmentation filter skipped: TensorFlow or 'classifier' module not available. Error: {e}"
-            )
         except Exception as e:
             logger.warning(f"Segmentation filtering failed due to runtime error: {e}")
 
@@ -663,6 +661,11 @@ def log_contents_of_shoreline_dict(extracted_shorelines_dict: dict) -> None:
     logger.info(
         f"extracted_shorelines_dict length {len(extracted_shorelines_dict.get('filename', []))} of filename[:3]: {list(islice(extracted_shorelines_dict.get('filename', []), 3))}"
     )
+
+
+def metadata_has_no_filenames(metadata: dict) -> bool:
+    """Return True when every satellite entry has an empty filenames list."""
+    return all(not satdata.get("filenames", []) for satdata in metadata.values())
 
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
@@ -2333,6 +2336,8 @@ class Extracted_Shoreline:
         metadata = metadata_manager.filter_metadata_by_segmentations(
             metadata, good_directory, file_type="npz"
         )
+        if metadata_has_no_filenames(metadata):
+            self._raise_no_segmentations_exception(roi_id, apply_segmentation_filter)
 
         extracted_shorelines_dict = extract_shorelines_with_dask(
             session_path,
@@ -2374,6 +2379,19 @@ class Extracted_Shoreline:
         self.gdf = split_line(self.gdf, "linestring", smooth=True)
 
         return self
+
+    def _raise_no_segmentations_exception(
+        self, roi_id: str, apply_segmentation_filter: bool
+    ) -> None:
+        """Clear extracted shoreline data and raise a descriptive exception."""
+        self.dictionary = {}
+        message = (
+            NO_SEGMENTATIONS_PASSED_FILTER_MESSAGE
+            if apply_segmentation_filter
+            else NO_SEGMENTATIONS_FOUND_MESSAGE
+        )
+        logger.warning(message)
+        raise exceptions.No_Extracted_Shoreline(roi_id, message)
 
     def _validate_input_params(
         self,

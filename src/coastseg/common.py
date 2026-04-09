@@ -45,7 +45,7 @@ from shapely.ops import transform
 from tqdm.auto import tqdm
 
 # Internal dependencies imports
-from coastseg import exceptions, file_utilities
+from coastseg import core_utilities, exceptions, file_utilities
 from coastseg.exceptions import InvalidGeometryType
 from coastseg.validation import find_satellite_in_filename
 
@@ -2414,22 +2414,46 @@ def convert_points_to_linestrings(
     return linestrings_gdf
 
 
-def get_downloaded_models_dir() -> str:
-    """returns full path to downloaded_models directory and
-    if downloaded_models directory does not exist then it is created
+def get_repo_models_dir() -> str:
+    """Return the workspace-level models directory path.
+
     Returns:
-        str: full path to downloaded_models directory
+        str: Path to CoastSeg/models.
     """
-    # directory to hold downloaded models from Zenodo
+    base_dir = os.path.abspath(core_utilities.get_base_dir())
+    return os.path.join(base_dir, "models")
+
+
+def get_package_models_dir() -> str:
+    """Return the legacy package-level models directory path.
+
+    Returns:
+        str: Path to src/coastseg/downloaded_models.
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(script_dir, "downloaded_models"))
 
-    downloaded_models_path = os.path.abspath(
-        os.path.join(script_dir, "downloaded_models")
-    )
-    if not os.path.exists(downloaded_models_path):
-        os.mkdir(downloaded_models_path)
 
-    return downloaded_models_path
+def get_downloaded_models_dir() -> str:
+    """Return the active models directory using workspace-first fallback.
+
+    Reads from CoastSeg/models when present; otherwise falls back to the
+    legacy package path src/coastseg/downloaded_models. If neither exists,
+    CoastSeg/models is created and returned.
+
+    Returns:
+        str: Directory path used for reading model files.
+    """
+    repo_models_dir = get_repo_models_dir()
+    package_models_dir = get_package_models_dir()
+
+    if os.path.exists(repo_models_dir):
+        return repo_models_dir
+    if os.path.exists(package_models_dir):
+        return package_models_dir
+
+    os.makedirs(repo_models_dir, exist_ok=True)
+    return repo_models_dir
 
 
 def get_value_by_key_pattern(d: dict, patterns: list | set | tuple):

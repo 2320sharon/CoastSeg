@@ -13,7 +13,6 @@ from leafmap import Map
 import pytest
 import geopandas as gpd
 from ipyleaflet import GeoJSON
-import platform
 
 
 def test_imports():
@@ -23,12 +22,7 @@ def test_imports():
     from coastseg import extracted_shoreline
     from coastseg import factory
     from coastseg import map_UI
-
-    # if mac os then don't run this test because it will always fail due to tensorflow not being installed
-    if (
-        platform.system() != "Darwin"
-    ):  # 'Darwin' is the name for the macOS operating system
-        from coastseg import models_UI
+    from coastseg import models_UI
 
 
 def test_init_coastseg_map_no_map():

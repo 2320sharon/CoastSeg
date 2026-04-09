@@ -494,7 +494,7 @@ class Settings_UI:
         elif setting_name == "max_dist_ref":
             widget = ipywidgets.IntSlider(
                 description="Reference Shoreline Buffer",
-                value=100,
+                value=500,
                 min=5,
                 max=1000,
                 step=1,

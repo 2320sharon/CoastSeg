@@ -1,0 +1,55 @@
+name: Test segmentation_workflow Pixi environment
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - segmentation_workflow/**
+      - .github/workflows/test_segmentation_workflow_pixi.yml
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - segmentation_workflow/**
+      - .github/workflows/test_segmentation_workflow_pixi.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-segmentation-workflow:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    defaults:
+      run:
+        working-directory: segmentation_workflow
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup Pixi
+        uses: prefix-dev/setup-pixi@v0.9.4
+        with:
+          pixi-version: v0.66.0
+          manifest-path: segmentation_workflow/pyproject.toml
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'develop' }}
+          locked: true
+
+      - name: Show Pixi environment info
+        run: pixi info
+
+      - name: Smoke test segmentation_workflow environment
+        run: |
+          pixi run python --version
+          pixi run python -m pip --version
+          pixi run import_smoke
+          pixi run python -m compileall run_zoo_segmentation_models.py
+          pixi run python run_zoo_segmentation_models.py --help
