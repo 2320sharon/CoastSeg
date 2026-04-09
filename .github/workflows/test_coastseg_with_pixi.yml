@@ -2,9 +2,9 @@ name: Test CoastSeg Pixi Installation (pixi run test)
 
 on:
   push:
-    branches: [main, develop, isolate_segmentation_code]
+    branches: [main, develop]
   pull_request:
-    branches: [main, develop, isolate_segmentation_code]
+    branches: [main, develop]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

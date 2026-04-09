@@ -2,12 +2,12 @@ name: Test segmentation_workflow Pixi environment
 
 on:
   push:
-    branches: [main, develop, isolate_segmentation_code, test_mac_tensorflow_action]
+    branches: [main, develop]
     paths:
       - segmentation_workflow/**
       - .github/workflows/test_segmentation_workflow_pixi.yml
   pull_request:
-    branches: [main, develop, isolate_segmentation_code, test_mac_tensorflow_action]
+    branches: [main, develop]
     paths:
       - segmentation_workflow/**
       - .github/workflows/test_segmentation_workflow_pixi.yml
