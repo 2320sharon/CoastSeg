@@ -39,12 +39,12 @@ jobs:
 
       - name: Install conda dependencies
         run: |
-          conda install -c conda-forge gdal pytest -y
+          conda install -c conda-forge pip gdal pytest -y
 
-      - name: Install coastseg from pip
+      - name: Install latest coastseg from pip
         run: |
           python -m pip install --upgrade pip
-          python -m pip install coastseg
+          python -m pip install --upgrade --no-cache-dir coastseg
           python -m pip show coastseg
       - name: Test with pytest
         run: |

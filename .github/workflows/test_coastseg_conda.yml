@@ -1,8 +1,8 @@
 on:
   push:
-    branches: [test_package,develop]
+    branches: [test_package, develop]
   pull_request:
-    branches: [test_package,develop]
+    branches: [test_package, develop]
 
 name: Test CoastSeg Conda Package
 
@@ -42,9 +42,31 @@ jobs:
           echo "CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
           echo "CONDA_PREFIX=$CONDA_PREFIX"
 
-      - name: Install CoastSeg conda package
+      - name: Preflight: ensure CoastSeg is available on conda-forge for this Python
         run: |
-          conda install -c conda-forge python=${{ matrix.python-version }} coastseg pytest -y
+          set -euo pipefail
+
+          # Force conda-forge only
+          conda config --set channel_priority strict
+
+          echo "Checking solver availability for: python=${{ matrix.python-version }} + coastseg (conda-forge only)"
+
+          # Dry-run solve. This will exit non-zero if no compatible coastseg build exists.
+          conda create -n _solvecheck -y --dry-run --override-channels -c conda-forge --strict-channel-priority \
+            "python=${{ matrix.python-version }}" \
+            coastseg
+
+          echo "OK: conda-forge can solve coastseg for python=${{ matrix.python-version }}"
+
+      - name: Install CoastSeg conda package (conda-forge only)
+        run: |
+          set -euo pipefail
+
+          conda install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
+            "python=${{ matrix.python-version }}" \
+            coastseg \
+            pytest
+
           conda list coastseg
           conda list pytest
 
