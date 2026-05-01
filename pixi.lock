@@ -5870,8 +5870,8 @@ packages:
   requires_python: '>=3.8'
 - pypi: ./
   name: coastseg
-  version: 2.0.0
-  sha256: 3faed8aab3bbc5fa9c77004fbf87f3d8272dc6a73c47f92a187a2f41f4c9f162
+  version: 2.0.2
+  sha256: 88baccece7271f64baaf2d979c3429ace248073bb10f2744b6d864eaea7b9cb8
   requires_dist:
   - aiohttp
   - onnxruntime
