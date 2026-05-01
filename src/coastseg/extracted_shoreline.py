@@ -2121,6 +2121,12 @@ class Extracted_Shoreline:
             matching_rows = self.gdf[
                 (self.gdf["satname"] == sat) & (self.gdf["date"] == date)
             ]
+            if matching_rows.empty:
+                logger.warning(
+                    "No GDF row matched sat=%r, date=%r; row will not be removed",
+                    sat,
+                    date,
+                )
             self.gdf = self.gdf.drop(matching_rows.index)
         return self.gdf
 

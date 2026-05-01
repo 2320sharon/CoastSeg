@@ -585,11 +585,20 @@ def extract_dates_and_sats(
     dates_list = []
     sat_list = []
     for criteria in selected_items:
-        satname, dates = criteria.split("_")
+        try:
+            satname, dates = criteria.split(
+                "_", 1
+            )  # split only on the first underscore to allow for satellite names that contain underscores eg L8_SR_2021-01-01 00:00:00 becomes  satname = L8_SR and dates = 2021-01-01 00:00:00
+            date_obj = datetime.strptime(dates, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except (ValueError, AttributeError) as e:
+            logger.warning(
+                "Skipping invalid item %r in extract_dates_and_sats: %s", criteria, e
+            )
+            continue
         sat_list.append(satname)
-        dates_list.append(
-            datetime.strptime(dates, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        )
+        dates_list.append(date_obj)
     return dates_list, sat_list
 
 
@@ -659,6 +668,7 @@ def update_extracted_shorelines_dict_transects_dict(
     Args:
         session_path (str): The path to the session directory.
         filename (str): The name of the JSON file containing the extracted shorelines data.
+            This file is expected to be located in the session_path directory and should contain the extracted shorelines data in a format that can be processed into nested arrays.
         dates_list (List[datetime]): A list of dates to filter the extracted shorelines data.
         sat_list (List[str]): A list of satellite identifiers to filter the extracted shorelines data.
     """
@@ -671,7 +681,7 @@ def update_extracted_shorelines_dict_transects_dict(
         if extracted_shorelines_dict is not None:
             # Get the indexes of the selected items in the extracted_shorelines_dict
             selected_indexes = get_selected_indexes(
-                extracted_shorelines_dict,
+                extracted_shorelines_dict,  # type: ignore
                 dates_list,
                 sat_list,  # type: ignore
             )
@@ -912,7 +922,6 @@ def get_selected_indexes(
     data_dict.setdefault("satname", [])
     # Convert dictionary to DataFrame
     df = pd.DataFrame(data_dict)
-    print(f"df['dates'] : {df['dates']}")
 
     # Initialize an empty list to store selected indexes
     selected_indexes = []
@@ -920,10 +929,8 @@ def get_selected_indexes(
     # Iterate over dates and satellite names, and get the index of the first matching row
     for date, sat in zip(dates_list, sat_list):
         match = df[(df["dates"] == date) & (df["satname"] == sat)]
-        print(f"match: {match}")
         if not match.empty:
             selected_indexes.append(match.index[0])
-            print(f"selected_indexes: {selected_indexes}")
 
     return selected_indexes
 

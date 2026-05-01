@@ -323,17 +323,19 @@ class ROI(Feature):
         self.roi_settings.update(new_settings)
         return self.roi_settings
 
-    def get_extracted_shoreline(self, roi_id: str) -> Optional[Extracted_Shoreline]:
+    def get_extracted_shoreline(
+        self, roi_id: Union[str, int]
+    ) -> Optional[Extracted_Shoreline]:
         """
-        Returns extracted shoreline for ROI ID.
+        Returns extracted shoreline for ROI ID (normalized to string).
 
         Args:
-            roi_id: ROI ID.
+            roi_id (str or int): ROI ID to get shoreline for.
 
         Returns:
             Extracted shoreline or None.
         """
-        return self.extracted_shorelines.get(roi_id, None)
+        return self.extracted_shorelines.get(str(roi_id), None)
 
     def get_ids(self) -> List[str]:
         """
@@ -484,15 +486,16 @@ class ROI(Feature):
         Returns:
             None
         """
-        if roi_id in self.get_ids_with_extracted_shorelines():
-            extracted_shoreline = self.get_extracted_shoreline(roi_id)
+        roi_id_str = str(roi_id)
+        if roi_id_str in self.get_ids_with_extracted_shorelines():
+            extracted_shoreline = self.get_extracted_shoreline(roi_id_str)
             if extracted_shoreline is not None:
                 extracted_shoreline.remove_selected_shorelines(dates, satellites)
 
     def add_extracted_shoreline(
         self,
         extracted_shoreline: Extracted_Shoreline,
-        roi_id: str,
+        roi_id: Union[str, int],
     ) -> None:
         """
         Adds extracted shoreline for ROI ID.
@@ -501,8 +504,9 @@ class ROI(Feature):
             extracted_shoreline: Extracted shoreline object.
             roi_id: ROI ID.
         """
-        self.extracted_shorelines[roi_id] = extracted_shoreline
-        logger.info(f"New extracted shoreline added for ROI {roi_id}")
+        roi_id_str = str(roi_id)
+        self.extracted_shorelines[roi_id_str] = extracted_shoreline
+        logger.info(f"New extracted shoreline added for ROI {roi_id_str}")
         # logger.info(f"New extracted shoreline added for ROI {roi_id}: {self.extracted_shorelines}")
 
     def get_cross_shore_distances(self, roi_id: str) -> Dict[str, Any]:

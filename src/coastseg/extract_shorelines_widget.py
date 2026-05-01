@@ -4,7 +4,6 @@ import ipywidgets
 from ipywidgets import Layout
 from datetime import datetime
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -17,11 +16,18 @@ def sort_by_timestamp(data):
     data (list): A list of strings in the format 'satelliteName_timestamp'
 
     Returns:
-    list: The sorted list based on the timestamps
+    list: The sorted list based on the timestamps. Entries with unparseable
+        timestamps are sorted to the end.
     """
 
     def extract_datetime(s):
-        return datetime.strptime(s.split("_")[1], "%Y-%m-%d %H:%M:%S")
+        try:
+            return datetime.strptime(s.split("_")[1], "%Y-%m-%d %H:%M:%S")
+        except (ValueError, IndexError):
+            logger.warning("Could not parse timestamp from label %r; sorting to end", s)
+            return (
+                datetime.max
+            )  # unparseable timestamps are sorted to the end and set to year 9999
 
     return sorted(data, key=extract_datetime)
 
@@ -109,10 +115,8 @@ class Extracted_Shoreline_widget(ipywidgets.VBox):
             layout=ipywidgets.Layout(width="60%", padding="0px", margin="0px"),
         )
         # Define a lambda function that selects the first option in the options list
-        select_first_option = (
-            lambda change: self.roi_list_widget.set_trait(
-                "value", self.roi_list_widget.options[0]
-            )
+        select_first_option = lambda change: (
+            self.roi_list_widget.set_trait("value", self.roi_list_widget.options[0])
             if self.roi_list_widget.options
             else None
         )
@@ -255,10 +259,12 @@ class Extracted_Shoreline_widget(ipywidgets.VBox):
     def on_roi_selected(self, change: dict):
         """Callback function for when an ROI ID is selected"""
         try:
-            # when the content sof the load list changes update the layer
-            # clear the load and trash lists
-            self.load_list_widget.options = []
-            self.trash_list_widget.options = []
+            # when the content of the load list changes update the layer
+            # clear the load and trash lists via the traitlet so the dlink fires and
+            # the widget is guaranteed to update even when the repopulated value equals
+            # the value set by a previous call (traitlets suppresses no-change events)
+            self.extracted_shoreline_traitlet.load_list = []
+            self.extracted_shoreline_traitlet.trash_list = []
             # call the callback function
             self.roi_selected_callback(change["new"])
         except Exception as e:

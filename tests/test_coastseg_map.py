@@ -1,5 +1,6 @@
 import json
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 from coastseg import shoreline
 from coastseg import transects
@@ -13,6 +14,7 @@ from leafmap import Map
 import pytest
 import geopandas as gpd
 from ipyleaflet import GeoJSON
+from shapely.geometry import Point
 
 
 def test_imports():
@@ -511,3 +513,97 @@ def test_load_feature_on_map_rois_custom(box_no_shorelines_transects):
     # this box has no default shorelines available but it can still load because its a custom ROI
     coastsegmap = coastseg_map.CoastSeg_Map()
     coastsegmap.load_feature_on_map("rois", gdf=box_no_shorelines_transects)
+
+
+def test_update_loadable_shorelines_mixed_date_formats(coastseg_map_with_rois):
+    """Test mixed date parsing and fallback behavior in loadable shoreline labels."""
+    coastsegmap = coastseg_map_with_rois
+    selected_id = "17"
+
+    extracted_shorelines_gdf = gpd.GeoDataFrame(
+        {
+            "date": [
+                "2021-01-01",
+                "2021-01-02 05:30:00",
+                "not-a-date",
+            ],
+            "satname": ["L8", "S2", "L9"],
+            "geometry": [Point(0, 0), Point(1, 1), Point(2, 2)],
+        },
+        crs="EPSG:4326",
+    )
+    # Use a SimpleNamespace to mimic the expected structure of the extracted shoreline object
+    # This allows us to set the gdf attribute directly without needing to create a full Shoreline object
+    extracted_shoreline_obj = SimpleNamespace(gdf=extracted_shorelines_gdf)
+    coastsegmap.rois.extracted_shorelines[selected_id] = extracted_shoreline_obj
+
+    returned_shoreline_obj = coastsegmap.update_loadable_shorelines(selected_id)
+
+    assert returned_shoreline_obj is extracted_shoreline_obj
+    assert coastsegmap.extract_shorelines_container.trash_list == []
+
+    # validate the load list contains the original labels since all dates should be parsed successfully with fallback to original string when parsing fails
+    load_list = set(coastsegmap.extract_shorelines_container.load_list)
+    assert "L8_2021-01-01 00:00:00" in load_list
+    assert "S2_2021-01-02 05:30:00" in load_list
+    assert "L9_not-a-date" in load_list
+
+    assert list(returned_shoreline_obj.gdf["date"]) == sorted(
+        list(returned_shoreline_obj.gdf["date"])
+    )
+
+
+def test_extract_all_shorelines_refreshes_display_after_updating_roi_ids(
+    coastseg_map_with_rois,
+):
+    """Ensure post-extraction flow refreshes shoreline display after ROI IDs are updated."""
+    coastsegmap = coastseg_map_with_rois
+    roi_id = "17"
+
+    extracted_shorelines_gdf = gpd.GeoDataFrame(
+        {
+            "date": ["2021-01-01 00:00:00"],
+            "satname": ["L8"],
+            "geometry": [Point(0, 0)],
+        },
+        crs="EPSG:4326",
+    )
+    extracted_shoreline_obj = SimpleNamespace(gdf=extracted_shorelines_gdf)
+
+    coastsegmap.shoreline = SimpleNamespace(
+        gdf=gpd.GeoDataFrame({"geometry": [Point(0, 0)]}, crs="EPSG:4326")
+    )
+    coastsegmap.transects = SimpleNamespace(gdf=gpd.GeoDataFrame())
+    coastsegmap.set_session_name("test_session")
+
+    with patch.object(coastsegmap, "validate_extract_shoreline_inputs"):
+        with patch.object(coastsegmap, "get_missing_directories", return_value={}):
+            with patch.object(coastsegmap, "create_session", return_value="session"):
+                with patch.object(
+                    coastsegmap,
+                    "extract_shoreline_for_roi",
+                    return_value=extracted_shoreline_obj,
+                ):
+                    with patch.object(coastsegmap, "save_session"):
+                        with patch.object(coastsegmap, "compute_transects"):
+                            with patch.object(
+                                coastsegmap, "update_extracted_shorelines_display"
+                            ) as display_mock:
+                                coastsegmap.extract_all_shorelines(roi_ids=[roi_id])
+
+    # The inner per-ROI loop calls update_extracted_shorelines_display once.
+    # The second refresh comes via the on_roi_selected widget callback chain at runtime
+    # (not exercised here because no widget is linked in the test fixture).
+    assert display_mock.call_count == 1
+    assert display_mock.call_args_list[0].args[0] == roi_id
+
+
+def test_roi_extracted_shoreline_lookup_normalizes_roi_id(coastseg_map_with_rois):
+    """Ensure extracted shoreline lookup works for string and integer ROI IDs."""
+    coastsegmap = coastseg_map_with_rois
+    extracted_shoreline_obj = SimpleNamespace(gdf=gpd.GeoDataFrame())
+
+    coastsegmap.rois.add_extracted_shoreline(extracted_shoreline_obj, 17)
+
+    assert coastsegmap.rois.get_extracted_shoreline("17") is extracted_shoreline_obj
+    assert coastsegmap.rois.get_extracted_shoreline(17) is extracted_shoreline_obj

@@ -19,7 +19,7 @@ keywords = [
 ]
 name = "coastseg"
 readme = "README.md"
-version = "2.0.0"
+version = "2.0.2"
 #these dependencies are the core dependencies of the package necessary for the coastsat workflow and the core functionality. Pixi reads these as pypi dependencies
 classifiers = [
   "License :: OSI Approved :: MIT License",
@@ -30,7 +30,6 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
   "aiohttp",

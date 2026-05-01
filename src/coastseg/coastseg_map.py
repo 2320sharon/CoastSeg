@@ -1163,13 +1163,10 @@ class CoastSeg_Map:
         exception_handler.check_if_None(self.rois, "ROI")
         exception_handler.check_if_gdf_empty(self.rois.gdf, "ROI")
 
-
         if selected_ids is None:
             selected_ids = self.get_selected_ids()
 
-
         exception_handler.check_selected_set(selected_ids)
-
 
         # get the start and end date to check available images
         start_date, end_date = self.settings["dates"]
@@ -1685,7 +1682,6 @@ class CoastSeg_Map:
             Exception: If selected_layer is missing.
         """
         settings = self.get_settings()
-
 
         # if no rois exist on the map do not allow configs to be saved
         exception_handler.config_check_if_none(self.rois, "ROIs")
@@ -3085,30 +3081,49 @@ class CoastSeg_Map:
             return None
 
         extracted_shorelines = self.rois.get_extracted_shoreline(selected_id)
+        logger.debug(
+            "update_loadable_shorelines selected_id=%r type=%s extracted_keys=%s",
+            selected_id,
+            type(selected_id).__name__,
+            list(getattr(self.rois, "extracted_shorelines", {}).keys()),
+        )
         # if extracted shorelines exist, load them onto map, if none exist nothing loads
-        if hasattr(extracted_shorelines, "gdf"):
+        extracted_shorelines_gdf = getattr(extracted_shorelines, "gdf", None)
+        if extracted_shorelines_gdf is not None:
             # sort the extracted shoreline gdf by date
-            if not extracted_shorelines.gdf.empty:
-                extracted_shorelines.gdf = extracted_shorelines.gdf.sort_values(
+            if not extracted_shorelines_gdf.empty:
+                extracted_shorelines_gdf = extracted_shorelines_gdf.sort_values(
                     by=["date"]
                 )
-                if extracted_shorelines.gdf["date"].dtype == "object":
-                    # If the "date" column is already of string type, concatenate directly
-                    # formatted_dates = extracted_shorelines.gdf["date"]
-                    formatted_dates = extracted_shorelines.gdf.apply(
-                        lambda row: f"{row['satname']}_{row['date']}", axis=1
-                    )
-                else:
-                    # If the "date" column is not of string type, convert to string with the required format
-                    formatted_dates = extracted_shorelines.gdf.apply(
-                        lambda row: f"{row['satname']}_{row['date'].strftime('%Y-%m-%d %H:%M:%S')}",
-                        axis=1,
-                    )
-                self.extract_shorelines_container.load_list = []
-                # only get the unique dates
+                # get original date values so we can replace the NaT values with the original date values after parsing and formatting the dates
+                date_values = extracted_shorelines_gdf["date"]
+                # invalid dates become NaT; pd.to_datetime handles most common formats
+                parsed_dates = pd.to_datetime(date_values, errors="coerce")
+                formatted_dates = parsed_dates.dt.strftime("%Y-%m-%d %H:%M:%S")
+                # fallback to the original date values if parsing failed and resulted in NaT
+                formatted_dates = formatted_dates.where(
+                    parsed_dates.notna(), date_values.astype(str)
+                )
+                # normalize the date column so deletion matching uses the same format as the load_list labels
+                extracted_shorelines_gdf = extracted_shorelines_gdf.assign(
+                    date=formatted_dates
+                )
+                # update the extracted shoreline object with the sorted, normalized gdf
+                setattr(extracted_shorelines, "gdf", extracted_shorelines_gdf)
+
                 self.extract_shorelines_container.load_list = np.unique(
-                    formatted_dates
+                    extracted_shorelines_gdf["satname"].astype(str)
+                    + "_"
+                    + formatted_dates
                 ).tolist()
+                logger.debug(
+                    "Populated load_list for ROI %r with %d shoreline labels",
+                    selected_id,
+                    len(self.extract_shorelines_container.load_list),
+                )
+                self.extract_shorelines_container.trash_list = []
+            else:
+                self.extract_shorelines_container.load_list = []
                 self.extract_shorelines_container.trash_list = []
         else:
             logger.warning(f"No shorelines extracted for ROI {selected_id}")
