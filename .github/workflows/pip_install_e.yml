@@ -11,33 +11,38 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        shell: bash -l {0}
+        # Use a login bash shell so setup-miniconda's conda activation is available
+        # in every run step. The -e flag makes the step fail on command errors.
+        shell: bash -el {0}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11"]
     steps:
       - uses: actions/checkout@v4
       - name: Setup Conda
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           miniconda-version: "latest"
-          python-version: "3.10"
+          python-version: ${{ matrix.python-version }}
+          activate-environment: test
+          auto-activate: false
           channels: conda-forge,defaults
+          channel-priority: strict
       - run: |
           conda info
           conda list
+      - name: Install GDAL dependencies into conda environment
+        run: |
+          conda install -c conda-forge gdal -y  
       - name: Install coastseg with pip install -e .
         run: |
-          pip install -e . --user
-      - name: Install dependencies
-        run: |
-          conda install -c conda-forge gdal -y
-          pip install tensorflow         
+          python -m pip install -U pip
+          python -m pip install -e .       
       - name: Pip install pytest
         run: |
-          pip install pytest
+          python -m pip install pytest
       - name: Test with pytest
         run: |
-          cd tests
-          python -m pytest
+          python -m pytest -q tests
