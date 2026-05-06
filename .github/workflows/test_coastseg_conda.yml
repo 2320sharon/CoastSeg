@@ -42,7 +42,7 @@ jobs:
           echo "CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
           echo "CONDA_PREFIX=$CONDA_PREFIX"
 
-      - name: Preflight: ensure CoastSeg is available on conda-forge for this Python
+      - name: Preflight ensure CoastSeg is available on conda-forge for this Python
         run: |
           set -euo pipefail
 
