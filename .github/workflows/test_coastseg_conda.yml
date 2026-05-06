@@ -54,7 +54,7 @@ jobs:
           # Dry-run solve. This will exit non-zero if no compatible coastseg build exists.
           conda create -n _solvecheck -y --dry-run --override-channels -c conda-forge --strict-channel-priority \
             "python=${{ matrix.python-version }}" \
-            coastseg
+            coastseg=2.0.2
 
           echo "OK: conda-forge can solve coastseg for python=${{ matrix.python-version }}"
 
@@ -64,7 +64,7 @@ jobs:
 
           conda install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
             "python=${{ matrix.python-version }}" \
-            coastseg \
+            coastseg=2.0.2 \
             pytest
 
           conda list coastseg
