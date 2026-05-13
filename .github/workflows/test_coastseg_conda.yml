@@ -27,7 +27,7 @@ jobs:
       - name: Setup Conda
         uses: conda-incubator/setup-miniconda@v4
         with:
-          miniforge-variant: Mambaforge
+          miniforge-variant: Miniforge3
           miniforge-version: latest
           python-version: ${{ matrix.python-version }}
           activate-environment: test
