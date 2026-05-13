@@ -27,13 +27,11 @@ jobs:
       - name: Setup Conda
         uses: conda-incubator/setup-miniconda@v4
         with:
-          miniforge-variant: Miniforge3
-          miniforge-version: latest
+          miniconda-version: "latest"
           python-version: ${{ matrix.python-version }}
           activate-environment: test
           channels: conda-forge
           channel-priority: strict
-          use-mamba: true
 
       - name: Show conda environment
         run: |
@@ -54,7 +52,7 @@ jobs:
           echo "Checking solver availability for: python=${{ matrix.python-version }} + coastseg (conda-forge only)"
 
           # Dry-run solve. This will exit non-zero if no compatible coastseg build exists.
-          mamba create -n _solvecheck -y --dry-run --override-channels -c conda-forge --strict-channel-priority \
+          conda create -n _solvecheck -y --dry-run --override-channels -c conda-forge --strict-channel-priority \
             "python=${{ matrix.python-version }}" \
             coastseg=2.0.2
 
@@ -64,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          mamba install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
+          conda install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
             "python=${{ matrix.python-version }}" \
             coastseg=2.0.2 \
             pytest
