@@ -1,8 +1,8 @@
 on:
   push:
-    branches: [test_package, develop]
+    branches: [fix_conda_action]
   pull_request:
-    branches: [test_package, develop]
+    branches: [fix_conda_action]
 
 name: Test CoastSeg Conda Package
 
@@ -13,7 +13,7 @@ jobs:
 
     defaults:
       run:
-        shell: bash -l {0}
+        shell: bash -el {0}
 
     strategy:
       fail-fast: false
@@ -27,16 +27,19 @@ jobs:
       - name: Setup Conda
         uses: conda-incubator/setup-miniconda@v4
         with:
-          miniconda-version: "latest"
+          miniforge-version: "latest"
           python-version: ${{ matrix.python-version }}
           activate-environment: test
           channels: conda-forge
           channel-priority: strict
+          use-mamba: true
 
       - name: Show conda environment
         run: |
-          conda info
-          conda list
+          set -euo pipefail
+
+          mamba info
+          mamba list
           which python
           python --version
           echo "CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
@@ -46,13 +49,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Force conda-forge only
-          conda config --set channel_priority strict
-
           echo "Checking solver availability for: python=${{ matrix.python-version }} + coastseg (conda-forge only)"
 
-          # Dry-run solve. This will exit non-zero if no compatible coastseg build exists.
-          conda create -n _solvecheck -y --dry-run --override-channels -c conda-forge --strict-channel-priority \
+          # Dry-run solve. This exits non-zero if no compatible coastseg build exists.
+          mamba create -n _solvecheck -y --dry-run --override-channels -c conda-forge \
             "python=${{ matrix.python-version }}" \
             coastseg=2.0.2
 
@@ -62,16 +62,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          conda install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
+          mamba install -y --override-channels -c conda-forge \
             "python=${{ matrix.python-version }}" \
             coastseg=2.0.2 \
             pytest
 
-          conda list coastseg
-          conda list pytest
+          mamba list coastseg
+          mamba list pytest
 
       - name: Verify CoastSeg import
         run: |
+          set -euo pipefail
+
           python - <<'PY'
           import sys
           import coastseg
@@ -82,7 +84,10 @@ jobs:
 
       - name: Test with pytest
         run: |
-          # Change to the runner's temporary directory to ensure tests are run in a clean environment
+          set -euo pipefail
+
+          # Change to the runner's temporary directory to ensure tests are run in a clean environment.
           cd "$RUNNER_TEMP"
-          # $GITHUB_WORKSPACE is the checked out CoastSeg repository, so we can run pytest on the tests directory there
+
+          # $GITHUB_WORKSPACE is the checked out CoastSeg repository.
           python -m pytest -q --import-mode=importlib "$GITHUB_WORKSPACE/tests"
