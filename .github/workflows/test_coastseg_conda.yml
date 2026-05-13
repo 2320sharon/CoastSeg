@@ -24,51 +24,30 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup Conda
-        uses: conda-incubator/setup-miniconda@v4
+      - name: Setup micromamba environment
+        uses: mamba-org/setup-micromamba@v3
         with:
-          miniforge-version: "latest"
-          python-version: ${{ matrix.python-version }}
-          activate-environment: test
-          channels: conda-forge
-          channel-priority: strict
-          use-mamba: true
+          environment-name: test
+          init-shell: bash
+          condarc: |
+            channels:
+              - conda-forge
+            channel_priority: strict
+          create-args: >-
+            python=${{ matrix.python-version }}
+            coastseg=2.0.2
+            pytest
 
-      - name: Show conda environment
+      - name: Show environment
         run: |
           set -euo pipefail
 
-          mamba info
-          mamba list
+          micromamba info
+          micromamba list
           which python
           python --version
           echo "CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
           echo "CONDA_PREFIX=$CONDA_PREFIX"
-
-      - name: Preflight ensure CoastSeg is available on conda-forge for this Python
-        run: |
-          set -euo pipefail
-
-          echo "Checking solver availability for: python=${{ matrix.python-version }} + coastseg (conda-forge only)"
-
-          # Dry-run solve. This exits non-zero if no compatible coastseg build exists.
-          mamba create -n _solvecheck -y --dry-run --override-channels -c conda-forge \
-            "python=${{ matrix.python-version }}" \
-            coastseg=2.0.2
-
-          echo "OK: conda-forge can solve coastseg for python=${{ matrix.python-version }}"
-
-      - name: Install CoastSeg conda package (conda-forge only)
-        run: |
-          set -euo pipefail
-
-          mamba install -y --override-channels -c conda-forge \
-            "python=${{ matrix.python-version }}" \
-            coastseg=2.0.2 \
-            pytest
-
-          mamba list coastseg
-          mamba list pytest
 
       - name: Verify CoastSeg import
         run: |
@@ -86,8 +65,5 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Change to the runner's temporary directory to ensure tests are run in a clean environment.
           cd "$RUNNER_TEMP"
-
-          # $GITHUB_WORKSPACE is the checked out CoastSeg repository.
           python -m pytest -q --import-mode=importlib "$GITHUB_WORKSPACE/tests"
