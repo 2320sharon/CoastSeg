@@ -17,15 +17,13 @@ from coastseg import common, file_utilities
 MODEL_CONFIG = {
     "rgb": {
         "model_name": "ImageRGBClassifier",
-        "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/image_rgb/best.onnx",
-    },
-    "gray": {
-        "model_name": "ImageGrayClassifier",
-        "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/image_gray/best.onnx",
+        "url": "https://huggingface.co/2320sharon/ImageRGBClassifier/resolve/main/best.onnx?download=true",
+        "sha256": "sha256:aba43106e5a38e978cccdc852c8379a9de41b7d0d6dd9d323012106e4e7a965a",
     },
     "segmentation": {
         "model_name": "ShorelineFilter",
-        "url": "https://github.com/mlundine/ShorelineFilter/raw/refs/heads/main/models/segmentation_rgb/best_seg.onnx",
+        "url": "https://huggingface.co/2320sharon/ShorelineFilter/resolve/main/best_seg.onnx?download=true",
+        "sha256": "sha256:e0edd406427308a854da9c3f1c85571dc0c19ac481a6e25cc128d3f3c8c0b04f",
     },
 }
 
@@ -519,6 +517,7 @@ def _get_onnx_model(model_key: str) -> str:
 
     Args:
         model_key (str): Model identifier in ``MODEL_CONFIG``.
+            This is either "rgb" for the RGB image classifier or "segmentation" for the shoreline segmentation quality classifier.
 
     Returns:
         str: Full path to the ONNX model file.
@@ -534,11 +533,16 @@ def _get_onnx_model(model_key: str) -> str:
     model_directory = file_utilities.create_directory(
         common.get_downloaded_models_dir(), config["model_name"]
     )
+
+    # Extract filename from URL (before query params)
+    filename = config["url"].split("/")[-1].split("?")[0]
+
     downloaded_path = pooch.retrieve(
         url=config["url"],
-        known_hash=None,
+        known_hash=MODEL_CONFIG[model_key].get("sha256"),
         progressbar=True,
         path=model_directory,
+        fname=filename,
     )
     if os.path.exists(downloaded_path):
         return downloaded_path
@@ -567,14 +571,10 @@ def get_image_classifier(type: str = "rgb") -> str:
         >>> rgb_model_path = get_image_classifier(type='rgb')
         >>> print(f"RGB model downloaded to: {rgb_model_path}")
         RGB model path: /path/to/downloaded_models/ImageRGBClassifier/best.onnx
-
-        >>> gray_model_path = get_image_classifier(type='gray')
-        >>> print(f"Grayscale model downloaded to: {gray_model_path}")
-        Grayscale model path: /path/to/downloaded_models/ImageGrayClassifier/best.onnx
     """
     model_type = type.lower()
-    if model_type not in ("rgb", "gray"):
-        raise ValueError("type must be either 'rgb' or 'gray'")
+    if model_type not in ("rgb"):
+        raise ValueError("type must be either 'rgb'")
     return _get_onnx_model(model_type)
 
 
