@@ -1,69 +1,88 @@
+name: Test CoastSeg Conda Package
+
 on:
   push:
     branches: [fix_conda_action]
   pull_request:
     branches: [fix_conda_action]
-
-name: Test CoastSeg Conda Package
+  workflow_dispatch:
 
 jobs:
   Test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
 
-    defaults:
-      run:
-        shell: bash -el {0}
-
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-2022, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
+
+    defaults:
+      run:
+        shell: bash -leo pipefail {0}
 
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup micromamba environment
+      - name: Setup micromamba only
         uses: mamba-org/setup-micromamba@v3
         with:
-          environment-name: test
-          init-shell: bash
+          init-shell: none
+          post-cleanup: all
           condarc: |
             channels:
               - conda-forge
             channel_priority: strict
-          create-args: >-
-            python=${{ matrix.python-version }}
-            coastseg=2.0.2
-            pytest
+
+      - name: Check micromamba can run
+        run: |
+          micromamba --version
+          micromamba info
+
+      - name: Create test environment
+        run: |
+          micromamba create -y -n test \
+            -c conda-forge \
+            --strict-channel-priority \
+            "python=${{ matrix.python-version }}" \
+            coastseg=2.0.3 \
+            pytest \
+            pip
 
       - name: Show environment
         run: |
-          set -euo pipefail
-
-          micromamba info
-          micromamba list
-          which python
-          python --version
-          echo "CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
-          echo "CONDA_PREFIX=$CONDA_PREFIX"
+          micromamba list -n test
+          micromamba run -n test python --version
+          micromamba run -n test python -m pip check
 
       - name: Verify CoastSeg import
         run: |
-          set -euo pipefail
-
-          python - <<'PY'
+          micromamba run -n test python - <<'PY'
+          import importlib.metadata as md
+          import os
+          import pathlib
           import sys
           import coastseg
 
+          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          imported_from = pathlib.Path(coastseg.__file__).resolve()
+
           print("Python:", sys.version)
-          print("CoastSeg imported from:", coastseg.__file__)
+          print("CoastSeg version:", md.version("coastseg"))
+          print("CoastSeg imported from:", imported_from)
+
+          try:
+              imported_from.relative_to(workspace)
+          except ValueError:
+              pass
+          else:
+              raise SystemExit("ERROR: imported CoastSeg from checkout, not conda package")
           PY
 
       - name: Test with pytest
         run: |
-          set -euo pipefail
-
           cd "$RUNNER_TEMP"
-          python -m pytest -q --import-mode=importlib "$GITHUB_WORKSPACE/tests"
+          micromamba run -n test python -m pytest -q \
+            --import-mode=importlib \
+            "$GITHUB_WORKSPACE/tests"
