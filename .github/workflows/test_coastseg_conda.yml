@@ -49,6 +49,7 @@ jobs:
 
           conda install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
             "python=${{ matrix.python-version }}" \
+            "setuptools<82" \
             coastseg=2.0.3 \
             pytest
 
