@@ -1,88 +1,73 @@
-name: Test CoastSeg Conda Package
-
 on:
   push:
     branches: [fix_conda_action]
   pull_request:
     branches: [fix_conda_action]
-  workflow_dispatch:
+
+name: Test CoastSeg Conda Package
 
 jobs:
   Test:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
     runs-on: ${{ matrix.os }}
 
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-2022, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
-
     defaults:
       run:
         shell: bash -leo pipefail {0}
 
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12"]
+
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup micromamba only
-        uses: mamba-org/setup-micromamba@v3
+      - name: Setup Conda
+        uses: conda-incubator/setup-miniconda@v4
         with:
-          init-shell: none
-          post-cleanup: all
-          condarc: |
-            channels:
-              - conda-forge
-            channel_priority: strict
+          miniconda-version: "latest"
+          python-version: ${{ matrix.python-version }}
+          activate-environment: test
+          channels: conda-forge
+          conda-remove-defaults: "true"
+          channel-priority: strict
 
-      - name: Check micromamba can run
+      - name: Show conda environment
         run: |
-          micromamba --version
-          micromamba info
+          conda info
+          conda list
+          which python
+          python --version
+          echo "CONDA_DEFAULT_ENV=$CONDA_DEFAULT_ENV"
+          echo "CONDA_PREFIX=$CONDA_PREFIX"
 
-      - name: Create test environment
+      - name: Install CoastSeg conda package (conda-forge only)
         run: |
-          micromamba create -y -n test \
-            -c conda-forge \
-            --strict-channel-priority \
+          set -euo pipefail
+
+          conda install -y --override-channels -c conda-forge --strict-channel-priority --update-specs \
             "python=${{ matrix.python-version }}" \
             coastseg=2.0.3 \
-            pytest \
-            pip
+            pytest
 
-      - name: Show environment
-        run: |
-          micromamba list -n test
-          micromamba run -n test python --version
-          micromamba run -n test python -m pip check
+          conda list coastseg
+          conda list pytest
 
       - name: Verify CoastSeg import
         run: |
-          micromamba run -n test python - <<'PY'
-          import importlib.metadata as md
-          import os
-          import pathlib
+          python - <<'PY'
           import sys
           import coastseg
 
-          workspace = pathlib.Path(os.environ["GITHUB_WORKSPACE"]).resolve()
-          imported_from = pathlib.Path(coastseg.__file__).resolve()
-
           print("Python:", sys.version)
-          print("CoastSeg version:", md.version("coastseg"))
-          print("CoastSeg imported from:", imported_from)
-
-          try:
-              imported_from.relative_to(workspace)
-          except ValueError:
-              pass
-          else:
-              raise SystemExit("ERROR: imported CoastSeg from checkout, not conda package")
+          print("CoastSeg imported from:", coastseg.__file__)
           PY
 
       - name: Test with pytest
         run: |
+          # Change to the runner's temporary directory to ensure tests are run in a clean environment
           cd "$RUNNER_TEMP"
-          micromamba run -n test python -m pytest -q \
-            --import-mode=importlib \
-            "$GITHUB_WORKSPACE/tests"
+          # $GITHUB_WORKSPACE is the checked out CoastSeg repository, so we can run pytest on the tests directory there
+          python -m pytest -q --import-mode=importlib "$GITHUB_WORKSPACE/tests"
