@@ -1,0 +1,37 @@
+name: coastseg-ci
+channels:
+  - conda-forge
+dependencies:
+  # python is injected per matrix leg by .github/workflows/tests.yml
+  - pip
+  - aiohttp
+  - area
+  - chardet
+  - dask
+  - gdal
+  - geojson
+  - geopandas
+  - h5py
+  - "ipyfilechooser>=0.6.0,<0.7"
+  - ipyleaflet
+  - "jupyterlab>=3.0.0"
+  - leafmap
+  - nest-asyncio
+  - netcdf4
+  - "numpy>=2"
+  - "onnxruntime=*=*cpu*"
+  - pooch
+  - protobuf
+  - pytz
+  - scikit-image
+  - xarray
+  - pytest
+
+  # coastsat-package's own dependencies, so `pip install -e .` only has to fetch
+  # coastsat-package and pytmd rather than ~150 MB of PyPI wheels on every leg.
+  - astropy
+  - "earthengine-api>=0.1.304"
+  - google-auth
+  - importlib_resources
+  - matplotlib-base
+  - "pyqt=5.15.*"
