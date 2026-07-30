@@ -36,7 +36,8 @@ dependencies = [
   "onnxruntime",
   "chardet",
   "dask",
-  "coastsat-package>=0.3.3",
+  # 0.5.0 is the first release with the enhanced SAR workflow
+  "coastsat-package>=0.5.0",
   "geojson",
   "geopandas",
   "h5py",
@@ -70,7 +71,8 @@ coastseg = {path = ".", editable = true}
 # Note: pytmd is purposely not included here because it causes conflicts when installed from conda-forge
 [tool.pixi.dependencies]
 netcdf4 = "*" # prefer to have this installed from conda-forge because it can cause conflicts on MacOS when installed from pip
-onnxruntime = "*"
+# Pin the CPU build of onnx to avoid heavy GPU based cuda installation
+onnxruntime = { version = "*", build = "*cpu*" }
 aiohttp = "*"
 area = "*"
 chardet = "*"
