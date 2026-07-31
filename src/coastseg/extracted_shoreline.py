@@ -1,4 +1,5 @@
 # Standard library imports
+import ast
 import copy
 import datetime
 import fnmatch
@@ -22,7 +23,13 @@ import pytz
 from ipyleaflet import GeoJSON
 
 matplotlib.use("Agg")  # Use a non-GUI backend
-from coastsat import SDS_preprocess, SDS_shoreline, SDS_tools, SDS_transects
+from coastsat import (
+    SDS_download,
+    SDS_preprocess,
+    SDS_shoreline,
+    SDS_tools,
+    SDS_transects,
+)
 from osgeo import gdal
 from shapely.geometry import LineString, MultiPoint
 from skimage import measure, morphology
@@ -36,6 +43,7 @@ from coastseg import (
     file_utilities,
     geodata_processing,
     plotting,
+    sar_model,
 )
 from coastseg.intersections import split_line
 from coastseg.model_info import ModelInfo
@@ -53,6 +61,167 @@ NO_SEGMENTATIONS_PASSED_FILTER_MESSAGE = (
     "No segmentations passed the segmentation filter. No shorelines will be extracted."
 )
 NO_SEGMENTATIONS_FOUND_MESSAGE = "No segmentations found to extract shorelines from. No shorelines will be extracted."
+
+# How a shoreline was segmented, recorded per shoreline in output['segmentation_method'].
+# CoastSeg maps shorelines from class labels in a *_res.npz, never by thresholding MNDWI,
+# so none of these carry an MNDWI threshold -- see threshold_filter_applies() below.
+SEGMENTATION_ZOO_MODEL = "zoo_model"  # optical: Zoo classifier labels, no threshold
+# Sentinel-1 goes through the ONNX model in coastseg.sar_model, which has no Otsu
+# fallback: run_sar_segmentation raises rather than thresholding. Reuse coastsat's
+# constants so the two spell them the same way. SAR_OTSU only ever appears on output
+# from the coastsat extraction path, which does fall back.
+SEGMENTATION_SAR_MODEL = SDS_tools.SEGMENTATION_SAR_MODEL
+SEGMENTATION_SAR_OTSU = SDS_tools.SEGMENTATION_SAR_OTSU
+
+
+def get_segmentation_method(satname: str) -> str:
+    """Return how shorelines for ``satname`` were segmented.
+
+    Args:
+        satname (str): Satellite mission name ('L5', 'L7', 'L8', 'L9', 'S2', 'S1').
+
+    Returns:
+        str: One of ``SEGMENTATION_SAR_MODEL`` or ``SEGMENTATION_ZOO_MODEL``.
+    """
+    return SEGMENTATION_SAR_MODEL if satname == "S1" else SEGMENTATION_ZOO_MODEL
+
+
+def threshold_filter_applies(output: dict) -> np.ndarray:
+    """Per shoreline, whether ``settings['otsu_threshold']`` may be compared to its threshold.
+
+    CoastSat's ``output['MNDWI_threshold']`` holds a different quantity depending on how
+    the shoreline was mapped: an MNDWI value for the optical contour path, an Otsu
+    threshold in dB for SAR, or NaN when a segmentation model mapped it and there is no
+    threshold at all. Filtering the latter two against an MNDWI range silently deletes
+    them -- NaN fails every comparison and a dB value near -20 is outside any sensible
+    MNDWI range.
+
+    CoastSeg's own extraction records no ``MNDWI_threshold`` at all, so this returns
+    all-False for CoastSeg-produced output: there is nothing to compare. It mirrors
+    ``SDS_transects.threshold_filter_applies`` for output that does carry the column,
+    such as a session extracted by CoastSat itself.
+
+    Args:
+        output (dict): Merged extracted-shoreline dict.
+
+    Returns:
+        np.ndarray: Boolean, one entry per shoreline. False means "exempt this shoreline
+        from the threshold filter" rather than "discard it".
+    """
+    n_shorelines = len(output.get("shorelines", []))
+
+    if "MNDWI_threshold" not in output:
+        return np.zeros(n_shorelines, dtype=bool)
+
+    thresholds = np.array(output["MNDWI_threshold"], dtype=float)
+
+    if "segmentation_method" in output:
+        comparable = np.array(
+            [
+                method == SDS_tools.SEGMENTATION_MNDWI
+                for method in output["segmentation_method"]
+            ]
+        )
+    elif "satname" in output:
+        # older outputs: every SAR shoreline was thresholded in dB
+        comparable = np.array([satname != "S1" for satname in output["satname"]])
+    else:
+        comparable = np.ones(len(thresholds), dtype=bool)
+
+    # a NaN threshold can never satisfy a range, so it must not be filtered on
+    return comparable & np.isfinite(thresholds)
+
+
+def warn_if_sar_falls_back_to_otsu(settings: dict, metadata: dict) -> bool:
+    """Warn before extraction when no S1 scene will reach the SAR segmentation model.
+
+    coastsat is deliberately forgiving: ``load_sar_segmenter`` returns None instead of
+    raising when the model cannot be used -- onnxruntime missing, the ~130 MB download
+    unreachable offline, ``sar_model_path`` pointing at a file that is not there -- and
+    every scene is then thresholded with the legacy Otsu method. The run still produces
+    shorelines, just measurably different ones, and coastsat says so only in its own log
+    inside the session folder. Say it where the user is actually looking instead.
+
+    Loading here is not wasted work: coastsat caches the session per model path, so the
+    extraction that follows reuses it rather than re-reading the file.
+
+    Args:
+        settings (dict): Shoreline settings handed to ``SDS_shoreline.extract_shorelines``.
+        metadata (dict): Per-satellite metadata; S1 must be present for this to apply.
+
+    Returns:
+        bool: True when the warning fired, meaning the whole run falls back to Otsu.
+    """
+    if not metadata.get("S1"):
+        return False
+
+    method = str(
+        settings.get("sar_segmentation", SDS_shoreline.SAR_SEGMENTATION_DEFAULT)
+    ).lower()
+    if method == "otsu":
+        # the user asked for this, so it is not a problem worth a warning
+        logger.info(
+            "settings['sar_segmentation'] is 'otsu': Sentinel-1 scenes will be "
+            "thresholded rather than segmented with the SAR model."
+        )
+        return False
+
+    if SDS_shoreline.load_sar_segmenter(settings, logger=logger) is not None:
+        return False
+
+    message = (
+        "The Sentinel-1 segmentation model could not be loaded, so every S1 scene in "
+        "this run falls back to the legacy Otsu threshold. Shorelines will still be "
+        "produced, but they will differ from model-segmented ones. Common causes: "
+        "onnxruntime is not installed, the model could not be downloaded (no internet "
+        "on first use), or settings['sar_model_path'] points at a missing or invalid "
+        ".onnx file. Set settings['sar_segmentation'] = 'otsu' to silence this."
+    )
+    logger.warning(message)
+    print(f"WARNING: {message}")
+    return True
+
+
+def report_sar_segmentation_methods(output: dict) -> Dict[str, int]:
+    """Report how many S1 shorelines the model segmented and how many Otsu thresholded.
+
+    The pre-flight check in :func:`warn_if_sar_falls_back_to_otsu` cannot see a *per
+    scene* fallback -- coastsat also drops to Otsu for an individual scene it cannot
+    segment, such as a legacy single-polarization one -- so tally what actually happened
+    once the run is over. This is the honest record of how the shorelines were produced.
+
+    Args:
+        output (dict): Merged output from ``SDS_shoreline.extract_shorelines``.
+
+    Returns:
+        Dict[str, int]: Counts keyed by segmentation method, for SAR methods only.
+    """
+    methods = output.get("segmentation_method") or []
+    counts = {
+        SEGMENTATION_SAR_MODEL: 0,
+        SEGMENTATION_SAR_OTSU: 0,
+    }
+    for method in methods:
+        if method in counts:
+            counts[method] += 1
+
+    total = counts[SEGMENTATION_SAR_MODEL] + counts[SEGMENTATION_SAR_OTSU]
+    if total == 0:
+        return counts
+
+    thresholded = counts[SEGMENTATION_SAR_OTSU]
+    if thresholded:
+        message = (
+            f"{thresholded} of {total} Sentinel-1 shorelines were mapped with the "
+            f"legacy Otsu threshold instead of the SAR segmentation model."
+        )
+        logger.warning(message)
+        print(f"WARNING: {message}")
+    else:
+        logger.info(
+            f"All {total} Sentinel-1 shorelines were mapped with the SAR segmentation model."
+        )
+    return counts
 
 
 class SegmentationFilter:
@@ -250,9 +419,19 @@ def get_filepath(filepath_data: str, sitename: str, satname: str) -> List[str]:
         fp_mask = os.path.join(filepath_data, sitename, satname, "mask")
         filepath = [fp_ms, fp_swir, fp_mask]
     elif satname == "S1":
-        # access downloaded Sentinel 1 images
-        fp_vh = os.path.join(filepath_data, sitename, satname, "VH")
-        filepath = [fp_vh]
+        # access downloaded Sentinel 1 images: one folder per polarization, in
+        # canonical order, and only the ones that actually exist. Mirrors
+        # SDS_tools.get_filepath so a VV+VH site is readable and a legacy VH-only
+        # site keeps working.
+        s1_root = os.path.join(filepath_data, sitename, satname)
+        filepath = [
+            os.path.join(s1_root, polarization)
+            for polarization in SDS_tools.SAR_POLARIZATIONS
+            if os.path.isdir(os.path.join(s1_root, polarization))
+        ]
+        if not filepath:
+            # nothing downloaded yet: keep the legacy shape so callers fail the same way
+            filepath = [os.path.join(s1_root, "VH")]
 
     return filepath
 
@@ -450,6 +629,12 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
         "im_quality",
         "im_width",
         "im_height",
+        # Sentinel-1 only: the polarizations downloaded for this scene, in the order
+        # they are stacked. Written by coastsat as a repr'd list, e.g. "['VV', 'VH']".
+        # saved_polarization is the pre-multi-polarization spelling, still read so
+        # legacy VH-only sites resolve to ["VH"] instead of [].
+        "band_order",
+        "saved_polarization",
     ]
 
     # Mapping of actual file keys to metadata keys
@@ -463,6 +648,8 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
         "im_quality": -1,
         "im_width": -1,
         "im_height": -1,
+        "band_order": [],
+        "saved_polarization": "",
     }
 
     with open(filepath, "r") as f:
@@ -501,11 +688,42 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
                     value = float(value)
                 except ValueError:
                     pass  # Keep the value as a string if conversion to float fails
+            elif key == "band_order":
+                # Written as a repr'd list. A malformed value must not take down the
+                # whole read: band_order is optional and absent from legacy files.
+                try:
+                    parsed = ast.literal_eval(value)
+                except (ValueError, SyntaxError):
+                    logger.warning(
+                        f"Could not parse band_order {value!r} in {filepath}; "
+                        "treating it as unknown."
+                    )
+                    parsed = []
+                if isinstance(parsed, str):
+                    parsed = [parsed]
+                value = [str(band) for band in parsed] if parsed else []
 
             # Update the metadata dictionary with the extracted key-value pair.
             metadata[key] = value
 
     return metadata
+
+
+def get_band_order_from_meta(meta_info: Dict[str, Union[str, int, float]]) -> List[str]:
+    """Return the Sentinel-1 polarizations a scene's metadata file recorded.
+
+    Delegates to coastsat's resolver so the two cannot drift.
+
+    Args:
+        meta_info (Dict[str, Union[str, int, float]]): Parsed contents of a metadata
+            .txt file, as returned by :func:`read_metadata_file`.
+
+    Returns:
+        List[str]: Polarizations in the order they are stacked, or ``[]`` when the file
+        recorded none. Files written before multi-polarization support carry only
+        ``saved_polarization``, which resolves to a single-entry list.
+    """
+    return list(SDS_download.get_band_order_from_meta(meta_info))
 
 
 def format_date(date_str: Union[str, datetime.datetime]) -> datetime.datetime:
@@ -588,6 +806,11 @@ def get_metadata(inputs: dict, data_folder_location: str = "") -> dict:
                 "im_quality": [],
                 "im_dimensions": [],
             }
+            if satname == "S1":
+                # Which polarizations each scene has. coastsat reads this when it cannot
+                # list the files on disk, e.g. to tell a complete scene from one still
+                # missing a band.
+                metadata[satname]["band_order"] = []
             # directory where the metadata .txt files are stored
             filepath_meta = os.path.join(sat_path, "meta")
             # get the list of filenames and sort it chronologically
@@ -617,6 +840,13 @@ def get_metadata(inputs: dict, data_folder_location: str = "") -> dict:
                     parse_date_from_filename(meta_info["filename"])  # type: ignore
                 )
                 metadata[satname]["im_quality"].append(meta_info["im_quality"])
+                if satname == "S1":
+                    # appended unconditionally so band_order stays the same length as
+                    # filenames and band_order[i] is index-safe, including on sites
+                    # mixing new dual-pol scenes with legacy VH-only ones
+                    metadata[satname]["band_order"].append(
+                        get_band_order_from_meta(meta_info)
+                    )
                 # if the metadata file didn't contain im_height or im_width set this as an empty list
                 if meta_info["im_height"] == -1 or meta_info["im_height"] == -1:
                     metadata[satname]["im_dimensions"].append([])
@@ -1168,6 +1398,7 @@ def combine_satellite_data(satellite_data: dict) -> dict:
         "shorelines": [],
         "idx": [],
         "satname": [],
+        "segmentation_method": [],
     }
 
     # Iterate through satellite_data keys (satellite names)
@@ -1281,6 +1512,10 @@ def process_satellite(
     output[satname].setdefault("cloud_cover", [])
     output[satname].setdefault("filename", [])
     output[satname].setdefault("idx", [])
+    # Recorded for every satellite, not just S1: merge_satellite_data builds its column
+    # list from the keys present, so a column missing on one satellite desynchronizes the
+    # merged lists against 'satname'.
+    output[satname].setdefault("segmentation_method", [])
 
     if len(filenames) == 0:
         logger.warning(f"Satellite {satname} had no imagery")
@@ -1372,6 +1607,9 @@ def process_satellite(
             output[satname].setdefault("cloud_cover", []).append(result["cloud_cover"])
             output[satname].setdefault("filename", []).append(filenames[index])
             output[satname].setdefault("idx", []).append(index)
+            output[satname].setdefault("segmentation_method", []).append(
+                get_segmentation_method(satname)
+            )
 
     pbar.close()
     return output
@@ -1473,6 +1711,16 @@ def process_satellite_image(
     im_ms, georef, cloud_mask, im_nodata = SDS_preprocess.preprocess_image(
         fn, satname, settings=settings, collection=collection
     )
+
+    # Sentinel-1 scenes are swath crops, so a large share of a downloaded tile is often
+    # empty. preprocess_image reports an all-zero nodata mask for S1, which lets those
+    # blank areas reach the contour finder and be traced as shoreline. Recover the real
+    # mask from the GeoTIFFs before any of the checks below run.
+    if satname == "S1" and settings.get("sar_mask_nodata", True):
+        sar_nodata = sar_model.sar_nodata_mask(fn)
+        if sar_nodata is not None and sar_nodata.shape == im_nodata.shape:
+            im_nodata = np.logical_or(im_nodata, sar_nodata)
+            cloud_mask = np.logical_or(cloud_mask, sar_nodata)
 
     # if percentage of no data pixels are greater than allowed, skip
     percent_no_data_allowed = settings.get("percent_no_data", 1.0)
@@ -2003,7 +2251,11 @@ class Extracted_Shoreline:
         # Use roi id to identify which ROI extracted shorelines derive from
         self.roi_id = ""
         # dictionary : dictionary of extracted shorelines
-        # contains keys 'dates', 'shorelines', 'filename', 'cloud_cover', 'geoaccuracy', 'idx', 'MNDWI_threshold', 'satname'
+        # contains keys 'dates', 'shorelines', 'filename', 'cloud_cover', 'geoaccuracy',
+        # 'idx', 'satname', 'segmentation_method'.
+        # Note there is no 'MNDWI_threshold': CoastSeg maps shorelines from class labels
+        # in a *_res.npz, never by thresholding MNDWI, so there is no threshold to record.
+        # Anything filtering on that column must go through threshold_filter_applies().
         self.dictionary = {}
         # shoreline_settings: dictionary of settings used to extract shoreline
         self.shoreline_settings = {}
@@ -2538,6 +2790,10 @@ class Extracted_Shoreline:
                     f"edit_metadata metadata['{satname}'] length {len(metadata[satname].get('im_quality', []))} of im_quality: {np.unique(metadata[satname].get('im_quality', []))}"
                 )
 
+        # coastsat drops to Otsu without raising when the SAR model is unusable, so say
+        # so before the run rather than letting it degrade silently
+        warn_if_sar_falls_back_to_otsu(self.shoreline_settings, metadata)
+
         # extract shorelines with coastsat's models
         extracted_shorelines = SDS_shoreline.extract_shorelines(
             metadata,
@@ -2545,6 +2801,8 @@ class Extracted_Shoreline:
             output_directory=output_directory,
             shoreline_extraction_area=shoreline_extraction_area,
         )
+        # catches the per-scene fallbacks the pre-flight check cannot predict
+        report_sar_segmentation_methods(extracted_shorelines)
         logger.info(f"extracted_shoreline_dict: {extracted_shorelines}")
         # postprocessing by removing duplicates and removing in inaccurate georeferencing (set threshold to 10 m)
         extracted_shorelines = SDS_tools.remove_duplicates(
@@ -2629,8 +2887,30 @@ class Extracted_Shoreline:
             "percent_no_data",
             "model_session_path",  # path to model session file
             "apply_cloud_mask",
+            # Sentinel-1 only. coastsat reads these straight out of this dict:
+            # sar_segmentation and sar_model_path in SDS_shoreline.load_sar_segmenter,
+            # sar_water_threshold in SDS_shoreline.segment_sar_water. Leaving them out
+            # of this allowlist silently drops them and the user's choice is ignored.
+            "sar_segmentation",
+            "sar_water_threshold",
+            "sar_model_path",
         ]
         shoreline_settings = {k: v for k, v in settings.items() if k in SHORELINE_KEYS}
+
+        # Stored relative to the CoastSeg directory so config.json stays portable, but
+        # coastsat has to be handed something it can open.
+        #
+        # When the user set no path, point coastsat at a model sitting in CoastSeg's own
+        # models/ directory if there is one. coastsat looks only in its pooch cache, so
+        # without this a manually downloaded model would be used by the zoo workflow and
+        # silently re-downloaded (~130 MB) by this one. Still "" when nothing is there,
+        # which lets coastsat resolve and download as usual.
+        if "sar_model_path" in shoreline_settings:
+            shoreline_settings["sar_model_path"] = (
+                common.resolve_sar_model_path(shoreline_settings["sar_model_path"])
+                or sar_model.find_local_sar_model()
+            )
+
         shoreline_settings.update(
             {
                 "reference_shoreline": reference_shoreline,

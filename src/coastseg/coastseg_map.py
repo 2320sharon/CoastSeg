@@ -1821,6 +1821,17 @@ class CoastSeg_Map:
             "apply_cloud_mask": True,
             "image_size_filter": True,
             "drop_intersection_pts": False,
+            "sentinel_1_properties": common.get_default_sentinel_1_properties(),
+            # Sentinel-1 land/water segmentation. "model" runs coastsat's trained ONNX
+            # segmenter; "otsu" reverts to thresholding, which is what CoastSeg did
+            # before the model existed. Stated explicitly rather than left to coastsat's
+            # own default so it round-trips through config.json and shows in the UI.
+            "sar_segmentation": "model",
+            "sar_water_threshold": 0.5,
+            # "" means let coastsat resolve the default model, which it downloads from
+            # Hugging Face into its pooch cache on first use. When set, it is stored
+            # relative to the CoastSeg directory -- see common.relativize_sar_model_path.
+            "sar_model_path": "",
             "coastseg_version": __version__,
         }
 
@@ -1842,6 +1853,12 @@ class CoastSeg_Map:
 
         for key, value in self.default_settings.items():
             self.settings.setdefault(key, value)
+
+        # Never persist an absolute path to the SAR model: config.json travels between
+        # machines. Idempotent, so it is safe to run on every call.
+        self.settings["sar_model_path"] = common.relativize_sar_model_path(
+            self.settings.get("sar_model_path", "")
+        )
 
         logger.info(f"Set Settings: {self.settings}")
         return self.settings.copy()

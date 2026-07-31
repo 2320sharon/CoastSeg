@@ -1,0 +1,53 @@
+The Sentinel-1 (SAR) model is NOT run from this directory.
+================================================================================
+
+run_zoo_segmentation_models.py cannot run it. That script loads Keras `.h5`
+SegFormer weights with TensorFlow, and this environment contains only
+tensorflow and transformers. The SAR model is a `.onnx` model that needs
+onnxruntime and gdal, neither of which is installed here. It also reads the raw
+dual-polarization GeoTIFFs rather than the RGB preview jpgs this script expects.
+
+Run it from the main CoastSeg environment instead. Nothing extra to install.
+
+  From the repository root:
+
+      python 4_zoo_workflow_SAR.py
+
+  Edit `input_directory` and `session_name` at the top of that script first.
+
+  Or call it directly:
+
+      from coastseg import zoo_model
+
+      zoo = zoo_model.Zoo_Model()
+      zoo.set_settings(img_type="SAR", model_type="SAR_segmentation_model")
+      zoo.run_model_and_extract_shorelines(
+          r"CoastSeg\data\ID_...\jpg_files\preprocessed\RGB",
+          session_name="my_sar_session",
+      )
+
+  To segment without extracting shorelines, use the batch driver directly:
+
+      from coastseg import sar_model
+
+      sar_model.run_sar_segmentation(
+          roi_directory=r"CoastSeg\data\ID_...",
+          session_directory=r"CoastSeg\sessions\my_sar_session",
+          model_directory=r"CoastSeg\models\SAR_segmentation_model",
+      )
+
+Requirements
+--------------------------------------------------------------------------------
+The ROI must have been downloaded with BOTH the VV and VH polarizations. The
+model reads data/ID_.../S1/VV/*.tif and data/ID_.../S1/VH/*.tif and builds a
+[VV, VH, VV-VH] composite. ROIs downloaded before multi-polarization support
+have VV only and raise MissingPolarizationError -- re-download them.
+
+The model (~130 MB) downloads from Hugging Face on first use and is cached, so
+the first run is slower. To supply your own, put the `.onnx` in
+CoastSeg/models/SAR_segmentation_model or point `local_model_path` at it.
+
+The outputs are identical to this script's: `_predseg.png`, `_res.npz`,
+model_settings.json, model_info.json and segmentation_summary.json, written flat
+into the session directory. That is deliberate, so shoreline extraction is the
+same downstream regardless of which segmenter produced them.
