@@ -1,7 +1,9 @@
+import logging
 import os
 from datetime import datetime
-import logging
+
 from coastseg import core_utilities
+
 # DESCRIPTION: Sets up a logging system that writes logs to a file named with the current timestamp in a "logs" directory.
 
 
@@ -9,9 +11,11 @@ def prepare_logging():
     """Create the logs/ directory if it doesn't exist.
 
     The directory is created under the CoastSeg project base directory as
-    determined by :func:`core_utilities.get_base_dir`.
+    determined by `core_utilities.get_base_dir`.
     """
-    if not os.path.exists(os.path.abspath(os.path.join(core_utilities.get_base_dir(), "logs"))):
+    if not os.path.exists(
+        os.path.abspath(os.path.join(core_utilities.get_base_dir(), "logs"))
+    ):
         os.mkdir(os.path.abspath(os.path.join(core_utilities.get_base_dir(), "logs")))
 
 
@@ -21,7 +25,7 @@ def clear_default_handlers() -> None:
         logging.root.removeHandler(handler)
 
 
-def create_root_logger()-> None:
+def create_root_logger() -> None:
     """Configure the root logger to write to a timestamped file in logs/.
 
     The log filename uses the pattern:
@@ -36,7 +40,9 @@ def create_root_logger()-> None:
         - Affects all loggers (since it configures the root logger).
     """
     log_filename = "log_" + datetime.now().strftime("%m-%d-%y-%I_%M_%S") + ".txt"
-    log_file = os.path.abspath(os.path.join(core_utilities.get_base_dir(), "logs", log_filename))
+    log_file = os.path.abspath(
+        os.path.join(core_utilities.get_base_dir(), "logs", log_filename)
+    )
     # configure the logger
     log_format = "%(asctime)s - %(filename)s at line %(lineno)s in %(funcName)s() - %(levelname)s : %(message)s"
     os.path.abspath(os.path.join(core_utilities.get_base_dir(), "logs"))
