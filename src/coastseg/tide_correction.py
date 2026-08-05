@@ -1,643 +1,99 @@
+"""CoastSeg Tide Correction
+
+Applies tide correction to a session's shoreline time series, locates the FES
+tide model on disk, and caches the model datasets that are opened.
+
+Two on-disk model layouts are supported: the un-clipped layout (the default) and
+the legacy clipped region0 through region10 layout, which is kept so that
+existing installations continue to work.
+
+Tides are predicted in coastseg.tide_predict and read from user supplied CSV
+files in coastseg.tide_inputs. Both are re-exported here.
+"""
+
 # Standard library imports
+import atexit
 import logging
 import os
 import pathlib
 import re
-import traceback
-from enum import Enum
-from pathlib import Path
-from typing import Collection, Dict, Iterable, List, Tuple, Union
+import threading
+from collections import OrderedDict
+from collections.abc import Callable, Collection, Iterable
+from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-import pyproj
-import netCDF4  # do this otherwise pyTMD will have issues loading netCDF4.Dataset
 import pyTMD.io
-import pyTMD.io.model
-import pyTMD.predict
-import pyTMD.time
-import pytz
-
-# Third-party imports
-from tqdm import tqdm
 
 from coastseg import common, core_utilities, file_utilities
 from coastseg.file_utilities import progress_bar_context
 
+# A few names moved out of this module when it was split but are still imported
+# from here by the scripts and notebooks, so they stay importable.
+from coastseg.tide_inputs import read_content_csv
+from coastseg.tide_predict import (
+    load_regions_from_geojson,  # noqa: F401  re-exported: scripts import it here
+    model_tides,  # noqa: F401  re-exported: scripts import it here
+    perform_spatial_join,  # noqa: F401  re-exported: scripts import it here
+    predict_tides,
+    predict_tides_for_df,  # noqa: F401  re-exported: scripts import it here
+)
+
 # Logger setup
 logger = logging.getLogger(__name__)
 
-
-class TimeSeriesTypes(str, Enum):
-    RAW = "raw"
-    TIDALLY_CORRECTED = "tidally_corrected"
-
-
-# Compiled filename patterns, ordered by preference (preferred -> legacy).
-_PATTERNS: dict[tuple[TimeSeriesTypes, bool], tuple[re.Pattern[str], ...]] = {
-    (TimeSeriesTypes.RAW, False): (
-        re.compile(r"^raw_transect_time_series\.csv$"),
-        re.compile(r"^transect_time_series\.csv$"),
-    ),
-    (TimeSeriesTypes.RAW, True): (
-        re.compile(r"^raw_transect_time_series_merged\.csv$"),
-        re.compile(r"^transect_time_series_merged\.csv$"),
-    ),
-    (TimeSeriesTypes.TIDALLY_CORRECTED, False): (
-        re.compile(r"^tidally_corrected_transect_time_series\.csv$"),
-    ),
-    (TimeSeriesTypes.TIDALLY_CORRECTED, True): (
-        re.compile(r"^tidally_corrected_transect_time_series_merged\.csv$"),
-    ),
+# On-disk layout of each supported model. folders is in preference order.
+_MODEL_LAYOUTS: Dict[str, dict] = {
+    "FES2022": {
+        "folders": ("fes2022b", "fes2022"),
+        "format": "FES-netcdf",
+        "version": "FES2022",
+        "units": "cm",
+        "variable": "tide_ocean",
+        "n_constituents": 34,
+    },
+    "FES2014": {
+        "folders": ("fes2014",),
+        "format": "FES-netcdf",
+        "version": "FES2014",
+        "units": "cm",
+        "variable": "tide_ocean",
+        "n_constituents": 34,
+    },
 }
 
-
-def _find_first_by_patterns(
-    session_path: str, patterns: Iterable[re.Pattern[str]]
-) -> str:
-    """
-    Finds the first file matching any of the provided regex patterns.
-
-    Args:
-        session_path (str): Directory path to search for files.
-        patterns (Iterable[re.Pattern[str]]): Regex patterns to match against filenames.
-
-    Returns:
-        str: Path to the first matching file.
-
-    Raises:
-        FileNotFoundError: If no file matches any pattern.
-    """
-    for pat in patterns:
-        try:
-            return file_utilities.find_file_by_regex(session_path, pat.pattern)
-        except FileNotFoundError:
-            continue
-    raise FileNotFoundError("No file matched any expected pattern.")
-
-
-def get_timeseries_path(
-    roi_id: str,
-    session_name: str,
-    series: TimeSeriesTypes = TimeSeriesTypes.RAW,
-    is_merged: bool = False,
-) -> str:
-    """Return the path to a time-series CSV for an ROI and session.
-
-    Builds the expected filename from the series type and is_ flag. For raw
-    series, legacy filenames are supported as fallbacks.
-
-    Args:
-        roi_id: Region-of-interest identifier.
-        session_name: Session name.
-        series: Series type, either Series.RAW or Series.TIDALLY_CORRECTED. Defaults to Series.RAW.
-        is_merged: Whether to return the merged file variant.
-
-    Returns:
-        Path to the matching CSV file.
-
-    Raises:
-        FileNotFoundError: If no matching file is found in the session directory.
-        KeyError: If an invalid (series, is_merged) combination is requested.
-
-    Examples:
-        >>> get_timeseries_path("roi_001", "my_session", Series.RAW, is_merged=False)
-        '/path/to/session/roi_001/raw_transect_time_series.csv'
-    """
-    session_path = file_utilities.get_session_contents_location(session_name, roi_id)
-    patterns = _PATTERNS[(series, is_merged)]
-    return _find_first_by_patterns(session_path, patterns)
-
-
-def convert_col_to_ISO_8601(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
-    """
-    Converts a DataFrame column to ISO 8601 format and timezone-aware datetime objects.
-
-    Args:
-        df (pd.DataFrame): The input DataFrame containing the column to convert.
-        col_name (str): Name of the column to convert to ISO 8601 format.
-
-    Returns:
-        pd.DataFrame: DataFrame with the specified column converted to timezone-aware datetime objects in UTC.
-    """
-    if col_name not in df.columns:
-        return df
-    df[col_name] = pd.to_datetime(df[col_name], format="ISO8601")
-    # Specify the desired timezone (e.g., UTC)
-    timezone = pytz.timezone("UTC")
-    # Convert the naive datetime objects to timezone-aware datetime objects
-    df[col_name] = df[col_name].apply(
-        lambda x: x if x.tzinfo is not None else timezone.localize(x)
-    )
-    return df
-
-
-def compute_distance_xy(x1: float, y1: float, x2: float, y2: float) -> float:
-    """
-    Computes the Euclidean distance between two points in 2D space.
-
-    Args:
-        x1 (float): X-coordinate of the first point.
-        y1 (float): Y-coordinate of the first point.
-        x2 (float): X-coordinate of the second point.
-        y2 (float): Y-coordinate of the second point.
-
-    Returns:
-        float: Euclidean distance between the two points.
-
-    Example:
-        >>> distance = compute_distance_xy(0, 0, 3, 4)
-        >>> print(distance)
-        5.0
-    """
-    return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
-
-
-def _initialize_column(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
-    """
-    Initializes a new column with NaN values if it doesn't exist.
-
-    Args:
-        df (pd.DataFrame): DataFrame to modify.
-        column_name (str): Name of the column to initialize.
-
-    Returns:
-        pd.DataFrame: DataFrame with the column initialized if it didn't exist.
-    """
-    if column_name not in df.columns:
-        df[column_name] = np.nan
-    return df
-
-
-def _find_closest_date(
-    date: pd.Timestamp, reference_dates: pd.Series
-) -> Union[pd.Timestamp, float]:
-    """
-    Finds the closest date from a series of reference dates.
-
-    Args:
-        date (pd.Timestamp): Target date to find the closest match for.
-        reference_dates (pd.Series): Series containing reference dates to search within.
-
-    Returns:
-        Union[pd.Timestamp, float]: Date from reference_dates closest to the target date.
-    """
-    copy_of_reference_dates = reference_dates.copy()
-    # reset index so that we can use the index to find the closest date
-    copy_of_reference_dates.reset_index(drop=True, inplace=True)
-    return copy_of_reference_dates.iloc[
-        (copy_of_reference_dates - date).abs().argsort()[0]
-    ]
-
-
-def match_via_month(
-    timeseries: pd.DataFrame, df: pd.DataFrame, column_name: str = "slope"
-) -> pd.DataFrame:
-    """
-    Matches timeseries data with reference data based on month and adds the specified column.
-
-    Args:
-        timeseries (pd.DataFrame): DataFrame containing timeseries data with 'dates' column.
-        df (pd.DataFrame): Reference DataFrame with 'month' column and specified column for matching.
-        column_name (str, optional): Name of the column to match and add. Defaults to 'slope'.
-
-    Returns:
-        pd.DataFrame: Timeseries DataFrame with the specified column added, temporary 'month' column removed.
-
-    Example:
-        >>> timeseries_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-15', '2021-06-15']),
-        ...     'transect_id': ['1', '2']
-        ... })
-        >>> slope_df = pd.DataFrame({
-        ...     'month': [1, 6],
-        ...     'slope': [0.1, 0.2]
-        ... })
-        >>> result = match_via_month(timeseries_df, slope_df, 'slope')
-        >>> print(result)
-            dates transect_id  slope
-        0 2021-01-15           1    0.1
-        1 2021-06-15           2    0.2
-    """
-    # if the column already exists drop it else it will cause a duplicate column to appear after the merge
-    if column_name in timeseries.columns:
-        timeseries = timeseries.drop(columns=[column_name], errors="ignore")
-
-    median_val = df[column_name].median()
-    # For each transect, get the month of the date and add the slope
-    timeseries["month"] = timeseries["dates"].dt.month
-    timeseries = timeseries.merge(df, on="month", how="left")
-    timeseries[column_name] = timeseries[column_name].fillna(median_val)
-    # drop month column
-    timeseries = timeseries.drop(columns=["month"])
-    return timeseries
-
-
-# Only cares about column name, 'transect_id', and 'dates' column
-def match_via_id_and_month(
-    timeseries: pd.DataFrame, df: pd.DataFrame, column_name: str
-) -> pd.DataFrame:
-    """
-    Matches values based on transect_id and closest month.
-
-    Args:
-        timeseries (pd.DataFrame): DataFrame containing shoreline data with 'dates' and 'transect_id' columns.
-        df (pd.DataFrame): Reference DataFrame with 'transect_id', 'month', and specified column.
-        column_name (str): Name of column to match and add to the timeseries.
-
-    Returns:
-        pd.DataFrame: Updated timeseries DataFrame with matched values. If column_name is 'slope',
-                     NaN values are filled with the median slope from the reference DataFrame.
-
-    Example:
-        >>> timeseries_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-15', '2021-06-15']),
-        ...     'transect_id': ['1', '1']
-        ... })
-        >>> slope_df = pd.DataFrame({
-        ...     'transect_id': ['1', '1'],
-        ...     'month': [1, 6],
-        ...     'slope': [0.1, 0.2]
-        ... })
-        >>> result = match_via_id_and_month(timeseries_df, slope_df, 'slope')
-        >>> print(result)
-            dates transect_id  slope
-        0 2021-01-15           1    0.1
-        1 2021-06-15           1    0.2
-    """
-    # if the column already exists drop it else it will cause a duplicate column to appear after the merge
-    if column_name in timeseries.columns:
-        timeseries = timeseries.drop(columns=[column_name], errors="ignore")
-
-    df["transect_id"] = df["transect_id"].astype(str)
-    timeseries["month"] = timeseries["dates"].dt.month
-    timeseries = timeseries.merge(df, on=["month", "transect_id"], how="left")
-    timeseries = timeseries.drop(columns=["month"])
-
-    if column_name == "slope":
-        median_slope = np.median(np.unique(df[column_name]))
-        # Fill NaN values in the 'slope' column with the calculated median
-        timeseries[column_name].fillna(median_slope, inplace=True)
-
-    return timeseries
-
-
-# Only cares about column name and 'dates' column
-def match_via_date(
-    timeseries: pd.DataFrame, df: pd.DataFrame, column_name: str
-) -> pd.DataFrame:
-    """
-    Matches values based on closest date.
-
-    Args:
-        timeseries (pd.DataFrame): DataFrame containing shoreline data with 'dates' column.
-        df (pd.DataFrame): Reference DataFrame with 'dates' and specified column.
-        column_name (str): Name of column to match and add to the timeseries.
-
-    Returns:
-        pd.DataFrame: Updated timeseries DataFrame with matched values added.
-
-    Example:
-        >>> timeseries_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-15', '2021-06-15'])
-        ... })
-        >>> reference_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-10', '2021-06-20']),
-        ...     'tide': [1.2, 1.8]
-        ... })
-        >>> result = match_via_date(timeseries_df, reference_df, 'tide')
-        >>> print(result)
-            dates  tide
-        0 2021-01-15   1.2
-        1 2021-06-15   1.8
-    """
-    timeseries = _initialize_column(timeseries, column_name)
-
-    # Loop through shoreline dates
-    for date in timeseries["dates"]:
-        closest_date = _find_closest_date(date, df["dates"])
-        timeseries.loc[timeseries["dates"] == date, column_name] = df.loc[
-            df["dates"] == closest_date, column_name
-        ].values[0]
-
-    return timeseries
-
-
-# Only cares about column name, 'transect_id', and 'dates' column
-def match_via_id_and_date(
-    timeseries: pd.DataFrame, df: pd.DataFrame, column_name: str
-) -> pd.DataFrame:
-    """
-    Matches values based on transect_id and closest date.
-
-    Performs temporal matching for each transect, finding the closest date
-    in the reference DataFrame for each shoreline observation.
-
-    Args:
-        timeseries (pd.DataFrame): DataFrame containing shoreline data with 'dates' and 'transect_id' columns.
-        df (pd.DataFrame): Reference DataFrame with 'dates', 'transect_id', and specified column.
-        column_name (str): Name of column to match and add to the timeseries.
-
-    Returns:
-        pd.DataFrame: Updated timeseries DataFrame with matched values. If column_name is 'slope',
-                     NaN values are filled with the median slope from the reference DataFrame.
-
-    Example:
-        >>> timeseries_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-15', '2021-06-15']),
-        ...     'transect_id': ['1', '1']
-        ... })
-        >>> reference_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-10', '2021-06-20']),
-        ...     'transect_id': ['1', '1'],
-        ...     'slope': [0.1, 0.2]
-        ... })
-        >>> result = match_via_id_and_date(timeseries_df, reference_df, 'slope')
-        >>> print(result)
-            dates transect_id  slope
-        0 2021-01-15           1    0.1
-        1 2021-06-15           1    0.2
-    """
-    timeseries = _initialize_column(timeseries, column_name)
-    unique_ids = np.unique(df["transect_id"])
-
-    for transect_id in unique_ids:
-        matching_rows = df.loc[df["transect_id"] == transect_id]
-
-        if len(matching_rows) == 1:
-            # Single tide value case
-            matching_value = matching_rows[column_name].values[0]
-            timeseries.loc[timeseries["transect_id"] == transect_id, column_name] = (
-                matching_value
-            )
-        elif len(matching_rows) > 1:
-            # Multiple dates case
-            shoreline_dates = timeseries.loc[
-                timeseries["transect_id"] == transect_id, "dates"
-            ]
-            for shoreline_date in shoreline_dates:
-                # gets the closest date from the df data for that transect_id
-                matching_date = _find_closest_date(
-                    shoreline_date, matching_rows["dates"]
-                )
-                matching_value = matching_rows.loc[
-                    matching_rows["dates"] == matching_date, column_name
-                ].values[0]
-                timeseries.loc[
-                    (timeseries["transect_id"] == transect_id)
-                    & (timeseries["dates"] == shoreline_date),
-                    column_name,
-                ] = matching_value
-
-    if column_name == "slope":
-        unique_ids = np.unique(timeseries["transect_id"])
-        median_slope = np.median(np.unique(df[column_name]))
-        # Fill NaN values in the 'slope' column with the calculated median
-        timeseries[column_name].fillna(median_slope, inplace=True)
-
-    return timeseries
-
-
-# Only cares about column name, 'transect_id', and 'dates' column
-def match_via_points_and_date(
-    timeseries: pd.DataFrame, df: pd.DataFrame, column_name: str
-) -> pd.DataFrame:
-    """
-    Matches measurements to transects based on closest spatial and temporal proximity.
-
-    Finds spatially closest points in the reference DataFrame for each transect,
-    then temporally matches each shoreline observation to the closest measurement.
-
-    Args:
-        timeseries (pd.DataFrame): DataFrame with columns: 'transect_id', 'x', 'y', 'dates'.
-        df (pd.DataFrame): Reference DataFrame with columns: 'latitude', 'longitude', 'dates', and specified column.
-        column_name (str): Name of the column in df containing the values to match.
-
-    Returns:
-        pd.DataFrame: Input timeseries DataFrame with added specified column containing matched values.
-
-    Example:
-        >>> timeseries_df = pd.DataFrame({
-        ...     'transect_id': ['1', '1'],
-        ...     'x': [-120.5, -120.5],
-        ...     'y': [35.2, 35.2],
-        ...     'dates': pd.to_datetime(['2021-01-15', '2021-06-15'])
-        ... })
-        >>> reference_df = pd.DataFrame({
-        ...     'latitude': [35.19, 35.21],
-        ...     'longitude': [-120.51, -120.49],
-        ...     'dates': pd.to_datetime(['2021-01-10', '2021-06-20']),
-        ...     'tide': [1.2, 1.8]
-        ... })
-        >>> result = match_via_points_and_date(timeseries_df, reference_df, 'tide')
-        >>> print(result)
-        transect_id      x     y      dates  tide
-        0           1  -120.5  35.2 2021-01-15   1.2
-        1           1  -120.5  35.2 2021-06-15   1.8
-    """
-    # Get unique transect IDs
-    df_transect_id = np.unique(timeseries["transect_id"])
-
-    for transect_id in df_transect_id:
-        # Get transect coordinates
-        transect_x, transect_y = timeseries.loc[
-            timeseries["transect_id"] == transect_id, ["x", "y"]
-        ].values[0]
-
-        df["distance"] = df.apply(
-            lambda row: compute_distance_xy(
-                transect_x, transect_y, row["longitude"], row["latitude"]
-            ),
-            axis=1,
-        )
-
-        # Find points with minimum distance
-        min_distance = np.min(df["distance"])
-        closest_tides = df.loc[df["distance"] == min_distance]
-
-        # For each date in this transect, find the closest tide temporally
-        for date in timeseries.loc[timeseries["transect_id"] == transect_id, "dates"]:
-            closest_date = closest_tides.iloc[
-                (closest_tides["dates"] - date).abs().argsort()[:1]
-            ]
-            value = closest_date[column_name].values[0]
-
-            # Assign the value to the matching transect and date
-            timeseries.loc[
-                (timeseries["transect_id"] == transect_id)
-                & (timeseries["dates"] == date),
-                column_name,
-            ] = value
-
-    return timeseries
-
-
-def melt_df(df: pd.DataFrame, column_name: str) -> pd.DataFrame:
-    """
-    Transforms a DataFrame by melting it, converting columns into rows.
-
-    Handles two formats: dates in 'Unnamed: 0' column or dates as row index.
-    Converts the 'dates' column to datetime format and melts the DataFrame.
-
-    Args:
-        df (pd.DataFrame): Input DataFrame to be transformed.
-        column_name (str): Name for the values column in the melted DataFrame.
-
-    Returns:
-        pd.DataFrame: Melted DataFrame with 'dates', 'transect_id', and specified column.
-
-    Example:
-        >>> df = pd.DataFrame({
-        ...     'Unnamed: 0': ['2021-01-01', '2021-01-02'],
-        ...     '1': [1.2, 1.3],
-        ...     '2': [1.3, 1.4]
-        ... })
-        >>> result = melt_df(df, 'tide')
-        >>> print(result)
-            dates transect_id  tide
-        0 2021-01-01           1   1.2
-        1 2021-01-01           2   1.3
-        2 2021-01-02           1   1.3
-        3 2021-01-02           2   1.4
-    """
-    if "Unnamed: 0" in df.columns:
-        df.rename(columns={"Unnamed: 0": "dates"}, inplace=True)
-    else:
-        df = df.reset_index(names="dates")
-    df["dates"] = pd.to_datetime(df["dates"])
-    df = pd.melt(df, id_vars=["dates"], var_name="transect_id", value_name=column_name)
-    return df
-
-
-def clean_dataframe(
-    df: pd.DataFrame,
-    keep_columns: Union[List[str], None] = None,
-    convert_to_lower: bool = True,
-    remove_s: bool = True,
-) -> pd.DataFrame:
-    """
-    Cleans DataFrame by transforming column names and filtering columns.
-
-    Args:
-        df (pd.DataFrame): DataFrame to be cleaned.
-        keep_columns (Union[List[str], None], optional): Column names to retain.
-                                                   If None, keeps all columns after cleaning. Defaults to None.
-        convert_to_lower (bool, optional): Whether to convert column names to lowercase. Defaults to True.
-        remove_s (bool, optional): Whether to remove trailing 's' from column names. Defaults to True.
-
-    Returns:
-        pd.DataFrame: Cleaned DataFrame with transformed column names and optionally filtered columns.
-
-    Example:
-        >>> df = pd.DataFrame({
-        ...     'TransectIds': [1, 2, 3],
-        ...     'Slopes': [0.1, 0.2, 0.3],
-        ...     'ExtraColumn': ['a', 'b', 'c']
-        ... })
-        >>> result = clean_dataframe(df, keep_columns=['transectid', 'slope'])
-        >>> print(result.columns.tolist())
-        ['transectid', 'slope']
-    """
-    if convert_to_lower:
-        df.columns = df.columns.str.lower()
-
-    if remove_s:
-        # remove 's' from end of column names
-        df.columns = df.columns.str.replace(r"s$", "", regex=True)
-    if keep_columns is None:
-        return df
-    cols_to_drop = [col for col in df.columns if col not in keep_columns]
-    df.drop(columns=cols_to_drop, inplace=True, errors="ignore")
-    return df
-
-
-def read_content_csv(
-    file: Union[str, Path], timeseries: pd.DataFrame, column_name: str = "tide"
-) -> pd.DataFrame:
-    """
-    Reads CSV data and merges it with timeseries DataFrame using appropriate matching strategy.
-
-    Supports various CSV formats including seasonal data with monthly information
-    and time series data with different matching strategies based on available columns.
-
-    Args:
-        file (Union[str, Path]): Path to the CSV file containing data to be added to timeseries.
-        timeseries (pd.DataFrame): DataFrame containing shoreline data.
-        column_name (str, optional): Name of column to match and add. Defaults to 'tide'.
-
-    Returns:
-        pd.DataFrame: DataFrame containing merged data from the CSV file with the timeseries.
-
-    Raises:
-        ValueError: If the CSV format is not supported or doesn't match expected column structures.
-
-    Example:
-        >>> timeseries_df = pd.DataFrame({
-        ...     'dates': pd.to_datetime(['2021-01-15', '2021-06-15']),
-        ...     'transect_id': ['1', '2']
-        ... })
-        >>> # CSV file with monthly data
-        >>> result = read_content_csv('monthly_data.csv', timeseries_df, 'slope')
-        >>> print(result)
-            dates transect_id  slope
-        0 2021-01-15           1    0.1
-        1 2021-06-15           2    0.2
-    """
-    df = pd.read_csv(file)
-
-    # clean the dataframe
-    df = clean_dataframe(df, keep_columns=None, remove_s=False)
-
-    # If any of the columns contain 'month' then use the logic for seasonal data matching
-    if any(df.columns.str.contains(r"(?i)month")):
-        df = clean_dataframe(df, keep_columns=["transect_id", "month", column_name])
-        if (
-            "transect_id" in df.columns
-            and "month" in df.columns
-            and column_name in df.columns
-        ):
-            merged_csv = match_via_id_and_month(timeseries, df, column_name)
-        elif "month" in df.columns and column_name in df.columns:
-            merged_csv = match_via_month(timeseries, df, column_name)
-        else:
-            raise ValueError(
-                f'CSV format not supported. If you are using a CSV file with monthly data then the columns should be "month" and "{column_name}" or  "transect_id", "month" and "{column_name}"'
-            )
-    else:
-        # Convert dataframe to column based format so that transect_id, dates and column_name are columns
-        if "dates" not in df.columns or "Unnamed: 0" in df.columns:
-            df = melt_df(df, column_name)
-
-        df = clean_dataframe(
-            df,
-            keep_columns=["transect_id", "dates", column_name, "latitude"],
-            remove_s=False,
-        )
-
-        # Convert the dates column to ISO 8601 format and ensure it is timezone-aware
-        df = convert_col_to_ISO_8601(df, "dates")
-
-        # if it has columns 'transect_id', 'tide', 'dates'
-        if "transect_id" in df.columns:
-            timeseries[column_name] = np.nan
-            merged_csv = match_via_id_and_date(timeseries, df, column_name)
-        # if it has columns 'latitude', 'longitude', 'tide', 'dates'
-        elif "latitude" in df.columns:
-            merged_csv = match_via_points_and_date(timeseries, df, column_name)
-        # if it has columns 'dates', 'tide'
-        elif "dates" in df.columns and column_name in df.columns:
-            merged_csv = match_via_date(timeseries, df, column_name)
-        else:
-            if column_name == "tide":
-                raise ValueError(
-                    "CSV format not supported. Must be in one of the following formats as listed on the documentation: https://satelliteshorelines.github.io/CoastSeg/tide-file-format/"
-                )
-            else:
-                raise ValueError(
-                    "CSV format not supported. Must be in one of the following formats as listed on the documentation: https://satelliteshorelines.github.io/CoastSeg/slope-file-format/"
-                )
-    return merged_csv
+# Use a consistent aggregation when collapsing duplicate (date, transect_id) records.
+# Mean preserves identical tide values while averaging repeated cross-distance measurements.
+TIDE_MATRIX_AGGFUNC = "mean"
+
+# pyTMD 2's interpolate.bilinear renormalised over whichever corners of a grid
+# cell were wet (sum(w[wet]*z[wet]) / sum(w[wet])). pyTMD 3 interpolates with
+# xarray, which returns NaN if any corner is dry; those points then fall through to nearest-neighbour extrapolation instead.
+# Enable so tide predictions reproduce pyTMD 2.1.8 partial-cell interpolation at coastlines where some corners of the grid cell are dry instead of returning NaNs or using nearest-neighbour extrapolation ( these tide predictions could be over 10km away and not accurate)
+TIDE_PARTIAL_CELL_INTERP = True
+
+# Set to False to predict the ocean tide alone, e.g. to compare against a tide gauge, which is bolted to the crust and so does not sense the load tide.
+TIDE_INCLUDE_LOAD_TIDE = True
+
+# How many opened model datasets to keep. The un-clipped model is a single dataset
+# shared by every site; the legacy clipped layout needs one per region visited.
+TIDE_DATASET_CACHE_SIZE = 4
+
+_DATASET_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
+_DATASET_CACHE_LOCK = threading.RLock()
+
+
+# Raw time-series filenames, preferred spelling first then the legacy one, keyed
+# by whether the merged (long form) file is wanted.
+_RAW_TIMESERIES_FILES: Dict[bool, Tuple[str, ...]] = {
+    False: (r"^raw_transect_time_series\.csv$", r"^transect_time_series\.csv$"),
+    True: (
+        r"^raw_transect_time_series_merged\.csv$",
+        r"^transect_time_series_merged\.csv$",
+    ),
+}
 
 
 def compute_tidal_corrections(
@@ -649,9 +105,10 @@ def compute_tidal_corrections(
     model: str = "FES2022",
     tides_file: str = "",
     use_progress_bar: bool = True,
+    tide_model_layout: Optional[str] = "auto",
+    tide_model_location: str = "",
 ) -> None:
-    """
-    Computes tidal corrections for specified regions of interest (ROIs).
+    """Computes tidal corrections for specified regions of interest (ROIs).
 
     Args:
         session_name (str): Name of the session.
@@ -662,22 +119,30 @@ def compute_tidal_corrections(
         model (str, optional): Tidal model to use ("FES2022", "FES2014", or ""). Defaults to "FES2022".
         tides_file (str, optional): Path to CSV file containing tide data. Defaults to "".
         use_progress_bar (bool, optional): Whether to display progress bar. Defaults to True.
+        tide_model_layout (str, optional): 'auto' (the default, un-clipped with a
+            fallback to the clipped regions), 'unclipped', or 'clipped'. See
+            `correct_all_tides`.
+        tide_model_location (str, optional): Folder holding the tide model. Defaults
+            to "", meaning CoastSeg/tide_model.
 
     Returns:
         None
 
+    Note:
+        Observations that cannot be corrected no tide, or no usable slope are
+        written with a NaN cross_distance rather than omitted, so the corrected CSVs
+        line up row-for-row with the raw ones. See `correct_tides`.
+
     Raises:
         ValueError: If neither model nor tides_file is provided.
-        Exception: If an error occurs during tidal correction computation.
+        Exception: Whatever the correction raised. Failures are re-raised rather than
+            printed and swallowed, so a caller can tell a completed run from a failed
+            one catching everything and returning normally made a missing
+            load_tide folder, or an ROI outside the model, look like success.
     """
     logger.info(
         f"Computing tides for ROIs {roi_ids} beach_slope: {beach_slope} reference_elevation: {reference_elevation}"
     )
-
-    if model == "" and tides_file == "":
-        raise ValueError(
-            "Cannot correct tides\nEither set model='FES2014'/model='FES2022' or a provide a file containing tides"
-        )
 
     try:
         correct_all_tides(
@@ -689,12 +154,15 @@ def compute_tidal_corrections(
             use_progress_bar=use_progress_bar,
             model=model,
             tides_file=tides_file,
+            tide_model_layout=tide_model_layout,
+            tide_model_location=tide_model_location,
         )
     except Exception as e:
+        # Printed for the notebook, then re-raised so the failure is detectable.
         print(f"Tide Model Error \n {e}")
-        print(traceback.format_exc())
-    else:
-        print("\ntidal corrections completed")
+        logger.exception("tidal correction failed for ROIs %s", roi_ids)
+        raise
+    print("\ntidal corrections completed")
 
 
 def correct_all_tides(
@@ -706,9 +174,10 @@ def correct_all_tides(
     use_progress_bar: bool = True,
     model: str = "FES2022",
     tides_file: str = "",
+    tide_model_layout: Optional[str] = "auto",
+    tide_model_location: str = "",
 ) -> None:
-    """
-    Corrects tides for all specified regions of interest (ROIs).
+    """Corrects tides for all specified regions of interest (ROIs).
 
     Validates tide model existence, loads model regions, and corrects tides for each ROI.
 
@@ -720,20 +189,60 @@ def correct_all_tides(
         only_keep_points_on_transects (bool, optional): Whether to keep only points on transects. Defaults to False.
         use_progress_bar (bool, optional): Whether to display progress bar. Defaults to True.
         model (str, optional): Tide model to use. Defaults to "FES2022".
-        tides_file (str, optional): Path to tides file. Defaults to "".
+        tides_file (str, optional): Path to tides file. Defaults to "". When set, the
+            tides come from the file and the model is not consulted, so it does not
+            have to be downloaded.
+        tide_model_layout (str, optional): Which on-disk layout of the model to read.
+            'auto', the default, uses the un-clipped model and falls back to the
+            legacy clipped region0..region10 layout when that is all that is
+            installed. 'unclipped' and 'clipped' name one explicitly, and raise if it
+            is not.
+        tide_model_location (str, optional): Folder holding the tide model. Defaults
+            to "", meaning CoastSeg/tide_model. Point it at the folder that holds
+            region0..region10 when a clipped model was built somewhere else.
 
     Returns:
         None
+
+    Raises:
+        ValueError: If neither model nor tides_file is provided. Checked here rather
+            than in compute_tidal_corrections because coastseg_map calls this
+            directly, so a guard up there never ran on the notebook/UI path.
+        FileNotFoundError: If tide_model_layout names a layout that is not installed.
     """
-    model_location = ""
-    tide_regions_file = ""
-    # validate tide model exists at CoastSeg/tide_model
-    if model != "":
-        model_location = get_tide_model_location(model=model.lower())
-        # load the regions the tide model was clipped to from geojson file
-        tide_regions_file = file_utilities.load_package_resource(
-            "tide_model", "tide_regions_map.geojson"
+    if model == "" and tides_file == "":
+        raise ValueError(
+            "Cannot correct tides\nEither set model='FES2014'/model='FES2022' or a provide a file containing tides"
         )
+
+    tide_model_layout = normalize_tide_model_layout(tide_model_layout)
+
+    model_location = ""
+    layout = "auto"
+    # Validate the tide model only when no tides_file is provided.
+    # A supplied tides_file bypasses the model entirely.
+    if model != "" and tides_file == "":
+        # Located and resolved in one pass, so the folder and the layout cannot
+        # disagree, and threaded down so the probe does not repeat per ROI.
+        model_location, layout = locate_tide_model(
+            tide_model_location,
+            model=model.lower(),
+            tide_model_layout=tide_model_layout,
+        )
+        print(
+            f"Using the {model} model at {model_location} "
+            f"({'un-clipped' if layout == 'global' else 'legacy clipped regions'} layout)."
+        )
+        logger.info("tide model %s layout=%s", model_location, layout)
+
+    # One source for the whole run: the model is set up, and a tides file checked
+    # for, once rather than per ROI.
+    tide_source = _build_tide_source(
+        tides_file=tides_file,
+        model=model,
+        model_location=model_location,
+        tide_model_layout=layout,
+    )
 
     with progress_bar_context(
         use_progress_bar,
@@ -750,8 +259,9 @@ def correct_all_tides(
                 use_progress_bar=use_progress_bar,
                 tides_file=tides_file,
                 model=model,
-                tide_regions_file=tide_regions_file,
                 model_location=model_location,
+                tide_model_layout=layout,
+                tide_source=tide_source,
             )
             logger.info(f"{roi_id} was tidally corrected")
             update(f"{roi_id} was tidally corrected")
@@ -762,15 +272,26 @@ def save_transect_settings(
     reference_elevation: float,
     beach_slope: float,
     filename: str = "transects_settings.json",
+    *,
+    tide_model: Optional[str] = None,
+    tide_model_layout: Optional[str] = None,
+    tide_model_location: Optional[str] = None,
 ) -> None:
-    """
-    Updates and saves transect settings with provided reference elevation and beach slope.
+    """Updates and saves transect settings with provided reference elevation and beach slope.
 
     Args:
         session_path (str): Path to session directory containing the transect settings JSON file.
         reference_elevation (float): Reference elevation value to update.
         beach_slope (float): Beach slope value to update.
         filename (str, optional): Name of the JSON settings file. Defaults to "transects_settings.json".
+        tide_model (str, optional): Tide model the session was corrected with. Only
+            written when supplied.
+        tide_model_layout (str, optional): 'unclipped' or 'clipped', the layout the
+            tides were read from. Recorded in the user-facing spelling so it can be
+            handed straight back to compute_tidal_corrections. Only written when
+            supplied.
+        tide_model_location (str, optional): Folder the model was read from. Only
+            written when supplied.
 
     Returns:
         None
@@ -783,43 +304,18 @@ def save_transect_settings(
     )
     transects_settings["reference_elevation"] = reference_elevation
     transects_settings["beach_slope"] = beach_slope
+    for key, value in (
+        ("tide_model", tide_model),
+        ("tide_model_layout", tide_model_layout),
+        ("tide_model_location", tide_model_location),
+    ):
+        if value:
+            transects_settings[key] = value
     file_utilities.to_file(transects_settings, os.path.join(session_path, filename))
 
 
-def get_tides_from_model(
-    model_location: str,
-    transects_gdf: gpd.GeoDataFrame,
-    raw_timeseries_df: pd.DataFrame,
-    tide_regions_file: str,
-    model: str = "FES2022",
-) -> pd.DataFrame:
-    """
-    Retrieves tide predictions from a specified tide model.
-
-    Args:
-        model_location (str): Path to the tide model location.
-        transects_gdf (gpd.GeoDataFrame): GeoDataFrame containing transect data.
-        raw_timeseries_df (pd.DataFrame): DataFrame containing raw timeseries data with 'dates' column.
-        tide_regions_file (str): Path to file containing tide regions information.
-        model (str, optional): Name of tide model to use. Defaults to "FES2022".
-
-    Returns:
-        pd.DataFrame: DataFrame with columns 'dates', 'transect_id', and 'tide' containing predicted tides.
-    """
-    # maybe print an error message if the tides model location and tide_regions file are not provided
-    tide_model_config = setup_tide_model_config(model_location, model=model)
-    predicted_tides_df = predict_tides(
-        transects_gdf,
-        raw_timeseries_df,
-        tide_regions_file,
-        tide_model_config,
-    )
-    return predicted_tides_df
-
-
 def apply_tide_correction_df(timeseries: pd.DataFrame) -> pd.DataFrame:
-    """
-    Applies tide correction to timeseries DataFrame by adjusting cross-shore distances.
+    """Applies tide correction to timeseries DataFrame by adjusting cross-shore distances.
 
     Calculates tidal corrections based on tide-reference elevation difference
     normalized by beach slope, then applies to cross-shore distance measurements.
@@ -839,12 +335,14 @@ def apply_tide_correction_df(timeseries: pd.DataFrame) -> pd.DataFrame:
         KeyError: If any required columns are missing.
 
     Example:
-        >>> df = pd.DataFrame({
-        ...     'tide': [1.2, 0.8],
-        ...     'reference_elevation': [0.0, 0.0],
-        ...     'slope': [0.1, 0.1],
-        ...     'cross_distance': [50.0, 45.0]
-        ... })
+        >>> df = pd.DataFrame(
+        ...     {
+        ...         "tide": [1.2, 0.8],
+        ...         "reference_elevation": [0.0, 0.0],
+        ...         "slope": [0.1, 0.1],
+        ...         "cross_distance": [50.0, 45.0],
+        ...     }
+        ... )
         >>> result = apply_tide_correction_df(df)
         >>> print(result)
            tide  reference_elevation  slope  cross_distance
@@ -854,6 +352,11 @@ def apply_tide_correction_df(timeseries: pd.DataFrame) -> pd.DataFrame:
     Notes:
         Correction formula: correction = (tide - reference_elevation) / slope
         Adjusted distance: cross_distance + correction
+
+        The division is unguarded, as it has always been. A missing tide or slope
+        gives a NaN cross_distance; a slope of 0 gives an infinite one, because the
+        slope converts a vertical tide offset into a horizontal displacement and a
+        flat beach has no finite answer.
     """
     reference_elevation = timeseries["reference_elevation"]
     beach_slope = timeseries["slope"]
@@ -866,48 +369,66 @@ def apply_tide_correction_df(timeseries: pd.DataFrame) -> pd.DataFrame:
     return timeseries
 
 
-def save_to_transect_settings(
-    session_name: str,
-    roi_id: str,
-    reference_elevation: float,
-    beach_slope: Union[float, str],
-) -> None:
-    """
-    Saves tide correction parameters to the transect settings file for a specific ROI.
+def _pivot_matrix(
+    df: pd.DataFrame,
+    values: str,
+    aggfunc: Optional[str] = None,
+    stringify_ids: bool = True,
+) -> pd.DataFrame:
+    """Pivot a long time series into a dates x transect_id matrix.
 
-    Updates the transect settings JSON file with reference elevation and beach slope values.
-    If beach_slope is a string (file path), it's converted to NaN.
+    Duplicate observations for the same date and transect are aggregated using
+    aggfunc. If no aggregation function is provided, TIDE_MATRIX_AGGFUNC is used.
 
     Args:
-        session_name (str): Name of the session containing the ROI.
-        roi_id (str): Identifier for the region of interest.
-        reference_elevation (float): Reference elevation value to save.
-        beach_slope (Union[float, str]): Beach slope value or file path. If string, converted to NaN.
+        df (pd.DataFrame): Long-form frame with 'dates', 'transect_id' and values.
+        values (str): Column containing the values to populate the matrix.
+        aggfunc (str, optional): Aggregation function used for duplicate date-transect pairs.
+            Defaults to TIDE_MATRIX_AGGFUNC.
+        stringify_ids (bool, optional): Whether to convert transect IDs to strings before using
+            them as column labels. Defaults to True.
 
     Returns:
-        None
+        pd.DataFrame: A DataFrame with "dates" as the first column and one column per
+        transect ID.
 
-    Example:
-        >>> save_to_transect_settings("my_session", "roi_001", 0.5, 0.1)
-        # Saves reference_elevation=0.5 and beach_slope=0.1 to the settings file
+    Note:
+        A matrix cannot represent a transect that intersected the shoreline more
+        than once on the same date, so those rows are collapsed and a warning is
+        logged. The long-form *_merged.csv keeps every observation.
 
-        >>> save_to_transect_settings("my_session", "roi_001", 0.5, "slopes.csv")
-        # Saves reference_elevation=0.5 and beach_slope=NaN (since beach_slope is a file path)
+        dropna=False preserves transects whose values are entirely missing as
+        all-NaN columns.
     """
-    # optionally save to session location in ROI save the predicted tides to csv
-    session_path = file_utilities.get_session_contents_location(session_name, roi_id)
+    matrix = df.copy()
+    if stringify_ids:
+        matrix["transect_id"] = matrix["transect_id"].astype(str)
 
-    if isinstance(beach_slope, str):
-        beach_slope = np.nan
-    # read in transect_settings.json from session_path save the beach slope and reference shoreline
-    save_transect_settings(
-        session_path, reference_elevation, beach_slope, "transects_settings.json"
+    duplicated = int(matrix.duplicated(subset=["dates", "transect_id"]).sum())
+    if duplicated:
+        logger.warning(
+            "%d observation(s) share a (date, transect_id) and were combined with "
+            "'%s' to fit the %s matrix; the merged CSV keeps them all",
+            duplicated,
+            aggfunc or TIDE_MATRIX_AGGFUNC,
+            values,
+        )
+
+    matrix = matrix.pivot_table(
+        index="dates",
+        columns="transect_id",
+        values=values,
+        aggfunc=aggfunc or TIDE_MATRIX_AGGFUNC,
+        dropna=False,
     )
+    # Reset index if you want 'dates' back as a column
+    return matrix.reset_index()
 
 
-def save_predicted_tides_to_csv(session_path, predicted_tides_df):
-    """
-    Saves the predicted tides DataFrame to a CSV file after pivoting it.
+def save_predicted_tides_to_csv(
+    session_path: str, predicted_tides_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Saves the predicted tides DataFrame to a CSV file after pivoting it.
 
     Args:
         session_path (str): The directory path where the CSV file will be saved.
@@ -916,44 +437,354 @@ def save_predicted_tides_to_csv(session_path, predicted_tides_df):
     Returns:
         pd.DataFrame: The pivoted DataFrame with 'dates' as the index and 'transect_id' as columns.
     """
-    pivot_df = predicted_tides_df.pivot_table(
-        index="dates", columns="transect_id", values="tide", aggfunc="first"
-    )
-    # Reset index if you want 'dates' back as a column
-    pivot_df.reset_index(inplace=True)
+    # pivot to dates x transect_ids
+    pivot_df = _pivot_matrix(predicted_tides_df, "tide", stringify_ids=False)
     pivot_df.to_csv(os.path.join(session_path, "predicted_tides.csv"), index=False)
     return pivot_df
 
 
-def get_matrix_timeseries(timeseries: pd.DataFrame):
-    """
-    Returns a timeseries DataFrame as a matrix to a CSV file.
+def get_matrix_timeseries(timeseries: pd.DataFrame) -> pd.DataFrame:
+    """Returns a timeseries DataFrame as a dates x transect_id matrix.
 
-    This function takes a timeseries DataFrame, pivots it to create a matrix
-    where the rows are dates and the columns are transect IDs, and then saves
-    this matrix to a CSV file.
+    This function takes a timeseries DataFrame and pivots it to create a matrix
+    where the rows are dates and the columns are transect IDs.
 
-    Parameters:
-    timeseries (pd.DataFrame): The input DataFrame containing the timeseries data.
-                                It must have columns 'dates', 'transect_id', and 'cross_distance'.
+    Args:
+        timeseries (pd.DataFrame): The input DataFrame containing the timeseries data.
+            It must have columns 'dates', 'transect_id', and 'cross_distance'.
 
     Returns:
-    pd.DataFrame: The pivoted DataFrame (matrix) with 'dates' as the index and
-                    'transect_id' as the columns.
-                    Note : transect id is converted to string
+        pd.DataFrame: The pivoted DataFrame (matrix) with 'dates' as a column and
+            'transect_id' as the remaining columns.
+
+    Note:
+        The transect ids are converted to strings.
     """
-    matrix_timeseries = timeseries.copy()
-    # convert the transect ids to string
-    matrix_timeseries["transect_id"] = matrix_timeseries["transect_id"].astype(str)
-    matrix_timeseries.set_index("dates", inplace=True)
-    matrix_timeseries = matrix_timeseries.pivot_table(
-        index="dates",
-        columns="transect_id",
-        values="cross_distance",
+    return _pivot_matrix(timeseries, "cross_distance")
+
+
+def _warn_about_uncorrectable_observations(
+    timeseries: pd.DataFrame, roi_id: str
+) -> None:
+    """Report the observations that will come through the correction as NaN.
+
+    An observation is considered uncorrectable when either its tide or slope
+    value is missing. These observations are retained in the output with a NaN
+    cross_distance rather than being dropped.
+
+    If all observations for a transect are uncorrectable, the transect is also
+    reported because its output column will contain only NaN values.
+
+    Args:
+        timeseries: DataFrame containing "transect_id", "tide", and "slope"
+            columns.
+        roi_id: ROI identifier included in the warning message.
+
+    Returns:
+        None
+    """
+    unusable = timeseries["tide"].isna() | timeseries["slope"].isna()
+    if not unusable.any():
+        return
+
+    by_transect = unusable.groupby(timeseries["transect_id"].astype(str)).all()
+    entirely_lost = sorted(by_transect[by_transect].index)
+
+    logger.warning(
+        "%s: %d of %d observation(s) have no usable tide or slope and are written "
+        "with a NaN cross_distance rather than dropped%s",
+        roi_id,
+        int(unusable.sum()),
+        len(timeseries),
+        (
+            f"; {len(entirely_lost)} transect(s) have no usable observation at all "
+            f"and come out as an empty column: {entirely_lost[:20]}"
+            if entirely_lost
+            else ""
+        ),
     )
-    # Reset index if you want 'dates' back as a column
-    matrix_timeseries.reset_index(inplace=True)
-    return matrix_timeseries
+
+
+class TideSource(NamedTuple):
+    """A source of tide values for a single ROI.
+
+    Tides are either read from a file provided by the user or predicted from a
+    tide model. Both are created as a TideSource, so correct_tides does not need
+    to know which one it was given. A new kind of source is added by writing
+    another builder function such as tides_from_file or tides_from_model.
+
+    Attributes:
+        describe (str): Text displayed on the progress bar, for example
+            'Predicting tides'.
+        resolve (Callable): Called with (timeseries, transects_gdf). Returns the
+            time series with a 'tide' column, containing NaN where no tide value
+            was found.
+    """
+
+    describe: str
+    resolve: Callable[[pd.DataFrame, gpd.GeoDataFrame], pd.DataFrame]
+
+
+def tides_from_file(tides_file: str) -> TideSource:
+    """Creates a TideSource that reads tide values from a CSV file.
+
+    The tide model is not used, so it does not need to be downloaded. The
+    supported CSV formats are handled by coastseg.tide_inputs.read_content_csv.
+
+    Args:
+        tides_file (str): Path to the CSV file containing tides.
+
+    Returns:
+        TideSource: A source that reads tides from the specified file.
+
+    Raises:
+        FileNotFoundError: If the specified file does not exist.
+    """
+    if not os.path.exists(tides_file):
+        raise FileNotFoundError(f"Tide CSV file not found at {tides_file}")
+
+    def resolve(
+        timeseries: pd.DataFrame, transects_gdf: gpd.GeoDataFrame
+    ) -> pd.DataFrame:
+        return read_content_csv(tides_file, timeseries, column_name="tide")
+
+    return TideSource("Reading tides from file", resolve)
+
+
+def tides_from_model(
+    model: str = "FES2022",
+    model_location: str = "",
+    tide_model_layout: Optional[str] = "auto",
+    tide_regions_file: str = "",
+) -> TideSource:
+    """Creates a TideSource that predicts tide values from a tide model.
+
+    Tides are predicted at the seaward point of each transect.
+
+    Args:
+        model (str, optional): Tide model to use. Defaults to "FES2022".
+        model_location (str, optional): Path to the tide model. Defaults to "".
+        tide_model_layout (str, optional): Which layout to read: 'auto' (the
+            default), 'unclipped' or 'clipped'. This is normally the layout that
+            correct_all_tides already resolved, so the model directory is not
+            searched again for each ROI.
+        tide_regions_file (str, optional): Path to the file containing the regions
+            the tide model was clipped to. Only used by the clipped layout.
+            Defaults to the file included with CoastSeg.
+
+    Returns:
+        TideSource: A source that predicts tides from the specified model.
+    """
+    config = setup_tide_model_config(
+        model_location, model=model, tide_model_layout=tide_model_layout
+    )
+    regions_file = tide_regions_file
+    if not regions_file and config["LAYOUT"] == "regions":
+        regions_file = file_utilities.load_package_resource(
+            "tide_model", "tide_regions_map.geojson"
+        )
+
+    def resolve(
+        timeseries: pd.DataFrame, transects_gdf: gpd.GeoDataFrame
+    ) -> pd.DataFrame:
+        tides = predict_tides(
+            transects_gdf, _observation_dates(timeseries), regions_file, config
+        )
+
+        # Match transect ID types before merging.
+        tides["transect_id"] = tides["transect_id"].astype(str)
+        observations = timeseries.assign(
+            transect_id=timeseries["transect_id"].astype(str)
+        )
+
+        # the tide's own x/y is the transect's seaward point, not the shoreline
+        # intersection the time series carries under the same names
+        tides = tides.drop(columns=["x", "y"], errors="ignore")
+
+        # Left-merge onto the time series so every observation survives. Any transect
+        # without tides has NaN values
+        return observations.merge(tides, on=["transect_id", "dates"], how="left")
+
+    return TideSource("Predicting tides", resolve)
+
+
+def _observation_dates(timeseries: pd.DataFrame) -> pd.DataFrame:
+    """Returns the transect ID and date pairs that require a tide value.
+
+    Each pair appears only once, otherwise the predicted tides would duplicate
+    observations when they are merged back onto the time series. Observations
+    without a cross_distance are excluded because there is nothing to correct.
+
+    Args:
+        timeseries (pd.DataFrame): The raw merged time series containing
+            'transect_id', 'dates' and 'cross_distance' columns.
+
+    Returns:
+        pd.DataFrame: One row per transect ID and date that requires a tide.
+    """
+    wanted = timeseries[timeseries["cross_distance"].notna()]
+    return wanted[["transect_id", "dates"]].drop_duplicates()
+
+
+def _build_tide_source(
+    tides_file: str = "",
+    model: str = "FES2022",
+    model_location: str = "",
+    tide_regions_file: str = "",
+    tide_model_layout: Optional[str] = "auto",
+) -> TideSource:
+    """Creates a TideSource from the provided tide settings.
+
+    A tides_file takes priority over the tide model.
+
+    Args:
+        tides_file (str, optional): Path to a CSV file containing tides, or "" to
+            use the tide model instead. Defaults to "".
+        model (str, optional): Tide model to use. Defaults to "FES2022".
+        model_location (str, optional): Path to the tide model. Defaults to "".
+        tide_regions_file (str, optional): Path to the file containing the regions
+            the tide model was clipped to. Only used by the clipped layout.
+        tide_model_layout (str, optional): Which layout to read: 'auto' (the
+            default), 'unclipped' or 'clipped'.
+
+    Returns:
+        TideSource: The source to read the ROI's tide values from.
+    """
+    if tides_file:
+        return tides_from_file(tides_file)
+    return tides_from_model(
+        model=model,
+        model_location=model_location,
+        tide_model_layout=tide_model_layout,
+        tide_regions_file=tide_regions_file,
+    )
+
+
+def _resolve_tides(
+    timeseries: pd.DataFrame,
+    transects_gdf: gpd.GeoDataFrame,
+    *,
+    roi_id: str,
+    tides_file: str = "",
+    model: str = "FES2022",
+    model_location: str = "",
+    tide_regions_file: str = "",
+    tide_model_layout: Optional[str] = "auto",
+    tide_source: Optional[TideSource] = None,
+    update: Callable[[str], None] = lambda message: None,
+) -> pd.DataFrame:
+    """Add tide values to a transect time series.
+
+    Where the tides come from is the TideSource. Pass one, or pass the keyword
+    arguments below and one is built for you, which is what every caller did
+    before the seam existed.
+
+    Args:
+        timeseries (pd.DataFrame): The raw merged time series, long form.
+        transects_gdf (gpd.GeoDataFrame): Transects for this ROI, used to place the
+            seaward point each tide is predicted at. Unused when reading a file.
+        roi_id (str): ROI identifier, for the progress messages.
+        tides_file (str): Path to a tide CSV. When set, the model is not used.
+        model (str): Tide model name, e.g. 'FES2022'.
+        model_location (str): Folder holding the tide model.
+        tide_regions_file (str): Path to LEGACY tide region map file, only read on the clipped layout.
+        tide_model_layout (str): 'auto', 'unclipped' or 'clipped'. Normally the layout
+            correct_all_tides already resolved, so it is not resolved again per ROI.
+        tide_source (TideSource, optional): Where to get the tides. Built from the
+            arguments above when not given, and used instead of them when given.
+        update (Callable[[str], None]): Progress reporter.
+
+    Returns:
+        pd.DataFrame: The time series with a "tide" column. Observations without a matching
+        or predicted tide value contain NaN.
+
+    Raises:
+        FileNotFoundError: If tides_file is provided but does not exist.
+    """
+    if tide_source is None:
+        tide_source = _build_tide_source(
+            tides_file=tides_file,
+            model=model,
+            model_location=model_location,
+            tide_regions_file=tide_regions_file,
+            tide_model_layout=tide_model_layout,
+        )
+
+    update(f"{tide_source.describe} : {roi_id}")
+    return tide_source.resolve(timeseries, transects_gdf)
+
+
+def _attach_slopes(
+    timeseries: pd.DataFrame, beach_slope: Union[float, str]
+) -> pd.DataFrame:
+    """Attach a 'slope' column, either a single value or one matched from a CSV.
+
+    Args:
+        timeseries (pd.DataFrame): The time series to add the column to.
+        beach_slope (float | str): A slope for every observation, or the path to a
+            slope CSV in any of the documented layouts.
+
+    Returns:
+        pd.DataFrame: The time series with a 'slope' column.
+    """
+    if isinstance(beach_slope, str):
+        timeseries = timeseries.assign(slope=np.nan)
+        return read_content_csv(beach_slope, timeseries, column_name="slope")
+    return timeseries.assign(slope=beach_slope)
+
+
+def _save_corrected_outputs(
+    corrected: pd.DataFrame,
+    transects_gdf: gpd.GeoDataFrame,
+    session_path: str,
+    only_keep_points_on_transects: bool = False,
+) -> pd.DataFrame:
+    """Save tide-corrected time-series outputs.
+
+    Saves the predicted tides, corrected point and vector GeoJSON files,
+    corrected matrix CSV, and corrected long-form CSV.
+
+    Writes, in order:
+
+    1 predicted_tides.csv : dates x transect_id matrix of the tides used
+    2 tidally_corrected_transect_time_series_points.geojson and _vectors.geojson
+    3 tidally_corrected_transect_time_series.csv : the corrected matrix
+    4 tidally_corrected_transect_time_series_merged.csv : the corrected long form
+
+    Args:
+        corrected (pd.DataFrame): The corrected long-form time series.
+        transects_gdf (gpd.GeoDataFrame): Transects for this ROI, in any CRS.
+        session_path (str): Directory where output files are saved.
+        only_keep_points_on_transects (bool): Drop shoreline points that do not fall
+            on their transect, recording them in dropped_points_time_series.csv.
+
+    Returns:
+        pd.DataFrame: The corrected long-form time series, with shore_x/shore_y added.
+    """
+    # Save the tide values used for correction.
+    save_predicted_tides_to_csv(session_path, corrected)
+
+    corrected_matrix = get_matrix_timeseries(corrected)
+
+    merged_df, matrix_df = common.add_lat_lon_to_timeseries(
+        corrected,
+        transects_gdf.to_crs("epsg:4326"),
+        corrected_matrix,
+        session_path,
+        only_keep_points_on_transects,
+        "tidally_corrected",
+    )
+
+    matrix_df = matrix_df[common.sort_matrix_columns(matrix_df.columns)]
+    matrix_df.to_csv(
+        os.path.join(session_path, "tidally_corrected_transect_time_series.csv"),
+        index=False,
+    )
+    merged_df.to_csv(
+        os.path.join(session_path, "tidally_corrected_transect_time_series_merged.csv"),
+        index=False,
+    )
+    return merged_df
 
 
 def correct_tides(
@@ -967,181 +798,124 @@ def correct_tides(
     model: str = "FES2022",
     tide_regions_file: str = "",
     model_location: str = "",
+    tide_model_layout: Optional[str] = "auto",
+    tide_source: Optional[TideSource] = None,
 ) -> pd.DataFrame:
-    """
-    Corrects the timeseries using the tide data provided
+    """Apply tide correction to a transect time series.
 
-    Parameters:
-    -----------
-    roi_id : str
-        Identifier for the Region Of Interest.
-    session_name : str
-        Name of the session.
-    reference_elevation : float
-        Reference elevation value.
-    beach_slope : float
-        Slope of the beach.
-    model_location : str
-        Path to the tide model.
-    tide_regions_file : str
-        Path to the file containing the regions the tide model was clipped to.
-    only_keep_points_on_transects : bool
-    If True, keeps only the shoreline points that are on the transects. Default is True.
-        - This will generated a file called "dropped_points_time_series.csv" that contains the points that were filtered out. If keep_points_on_transects is True.
-        - Any shoreline points that were not on the transects will be removed from "raw_transect_time_series.csv" by setting those values to NaN.v If keep_points_on_transects is True.
-        - The "raw_transect_time_series_merged.csv" will not contain any points that were not on the transects. If keep_points_on_transects is True.
+    Tide values are read from a CSV file when tides_file is provided;
+    otherwise, they are predicted from the selected tide model. Beach slopes
+    may be provided as a constant value or loaded from a file.
 
-    use_progress_bar : bool, optional
-        If True, a tqdm progress bar will be displayed. Default is True.
+    Observations without a usable tide or slope are retained with NaN
+    cross_distance values rather than being dropped.
+
+    Args:
+        roi_id (str): Identifier for the Region Of Interest.
+        session_name (str): Name of the session.
+        reference_elevation (float): Reference elevation value.
+        beach_slope (Union[float, str]): Slope of the beach, or the path to a file containing slopes.
+        only_keep_points_on_transects (bool, optional): If True, keeps only the shoreline
+            points that are on the transects. Defaults to False.
+            - This will generate a file called "dropped_points_time_series.csv" that contains the points that were filtered out.
+            - Any shoreline points that were not on the transects will be removed from "raw_transect_time_series.csv" by setting those values to NaN.
+            - The "raw_transect_time_series_merged.csv" will not contain any points that were not on the transects.
+        use_progress_bar (bool, optional): If True, a tqdm progress bar will be displayed. Defaults to True.
+        tides_file (str, optional): Path to a CSV file containing tides. Defaults to "".
+        model (str, optional): Tide model to use. Defaults to "FES2022".
+        tide_regions_file (str, optional): Path to the file containing the regions the
+            tide model was clipped to. Defaults to "". Ignored when tide_source is
+            given; see Note.
+        model_location (str, optional): Path to the tide model. Defaults to "".
+        tide_model_layout (str, optional): Which layout to read: 'auto' (the default),
+            'unclipped' or 'clipped'.
+        tide_source (TideSource, optional): Where to get this ROI's tides, taking
+            precedence over the arguments above (see Note). Built from them when not
+            given; correct_all_tides builds one for the whole run so the model is set
+            up once rather than per ROI.
 
     Returns:
-    --------
-    pd.DataFrame
-        A DataFrame containing tide-corrected time series data for the specified ROI.
-
-    Notes:
-    ------
-    - This function will set up the tide model, get the time series for the ROI, and predict tides.
-    - Tidally corrected time series data will be saved to the session location for the ROI.
+        pd.DataFrame: Tide-corrected long-form time-series data for the specified ROI.
+        Returns an empty DataFrame when no time-series data is available.
     """
     with progress_bar_context(use_progress_bar, total=6) as update:
         update(f"Getting time series for ROI : {roi_id}")
-        # load the time series
+        # read the merged csv of the raw timeseries (aka not tidally corrected)
         try:
-            # read the merged csv of the raw timeseries (aka not tidally corrected)
             timeseries = get_timeseries(roi_id, session_name, is_merged=True)
         except FileNotFoundError:
-            print(
-                f"No time series data found for {roi_id} cannot perform tide correction"
-            )
-            logger.warning(
-                f"No time series data found for {roi_id} cannot perform tide correction"
-            )
-            update(
-                f"No time series data found for {roi_id} cannot perform tide correction"
-            )
-            return pd.DataFrame()
-        # this means that only the date column exists but no transects intersected any of the shorelines for any of these dates
+            timeseries = pd.DataFrame()
+
+        # Skip correction when no shoreline observations are available.
         if timeseries.empty:
-            print(
+            message = (
                 f"No time series data found for {roi_id} cannot perform tide correction"
             )
-            logger.warning(
-                f"No time series data found for {roi_id} cannot perform tide correction"
-            )
-            update(
-                f"No time series data found for {roi_id} cannot perform tide correction"
-            )
+            print(message)
+            logger.warning(message)
+            update(message)
             return pd.DataFrame()
 
         session_path = file_utilities.get_session_contents_location(
             session_name, roi_id
         )
-        save_to_transect_settings(
-            session_name, roi_id, reference_elevation, beach_slope
-        )
+        # File-based slopes have no single value to save.
+        saved_slope = np.nan if isinstance(beach_slope, str) else beach_slope
+        save_transect_settings(session_path, reference_elevation, saved_slope)
         # read the transects from the config_gdf.geojson file
         update(f"Getting transects for ROI : {roi_id}")
         transects_gdf = get_transects(roi_id, session_name)
 
-        # timeseries load from file
-        if tides_file != "":
-            if not os.path.exists(tides_file):
-                raise FileNotFoundError(f"Tide CSV file not found at {tides_file}")
-            update(f"Reading tides from file : {roi_id}")
-            timeseries = read_content_csv(tides_file, timeseries, column_name="tide")
-        else:
-            # predict tides
-            update(f"Predicting tides : {roi_id}")
-            timeseries_matrix = get_matrix_timeseries(timeseries)
-            tides = get_tides_from_model(
-                model_location=model_location,
-                transects_gdf=transects_gdf,
-                raw_timeseries_df=timeseries_matrix,
-                tide_regions_file=tide_regions_file,
-                model=model,
+        timeseries = _resolve_tides(
+            timeseries,
+            transects_gdf,
+            roi_id=roi_id,
+            tides_file=tides_file,
+            model=model,
+            model_location=model_location,
+            tide_regions_file=tide_regions_file,
+            tide_model_layout=tide_model_layout,
+            tide_source=tide_source,
+            update=update,
+        )
+
+        # Now that the tides resolved, record which model they came from.
+        if model and not tides_file:
+            save_transect_settings(
+                session_path,
+                reference_elevation,
+                saved_slope,
+                tide_model=model,
+                tide_model_layout=_LAYOUT_REPORTED.get(
+                    normalize_tide_model_layout(tide_model_layout)
+                ),
+                tide_model_location=portable_model_location(model_location),
             )
 
-            # convert tides's transect id and timeseries transect id to str
-            tides["transect_id"] = tides["transect_id"].astype(str)
-            timeseries["transect_id"] = timeseries["transect_id"].astype(str)
-
-            # convert tides and timeseries columns to str
-            # if the tides dataframe has columns x and y drop them
-            tides.drop(columns=["x", "y"], inplace=True, errors="ignore")
-
-            timeseries = common.merge_dataframes(tides, timeseries)
-
-        # load the slopes if they are passed in
-        if isinstance(beach_slope, str):
-            timeseries["slope"] = np.nan
-            timeseries = read_content_csv(beach_slope, timeseries, column_name="slope")
-        else:
-            timeseries["slope"] = beach_slope
-
-        # For any tides missing just skip tide correction and set the result as NaN
-        # drop rows with NaN values in 'tide' column
-        timeseries.dropna(subset=["tide"], inplace=True)
+        timeseries = _attach_slopes(timeseries, beach_slope)
+        _warn_about_uncorrectable_observations(timeseries, roi_id)
         timeseries["reference_elevation"] = reference_elevation
+
         update(f"Tidally correcting time series for ROI : {roi_id}")
-        # Apply tide correction to the time series using the tide predictions
-        # assumes columns are tide, reference_elevation and slope
-        tide_corrected_timeseries_df = apply_tide_correction_df(timeseries)
-
-        # Saves the predicted tides as a csv file called 'predicted_tides.csv' in the session location
-        # predicted tides is a matrix of dates and transect ids with the tide values
-        tides_matrix = save_predicted_tides_to_csv(
-            session_path, tide_corrected_timeseries_df
-        )
-        tides_matrix.to_csv(
-            os.path.join(session_path, "predicted_tides.csv"), index=False
-        )
-
-        # make the matrix of dates x transect_ids
-        tide_corrected_matrix = get_matrix_timeseries(tide_corrected_timeseries_df)
-
-        # tidally corrected timeseries in format dates, transect_id, x, y, shore_x, shore_y, tide, reference_elevation, slope, correction, cross_distance
+        # assumes timeseries contains the columns tide, reference_elevation and slope
+        corrected = apply_tide_correction_df(timeseries)
 
         update(f"Saving tidally corrected time series for ROI : {roi_id}")
-        tide_corrected_timeseries_merged_df, timeseries_df = (
-            common.add_lat_lon_to_timeseries(
-                tide_corrected_timeseries_df,
-                transects_gdf.to_crs("epsg:4326"),
-                tide_corrected_matrix,
-                session_path,
-                only_keep_points_on_transects,
-                "tidally_corrected",
-            )
-        )
-
-        # Save the Tidally corrected time series
-        sorted_columns = [timeseries_df.columns[0]] + sorted(
-            timeseries_df.columns[1:],
-            key=lambda x: int("".join(filter(str.isdigit, x))),
-        )
-        timeseries_df = timeseries_df[sorted_columns]
-        timeseries_df.to_csv(
-            os.path.join(session_path, "tidally_corrected_transect_time_series.csv"),
-            index=False,
-        )
-
-        # optionally save to session location in ROI the tide_corrected_timeseries_df to csv
-        tide_corrected_timeseries_merged_df.to_csv(
-            os.path.join(
-                session_path, "tidally_corrected_transect_time_series_merged.csv"
-            ),
-            index=False,
+        merged_df = _save_corrected_outputs(
+            corrected,
+            transects_gdf,
+            session_path,
+            only_keep_points_on_transects,
         )
 
         update(f"{roi_id} was tidally corrected")
-    return tide_corrected_timeseries_merged_df
+    return merged_df
 
 
 def get_timeseries(
     ROI_ID: str, session_name: str, is_merged: bool = False
 ) -> pd.DataFrame:
-    """
-    Retrieves the raw timeseries DataFrame for a given ROI ID and session name.
+    """Retrieves the raw timeseries DataFrame for a given ROI ID and session name.
 
     Args:
         ROI_ID (str): ID of the region of interest.
@@ -1154,17 +928,21 @@ def get_timeseries(
     Raises:
         FileNotFoundError: If the timeseries file is not found for the specified ROI and session.
     """
-    # get the contents of the session directory containing the data for the ROI id
-    time_series_location = get_timeseries_path(
-        ROI_ID, session_name, TimeSeriesTypes.RAW, is_merged
+    session_path = file_utilities.get_session_contents_location(session_name, ROI_ID)
+    for pattern in _RAW_TIMESERIES_FILES[bool(is_merged)]:
+        try:
+            path = file_utilities.find_file_by_regex(session_path, pattern)
+        except FileNotFoundError:
+            continue
+        return timeseries_read_csv(path, is_merged)
+    raise FileNotFoundError(
+        f"No raw time series for {ROI_ID} in {session_path}. Looked for "
+        f"{list(_RAW_TIMESERIES_FILES[bool(is_merged)])}."
     )
-    timeseries_df = timeseries_read_csv(time_series_location, is_merged)
-    return timeseries_df
 
 
 def get_transects(roi_id: str, session_name: str) -> gpd.GeoDataFrame:
-    """
-    Retrieves the transects GeoDataFrame for a specific ROI and session.
+    """Retrieves the transects GeoDataFrame for a specific ROI and session.
 
     Locates and reads the transects configuration file (config_gdf.geojson)
     for the specified region of interest, filtering for transect features only.
@@ -1197,16 +975,13 @@ def get_transects(roi_id: str, session_name: str) -> gpd.GeoDataFrame:
     )
     # Load the GeoJSON file containing transect data
     transects_gdf = read_and_filter_geojson(config_path, feature_type="transect")
-    # get only the transects that intersect with this ROI
-    # this may not be necessary because these should have NaN values
     return transects_gdf
 
 
 def setup_tide_model_config(
-    model_path: str, model: str
+    model_path: str, model: str, tide_model_layout: Optional[str] = "auto"
 ) -> Dict[str, Union[str, list, bool, float, int]]:
-    """
-    Set up configuration dictionary for tide model computations.
+    """Set up configuration dictionary for tide model computations.
 
     This function creates a standardized configuration dictionary containing
     all the parameters needed for tide model predictions using pyTMD.
@@ -1214,49 +989,453 @@ def setup_tide_model_config(
     Args:
         model_path (str): Path to the directory containing the tide model data files.
         model (str): Name of the tide model in uppercase (e.g., 'FES2022', 'FES2014').
+        tide_model_layout (str, optional): Which layout to read: 'auto' (the default,
+            resolved from disk), 'unclipped' or 'clipped'.
 
     Returns:
         Dict[str, Union[str, list, bool, float, int]]: Configuration dictionary containing:
             - DIRECTORY: Path to model data
             - MODEL: Model name in uppercase
-            - ATLAS_FORMAT: File format ('netcdf')
             - EXTRAPOLATE: Whether to extrapolate beyond model domain
             - METHOD: Interpolation method ('bilinear')
-            - TYPE: Model type ('drift')
-            - TIME: Time format ('datetime')
             - EPSG: Coordinate system (4326)
-            - FILL_VALUE: Value for missing data (NaN)
             - CUTOFF: Extrapolation cutoff distance
-            - REGION_DIRECTORY: Path to regional model files
+            - REGION_DIRECTORY: LEGACY, path prefix for the clipped region folders
+            - LAYOUT: 'global' for the un-clipped model (the default), or 'regions'
+              for the legacy clipped layout, which may be removed in a future
+              version of CoastSeg
 
     Example:
-        >>> config = setup_tide_model_config('/path/to/model', 'FES2022')
-        >>> print(config['MODEL'])
+        >>> config = setup_tide_model_config("/path/to/model", "FES2022")
+        >>> print(config["MODEL"])
         'FES2022'
-        >>> print(config['EXTRAPOLATE'])
+        >>> print(config["EXTRAPOLATE"])
         True
     """
     return {
         "DIRECTORY": model_path,
-        "DELTA_TIME": [0],
-        "GZIP": False,
         "MODEL": model.upper(),  # name of the model in uppercase eg FES2022
-        "ATLAS_FORMAT": "netcdf",
         "EXTRAPOLATE": True,
-        "METHOD": "spline",
-        "TYPE": "drift",
-        "TIME": "datetime",
+        "METHOD": "bilinear",  # pyTMD 3 maps 'bilinear' onto its 'linear' interpolation
         "EPSG": 4326,
-        "FILL_VALUE": np.nan,
         "CUTOFF": 10,
-        "METHOD": "bilinear",
+        # LEGACY: only consumed when LAYOUT == 'regions'
         "REGION_DIRECTORY": os.path.join(model_path, "region"),
+        "LAYOUT": resolve_model_layout(
+            model_path, model, tide_model_layout=tide_model_layout
+        ),
     }
 
 
-def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
+def required_tide_groups() -> Tuple[str, ...]:
+    """The constituent groups a prediction will actually open.
+
+    TIDE_INCLUDE_LOAD_TIDE decides whether load_tide is needed, so validation
+    and prediction read the requirement from the same place.
+
+    Returns:
+        Tuple[str, ...]: 'ocean_tide', plus 'load_tide' when the load tide is on.
     """
-    Validates the existence of a tide model at the specified location and returns the absolute path to the folder.
+    return ("ocean_tide", "load_tide") if TIDE_INCLUDE_LOAD_TIDE else ("ocean_tide",)
+
+
+def _load_tide_missing_error(cause: Exception) -> FileNotFoundError:
+    """The actionable error for a model that has no load_tide folder.
+
+    Args:
+        cause (Exception): The underlying lookup failure, quoted in the message.
+
+    Returns:
+        FileNotFoundError: Ready to raise.
+    """
+    return FileNotFoundError(
+        f"{cause}\n\nThe load tide is required to match CoastSat's tide levels, "
+        "which report the geocentric tide (ocean + load). Download the "
+        "load_tide folder alongside ocean_tide, or set "
+        "coastseg.tide_correction.TIDE_INCLUDE_LOAD_TIDE = False to predict "
+        "the ocean tide only."
+    )
+
+
+def _check_group_is_complete(
+    directory: Union[str, pathlib.Path], model_key: str, group: str, definition: dict
+) -> None:
+    """Refuse a constituent group that is short of the files the model declares.
+
+    A short group does not fail loudly on its own. pyTMD reads whatever is there and
+    predicts from it, so an interrupted download produces a tide quietly wrong by
+    centimeters or, once enough majors have landed for minor-constituent inference
+    to start reaching for one that has not, a bare KeyError: 'q1' from inside
+    pyTMD that says nothing about the real problem.
+
+    Args:
+        directory (str | pathlib.Path): The tide model folder, for the message.
+        model_key (str): Canonical model name, a key of _MODEL_LAYOUTS.
+        group (str): The constituent group being checked.
+        definition (dict): The definition built for that group.
+
+    Raises:
+        FileNotFoundError: If the group declares fewer files than the model should
+            have. A surplus is left alone `build_model_definition` already
+            warns about it, and it is a different problem.
+    """
+    expected = int(_MODEL_LAYOUTS[model_key]["n_constituents"])
+    found = len(definition["z"]["model_file"])
+    if found < expected:
+        raise FileNotFoundError(
+            f"The {model_key} '{group}' group under {directory} holds {found} of the "
+            f"{expected} constituent files, so the tide model is incomplete. "
+            "Re-run the download to fetch what is missing the files that "
+            "already finished are skipped."
+        )
+
+
+def require_tide_groups(
+    directory: Union[str, pathlib.Path], model: str
+) -> Tuple[str, ...]:
+    """Fail now, with guidance, if a group the prediction needs is missing from disk.
+
+    Both halves of "missing" are checked: a group with no folder at all, and a group
+    whose folder is there but short of constituents.
+
+    Args:
+        directory (str | pathlib.Path): The tide model folder.
+        model (str): Tide model name in any accepted spelling.
+
+    Returns:
+        Tuple[str, ...]: The groups that were checked and resolved.
+
+    Raises:
+        FileNotFoundError: If a required group's constituent files are missing. The
+            load_tide case carries the same guidance `model_tides` gives, so
+            the advice does not depend on where the gap was noticed.
+    """
+    groups = required_tide_groups()
+    key = normalize_model_name(model)
+    for group in groups:
+        try:
+            definition = build_model_definition(directory, model, group=group)
+        except (FileNotFoundError, ValueError) as exc:
+            if group == "load_tide":
+                raise _load_tide_missing_error(exc) from exc
+            raise
+        _check_group_is_complete(directory, key, group, definition)
+    return groups
+
+
+# User-facing spellings of the layout choice, mapped onto the internal names.
+_LAYOUT_ALIASES = {
+    "": "auto",
+    "auto": "auto",
+    "unclipped": "global",
+    "global": "global",
+    "clipped": "regions",
+    "regions": "regions",
+}
+
+# The spelling to write into a session's transects_settings.json: the user-facing one,
+# so a recorded value can be handed straight back to compute_tidal_corrections. 'auto'
+# maps to None because it names no particular layout, so there is nothing to record.
+_LAYOUT_REPORTED = {"global": "unclipped", "regions": "clipped", "auto": None}
+
+
+def portable_model_location(model_location: str) -> str:
+    """Store the tide model folder relative to the CoastSeg directory when it is inside it.
+
+    Session folders get copied between machines, so an absolute path baked into one is
+    dead everywhere else and carries the running user's home directory with it. Same
+    reasoning as common.relativize_sar_model_path.
+
+    Args:
+        model_location (str): The folder the model was read from.
+
+    Returns:
+        str: A POSIX path, relative to the CoastSeg directory where possible. Empty
+        input returns empty, which save_transect_settings then does not record.
+    """
+    if not model_location:
+        return ""
+    candidate = pathlib.Path(model_location)
+    try:
+        return candidate.relative_to(core_utilities.get_base_dir()).as_posix()
+    except ValueError:
+        return candidate.as_posix()
+
+
+def normalize_tide_model_layout(tide_model_layout: Optional[str] = "auto") -> str:
+    """Map any spelling of the layout choice onto its internal name.
+
+    Accepts the user-facing spellings ('unclipped', 'clipped'), the internal ones
+    ('global', 'regions'), and hyphenated/underscored variants. None and the empty
+    string mean 'auto', so an unset argument behaves as it always did.
+
+    Args:
+        tide_model_layout (str, optional): The layout in any accepted spelling.
+
+    Returns:
+        str: 'auto', 'global' or 'regions'.
+
+    Raises:
+        ValueError: If the layout is not one CoastSeg supports. A typo must not
+        mean 'auto'.
+
+    Example:
+        >>> normalize_tide_model_layout("un-clipped")
+        'global'
+    """
+    if tide_model_layout is None:
+        return "auto"
+    key = str(tide_model_layout).strip().lower().replace("-", "").replace("_", "")
+    try:
+        return _LAYOUT_ALIASES[key]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported tide model layout {tide_model_layout!r}; expected one of "
+            "['auto', 'clipped', 'unclipped'] (the internal spellings 'global' and "
+            "'regions' are also accepted)."
+        ) from None
+
+
+#: The legacy clipped layout is always region0 through region10.
+_N_TIDE_REGIONS = 11
+
+
+def resolve_model_layout(
+    tide_model_root: Union[str, pathlib.Path],
+    model: str,
+    tide_model_layout: Optional[str] = "auto",
+) -> str:
+    """Determine whether to use the global or legacy regional tide model layout.
+
+    A named layout is returned as given. 'auto' prefers the global, un-clipped model
+    and falls back to the legacy clipped region layout when that is all that is on
+    disk, so an install that only ever ran the clipping step keeps working with no
+    configuration.
+
+    Args:
+        tide_model_root (str | pathlib.Path): The tide_model folder. Keep this the
+            first positional parameter, because tests/conftest.py's tide-model
+            guard reads args[0] to decide whether a test touches the real model.
+        model (str): Tide model name in any accepted spelling.
+        tide_model_layout (str, optional): 'auto' (the default), 'unclipped' or
+            'clipped'. An explicit choice is returned without reading the disk. Use
+            require_model_layout to check it is actually installed.
+
+    Returns:
+        str:  "global" when the un-clipped model is used, otherwise "regions".
+
+    Note:
+        The region0 through region10 layout is deprecated and may be removed
+        in a future CoastSeg release. It remains supported for compatibility
+        with existing installations.
+    """
+    choice = normalize_tide_model_layout(tide_model_layout)
+    if choice != "auto":
+        return choice
+
+    if _model_readable(tide_model_root, model):
+        return "global"
+
+    logger.info(
+        "no un-clipped %s model under %s; falling back to the legacy clipped "
+        "region0..region10 layout. Support for the clipped layout may be "
+        "removed in a future version of CoastSeg re-downloading the model "
+        "without running the clipping step is faster and covers the whole "
+        "planet.",
+        model,
+        tide_model_root,
+    )
+    return "regions"
+
+
+def _model_readable(directory: Union[str, pathlib.Path], model: str) -> bool:
+    """Checks whether a tide model can be read from the specified directory.
+
+    Used to determine which layout is installed. Point it at the tide model
+    directory for the un-clipped layout, or at a single region directory for the
+    clipped layout.
+
+    Args:
+        directory (str | pathlib.Path): The directory to check.
+        model (str): The tide model to check for, in any accepted spelling.
+
+    Returns:
+        bool: True if a model definition can be built from the directory. An
+            unsupported model name returns False instead of raising an error.
+    """
+    try:
+        build_model_definition(directory, model)
+    except (FileNotFoundError, ValueError):
+        return False
+    return True
+
+
+def require_model_layout(
+    tide_model_root: Union[str, pathlib.Path], model: str, tide_model_layout: str
+) -> None:
+    """Refuse an explicitly requested layout that is not installed.
+
+    Args:
+        tide_model_root (str | pathlib.Path): The folder the model was asked for in.
+        model (str): Tide model name in any accepted spelling.
+        tide_model_layout (str): 'auto', 'unclipped'/'global' or 'clipped'/'regions'.
+            'auto' is a no-op, because the auto path is allowed to fall back.
+
+    Returns:
+        None
+
+    Raises:
+        FileNotFoundError: If the requested layout is not installed at that root.
+        ValueError: If model is not a tide model CoastSeg supports.
+    """
+    layout = normalize_tide_model_layout(tide_model_layout)
+    if layout == "auto":
+        return
+
+    key = normalize_model_name(model)
+    root = pathlib.Path(tide_model_root)
+    folders = _MODEL_LAYOUTS[key]["folders"]
+
+    if layout == "global":
+        if _model_readable(root, model):
+            return
+        regions_at = _find_clipped_regions(root, key, model)
+        if regions_at == root:
+            hint = (
+                "The legacy clipped region0..region10 layout IS present there. Set "
+                "tide_model_layout='clipped' (or 'auto') to use it, or re-run "
+                "Download_tide_model.ipynb it fetches the un-clipped model, and "
+                "the clipping step is no longer needed."
+            )
+        elif regions_at is not None:
+            hint = (
+                f"The legacy clipped region0..region10 layout IS present, at "
+                f"{regions_at}. Set tide_model_layout='clipped' and "
+                f'tide_model_location=r"{regions_at}" to use it, or re-run '
+                f"Download_tide_model.ipynb for the un-clipped model."
+            )
+        else:
+            hint = (
+                f"There is no {key} tide model of either layout at {root}. Run "
+                f"Download_tide_model.ipynb, and skip its clipping section."
+            )
+        raise FileNotFoundError(
+            f"No un-clipped {key} tide model under {root}. "
+            f"tide_model_layout='unclipped' asks for ocean_tide[_<YYYYMMDD>] and "
+            f"load_tide, each with {_MODEL_LAYOUTS[key]['n_constituents']} .nc files, "
+            f"inside a model folder named one of {list(folders)} directly at that "
+            f"path. {hint}"
+        )
+
+    # layout == "regions"
+    missing = [
+        f"region{index}"
+        for index in range(_N_TIDE_REGIONS)
+        if not _model_readable(root / f"region{index}", model)
+    ]
+    if not missing:
+        return
+
+    found = _find_clipped_regions(root, key, model)
+    if found is not None and found != root:
+        hint = (
+            f"Clipped regions were found at {found}, not at the folder named. The "
+            f"model root and the model folder differ by one level and are easy to "
+            f'confuse. Pass tide_model_location=r"{found}".'
+        )
+    elif _model_readable(root, model):
+        hint = (
+            f"An un-clipped {key} model IS present at {root}. Drop tide_model_layout, "
+            f"or set it to 'auto' or 'unclipped', to use it."
+        )
+    else:
+        hint = (
+            f"There is no {key} tide model of either layout at {root}. Run "
+            f"Download_tide_model.ipynb, then its clipping section."
+        )
+    shown = ", ".join(missing[:5])
+    if len(missing) > 5:
+        shown += f" (and {len(missing) - 5} more)"
+    raise FileNotFoundError(
+        f"No clipped {key} tide model under {root}. tide_model_layout='clipped' asks "
+        f"for the legacy layout: region0 through region10 directly under that folder, "
+        f"each holding {folders[0]}/ocean_tide[_<YYYYMMDD>] and {folders[0]}/load_tide "
+        f"with {_MODEL_LAYOUTS[key]['n_constituents']} .nc files. "
+        f"Missing: {shown}. {hint}"
+    )
+
+
+def _find_clipped_regions(
+    root: pathlib.Path, model_key: str, model: str
+) -> Optional[pathlib.Path]:
+    """Find the folder holding clipped regions, at root or one level below it.
+
+    Args:
+        root (pathlib.Path): The folder the model was asked for in.
+        model_key (str): Canonical model name, a key of _MODEL_LAYOUTS.
+        model (str): Tide model name in any accepted spelling.
+
+    Returns:
+        pathlib.Path | None: The folder holding region0, or None if there is not one.
+    """
+    if _model_readable(root / "region0", model):
+        return root
+    for folder in _MODEL_LAYOUTS[model_key]["folders"]:
+        candidate = root / folder
+        if _model_readable(candidate / "region0", model):
+            return candidate
+    # Naming the model folder instead of the model root is the mirror image of clipping
+    # in place, and just as easy to do the two differ by exactly this one level. The
+    # regions are then one level UP from where we were told to look.
+    if root.name in _MODEL_LAYOUTS[model_key]["folders"] and _model_readable(
+        root.parent / "region0", model
+    ):
+        return root.parent
+    return None
+
+
+def _require_clipped_regions(location: Union[str, pathlib.Path], model: str) -> None:
+    """Validates the legacy clipped region0 through region10 tide model layout.
+
+    Each region directory is checked with require_tide_groups, the same check
+    that is applied to the un-clipped model.
+
+    Args:
+        location (str | pathlib.Path): Path to the directory containing the
+            region directories.
+        model (str): The tide model to check for, in any accepted spelling.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: If a region directory is missing, or does not contain a
+            complete tide model.
+    """
+    root = pathlib.Path(location)
+    for index in range(_N_TIDE_REGIONS):
+        region_dir = root / f"region{index}"
+        if not region_dir.is_dir():
+            raise Exception(
+                f"Tide Model was not clipped correctly. Missing the directory "
+                f"'{region_dir.name}' for region {index} at {location}. This "
+                f"indicates the tide model was not downloaded correctly try again"
+            )
+        try:
+            require_tide_groups(region_dir, model)
+        except (FileNotFoundError, ValueError) as exc:
+            raise Exception(
+                f"Tide Model was not clipped correctly. Region {index} at "
+                f"{region_dir} is not usable. {exc} Please download and clip again"
+            ) from exc
+
+
+def get_tide_model_location(
+    location: str = "",
+    model: str = "fes2022",
+    tide_model_layout: Optional[str] = "auto",
+) -> str:
+    """Validates the existence of a tide model at the specified location and returns the absolute path to the folder.
 
     Ensures the tide model exists at the given location and validates it contains all the necessary files.
 
@@ -1268,12 +1447,17 @@ def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
                                 If empty, defaults to "tide_model" directory in the CoastSeg base directory.
         model (str, optional): The tide model to use. Defaults to 'fes2022'.
                               Available options: 'fes2022', 'fes2014'.
+        tide_model_layout (str, optional): Which layout to require: 'auto' (the
+            default the un-clipped model, falling back to the clipped regions when
+            that is all there is), 'unclipped', or 'clipped'. An explicit choice that
+            is not installed raises rather than falling back.
 
     Returns:
         str: The absolute path of the location if the tide model exists.
 
     Raises:
         Exception: If the tide model does not exist at the specified location.
+        FileNotFoundError: If tide_model_layout names a layout that is not installed.
 
     Example:
         >>> model_path = get_tide_model_location("/path/to/model", "fes2022")
@@ -1285,42 +1469,94 @@ def get_tide_model_location(location: str = "", model: str = "fes2022") -> str:
         >>> print(model_path)
         '/path/to/coastseg/tide_model'
     """
-    # if not location is provided use the default location of the tide model at CoastSeg/tide_model
+    location, _ = locate_tide_model(
+        location, model=model, tide_model_layout=tide_model_layout
+    )
+    print(f"Tide model {model} found at: '{location}' and is valid.")
+    return location
+
+
+def locate_tide_model(
+    location: str = "",
+    model: str = "fes2022",
+    tide_model_layout: Optional[str] = "auto",
+) -> Tuple[str, str]:
+    """The tide model folder to read, and the layout to read it with.
+
+    The single place that decides both. get_tide_model_location and
+    resolve_model_layout used to be called in sequence, each probing disk and each
+    deciding the layout independently, which left them free to disagree.
+
+    Args:
+        location (str, optional): Folder holding the tide model. Empty means the
+            default, CoastSeg/tide_model. Keep this the first positional parameter,
+            because tests/conftest.py's tide-model guard reads it to decide whether
+            a test touches the real model.
+        model (str, optional): Tide model name in any accepted spelling.
+        tide_model_layout (str, optional): 'auto' (the default), 'unclipped' or
+            'clipped'. A named layout that is not installed raises rather than
+            falling back to the other one.
+
+    Returns:
+        Tuple[str, str]: The absolute model folder, and 'global' or 'regions'.
+
+    Raises:
+        Exception: If there is no tide model at that location.
+        FileNotFoundError: If tide_model_layout names a layout that is not installed,
+            or the chosen layout is incomplete.
+    """
     if not location:
         base_dir = os.path.abspath(core_utilities.get_base_dir())
         location = os.path.join(base_dir, "tide_model")
+    location = os.path.abspath(location)
 
     logger.info(f"Checking if tide model exists at {location}")
-    if validate_tide_model_exists(location, model=model):
-        print(
-            f"Tide model {model} found at: '{os.path.abspath(location)}' and is valid."
-        )
-        return os.path.abspath(location)
-    else:
+    if not os.path.isdir(location):
         raise Exception(
-            f"Tide model not found at: '{os.path.abspath(location)}'. Ensure the model is downloaded to this location."
+            f"Tide model not found at: '{location}' "
+            f"(layout requested: {normalize_tide_model_layout(tide_model_layout)}). "
+            "Ensure the model is downloaded to this location, or pass "
+            "tide_model_location to point at the folder holding it."
         )
 
+    layout = resolve_model_layout(location, model, tide_model_layout=tide_model_layout)
+    # An explicitly requested layout that is not installed has to say so, naming the
+    # folders it looked for, rather than quietly validating against the other one.
+    require_model_layout(location, model, tide_model_layout)
 
-def validate_tide_model_exists(location: str, model: str = "fes2022") -> bool:
-    """
-    Validates if a given directory exists and adheres to the expected tide model structure.
+    if layout == "global":
+        logger.info("found an un-clipped %s model at %s", model, location)
+        require_tide_groups(location, model)
+    else:
+        # LEGACY: the clipped region0..region10 layout.
+        _require_clipped_regions(location, model)
+    return location, layout
 
-    This function checks if the specified directory contains the required sub-directories
-    for a tide model, specifically looking for "region0" to "region10" directories
-    with the appropriate model files.
+
+def validate_tide_model_exists(
+    location: str, model: str = "fes2022", tide_model_layout: Optional[str] = "auto"
+) -> bool:
+    """Whether a usable tide model of the requested layout is installed at location.
+
+    A thin bool-returning wrapper over locate_tide_model, which does the work.
+    Only a missing directory comes back as False. An incomplete model, or a layout
+    that was asked for and is not there, raises with the detail of what was missing.
 
     Args:
         location (str): The path to the directory to validate.
         model (str, optional): The tide model name to check. Defaults to 'fes2022'.
                               Available options: 'fes2022', 'fes2014'.
+        tide_model_layout (str, optional): Which layout to require: 'auto' (the
+            default), 'unclipped' or 'clipped'.
 
     Returns:
-        bool: True if the directory adheres to the expected tide model structure, False otherwise.
+        bool: True when the model is usable. False only when location is not a
+        directory; every other failure raises.
 
     Raises:
         Exception: If the tide model structure is invalid, with specific error messages
                   indicating what components are missing.
+        FileNotFoundError: If tide_model_layout names a layout that is not installed.
 
     Example:
         >>> is_valid = validate_tide_model_exists("/path/to/tide_model", "fes2022")
@@ -1332,419 +1568,319 @@ def validate_tide_model_exists(location: str, model: str = "fes2022") -> bool:
         >>> print(is_valid)
         False
     """
-
     location = os.path.abspath(location)
     logger.info(f"Tide model absolute path {location}")
-    # check if tide directory exists and if the model was clipped to the 10 regions
-    if os.path.isdir(location) and contains_sub_directories(location, 10, model):
-        return True
-    return False
+    # A missing folder is the one failure reported as False rather than raised. Every
+    # other way of being wrong, an incomplete model or a layout that was asked for
+    # and is not installed, raises from locate_tide_model, naming what was missing.
+    if not os.path.isdir(location):
+        return False
 
-
-def sub_directory_contains_files(
-    sub_directory_path: str, extension: str, count: int
-) -> Tuple[bool, int, List[str]]:
-    """
-    Check if a sub-directory contains a specified number of files with a given extension.
-
-    Validates that a directory exists and reports whether it contains the expected
-    number of files with the provided extension.
-
-    Args:
-        sub_directory_path (str): The path to the sub-directory to check.
-        extension (str): The file extension to look for (e.g., '.nc').
-        count (int): The expected number of files with the specified extension.
-
-    Returns:
-        Tuple[bool, int, List[str]]: Boolean indicating if the expected count was met,
-            the actual file count, and the list of matching files.
-
-    Raises:
-        Exception: If the sub-directory does not exist.
-
-    Example:
-        >>> has_files, file_count, files = sub_directory_contains_files("/path/to/dir", ".nc", 34)
-        >>> print(has_files)
-        True  # If the directory contains exactly 34 .nc files
-        >>> print(file_count)
-        34
-        >>> print(files)
-        ['file1.nc', 'file2.nc', ...]
-    """
-
-    if not os.path.isdir(sub_directory_path):
-        raise Exception(
-            f" Missing directory {os.path.basename(sub_directory_path)} at {sub_directory_path}"
-        )
-
-    files_with_extension = sorted(
-        f for f in os.listdir(sub_directory_path) if f.endswith(extension)
-    )
-    file_count = len(files_with_extension)
-    return file_count == count, file_count, files_with_extension
-
-
-def contains_sub_directories(location: str, num_regions: int, model="fes2014") -> bool:
-    """
-    Check if a directory contains sub-directories in the format "regionX/fes2014/load_tide"
-    and "regionX/fes2014/ocean_tide", and if each of these sub-directories contains 34 .nc files.
-
-    Args:
-    - location (str): The path to the directory to check.
-    - num_regions (int): The number of regions to check (e.g., for 10 regions, it'll check region0 to region10).
-    - model (str): The tide model to check. Defaults to 'fes2014'.
-    Returns:
-    - bool: True if all conditions are met, False otherwise.
-    """
-    if "fes2022" in model.lower():
-        model = "fes2022b"
-
-    for i in range(num_regions + 1):
-        region_dir = os.path.join(location, f"region{i}")
-        load_tide_path = os.path.join(region_dir, model, "load_tide")
-        ocean_tide_path = os.path.join(region_dir, model, "ocean_tide")
-
-        # fix this so it acutally indicates where the tide model is at and what files are missing.
-
-        if not os.path.isdir(region_dir):
-            raise Exception(
-                f"Tide Model was not clipped correctly. Missing the directory '{os.path.basename(region_dir)}' for region {i} at {location}. This indicates the tide model was not downloaded correctly try again"
-            )
-
-        # check if the region directory is empty
-        if not os.listdir(region_dir):
-            raise Exception(
-                f"Tide Model was not clipped correctly. Region {i} directory '{os.path.basename(region_dir)}' at {region_dir} is empty. This indicates the tide model was not downloaded correctly try again"
-            )
-
-        if not os.path.isdir(load_tide_path):
-            raise Exception(
-                f"Tide Model was not clipped correctly. Region {i} was missing directory '{os.path.basename(load_tide_path)}' at {load_tide_path}. This indicates the tide model was not downloaded correctly try again"
-            )
-
-        if not os.path.isdir(ocean_tide_path):
-            raise Exception(
-                f"Tide Model was not clipped correctly. Region {i} was missing directory '{os.path.basename(ocean_tide_path)}' at {ocean_tide_path}. This indicates the tide model was not downloaded correctly try again"
-            )
-
-        load_tide_has_files, load_tide_count, load_tide_files = (
-            sub_directory_contains_files(load_tide_path, ".nc", 34)
-        )
-        if not load_tide_has_files:
-            raise Exception(
-                f"Tide Model was not clipped correctly. Region {i} '{os.path.basename(load_tide_path)}' directory contained {load_tide_count} of 34 .nc files at {load_tide_path}. Present files: {load_tide_files}. Please download again"
-            )
-
-        ocean_tide_has_files, ocean_tide_count, ocean_tide_files = (
-            sub_directory_contains_files(ocean_tide_path, ".nc", 34)
-        )
-        if not ocean_tide_has_files:
-            raise Exception(
-                f"Tide Model was not clipped correctly. You may want to try downloading the model then clipping again. Region {i} '{os.path.basename(ocean_tide_path)}' directory contained {ocean_tide_count} of 34 .nc files at {ocean_tide_path}. Present files: {ocean_tide_files}. Please download again"
-            )
-
+    locate_tide_model(location, model=model, tide_model_layout=tide_model_layout)
     return True
 
 
-def get_tide_predictions(
-    x: float,
-    y: float,
-    timeseries_df: pd.DataFrame,
-    model_region_directory: str,
-    transect_id: str = "",
-    model: str = "FES2022",
-) -> pd.DataFrame:
-    """
-    Get tide predictions for a given location and transect ID.
+def normalize_model_name(model: str) -> str:
+    """Map any spelling of a supported tide model onto its canonical name.
+
+    Accepts the folder spellings ('fes2022b'), the lowercase forms used in the
+    settings files, and hyphenated/underscored variants.
 
     Args:
-        x (float): The x-coordinate of the location to predict tide for.
-        y (float): The y-coordinate of the location to predict tide for.
-        - timeseries_df: A DataFrame containing time series data for each transect.
-            - It expects a DataFrame with columns 'dates'
-                 - If a transect ID is available, it should be included as a column in the DataFrame.
-                 - It expects all the dates in a single column called dates in datetime format.
-                 - All the transect ids should be type string
+        model (str): The model name in any of the accepted spellings.
 
-       - model_region_directory: The path to the model region that will be used to compute the tide predictions
-         ex."CoastSeg/tide_model/region"
-        transect_id (str): The ID of the transect. Pass "" if no transect ID is available.
-        model (str): The tide model to use. Defaults to 'FES2022'.
-            Available options FES2014 and FES2022.
     Returns:
-            - pd.DataFrame: A DataFrame containing tide predictions for all the dates that the selected transect_id using the
-    fes 2014 model region specified in the "region_id".
-    """
-    # Check if the transect id is available in the timeseries_df. Either as a column or in the 'transect_id' column
-    if transect_id != "":
-        # get unique dates for the transect_id and convert to a numpy array
-        if "transect_id" in timeseries_df.columns:
-            matching_rows = timeseries_df[timeseries_df["transect_id"] == transect_id]
-            # get the unique dates for the transect_id
-            dates_for_transect_id_df = matching_rows[["dates"]].dropna()
-        elif transect_id not in timeseries_df.columns:
-            return pd.DataFrame()
-        else:
-            dates_for_transect_id_df = timeseries_df[["dates", transect_id]].dropna()
-    else:
-        dates_for_transect_id_df = timeseries_df[["dates"]].dropna()
+        str: 'FES2022' or 'FES2014'.
 
-    tide_predictions_df = model_tides(
-        x,
-        y,
-        dates_for_transect_id_df.dates.values,
-        transect_id=transect_id,
-        directory=model_region_directory,
-        model=model.upper(),
+    Raises:
+        ValueError: If the model is not one CoastSeg supports.
+
+    Example:
+        >>> normalize_model_name("fes2022b")
+        'FES2022'
+    """
+    key = str(model).strip().lower().replace("-", "").replace("_", "")
+    if key.startswith("fes2022"):
+        return "FES2022"
+    if key.startswith("fes2014"):
+        return "FES2014"
+    raise ValueError(
+        f"Unsupported tide model {model!r}; expected one of {sorted(_MODEL_LAYOUTS)}"
     )
-    return tide_predictions_df
 
 
-def predict_tides_for_df(
-    seaward_points_gdf: gpd.GeoDataFrame,
-    timeseries_df: pd.DataFrame,
-    config: dict,
-) -> pd.DataFrame:
-    """
-    Predict tides for a points in the DataFrame.
+def rank_release_dirs(names: Iterable[str], group: str) -> List[str]:
+    """A tide group's release folders, oldest first, undated lowest of all.
 
-    Parameters:
-    - seaward_points_gdf: A GeoDataFrame containing seaward points for each transect
-    - timeseries_df: A DataFrame containing time series data for each transect.
-    - config: Configuration dictionary.
-        Must contain keys:
-        "REGION_DIRECTORY" : contains full path to the FES model region folder
-        "MODEL" : The tide model to use. Defaults to 'FES2022'
+    Directory names are matched against the release pattern for group. Undated
+    directories are ranked before dated releases, so the final item represents
+    the most recent available release.
+
+    Args:
+        names (Iterable[str]): Candidate folder names, e.g. a directory listing.
+        group (str): Tide group to keep, e.g. 'ocean_tide'.
 
     Returns:
-    - pd.DataFrame: A DataFrame containing predicted tides.
-    Contains columns dates, x, y, tide, transect_id
+        List[str]: Matching names in preference order, so [-1] is the newest.
+
+    Example:
+        >>> rank_release_dirs(
+        ...     ["ocean_tide", "ocean_tide_20241025", "ocean_tide_extrapolated"],
+        ...     "ocean_tide",
+        ... )
+        ['ocean_tide', 'ocean_tide_20241025']
     """
-    region_directory = config["REGION_DIRECTORY"]
-    # Use tqdm to add a progress bar for the apply function
-    tqdm.pandas(desc=f"  Predicting tides for {len(seaward_points_gdf)} transects")
-    all_tides = seaward_points_gdf.progress_apply(
-        lambda row: get_tide_predictions(
-            row.geometry.x,
-            row.geometry.y,
-            timeseries_df,
-            f"{region_directory}{row['region_id']}",
-            row["transect_id"],
-            model=config["MODEL"],
+    # e.g. ocean_tide or ocean_tide_20241025, anchored so it does not also match
+    # ocean_tide_extrapolated or ocean_tide_non_structured.
+    pattern = re.compile(rf"^{re.escape(group)}(?:_(\d{{8}}))?$")
+    dated: Dict[str, str] = {}
+    for name in names:
+        match = pattern.match(str(name).strip())
+        if match:
+            # '' for the undated folder sorts below every 8-digit date
+            dated[str(name)] = match.group(1) or ""
+    return sorted(dated, key=lambda name: (dated[name], name))
+
+
+def _find_group_dir(model_dir: pathlib.Path, group: str = "ocean_tide") -> pathlib.Path:
+    """Find the newest valid directory for a tide group.
+
+    Prefers dated release directories over the undated directory and skips directories
+    that contain no constituent files. The reason being AVISO ships each group either
+    under its plain name or under a dated re-release (ocean_tide_20241025), and publishes
+    each new release as another dated folder beside the old ones.
+
+
+    Args:
+        model_dir (pathlib.Path): Tide model directory, such as e.g. <region>/fes2022b.
+        group (str): Tide group name, such as 'ocean_tide' or 'load_tide'.
+
+    Returns:
+        pathlib.Path: The folder holding the constituent files.
+
+    Raises:
+        FileNotFoundError: If no such folder holding .nc files exists.
+    """
+
+    def _holds_files(path: pathlib.Path) -> bool:
+        """Return whether a directory contains constituent files."""
+        return path.is_dir() and (any(path.glob("*.nc")) or any(path.glob("*.nc.gz")))
+
+    if not model_dir.is_dir():
+        raise FileNotFoundError(f"No '{group}' folder: {model_dir} is not a directory")
+
+    candidates = {p.name: p for p in model_dir.iterdir() if p.is_dir()}
+    # newest first, skipping any release whose files have not landed
+    for name in reversed(rank_release_dirs(candidates, group)):
+        if _holds_files(candidates[name]):
+            return candidates[name]
+
+    raise FileNotFoundError(
+        f"No '{group}' (or '{group}_<date>') folder holding .nc files under {model_dir}"
+    )
+
+
+def build_model_definition(
+    directory: Union[str, pathlib.Path], model: str, group: str = "ocean_tide"
+) -> dict:
+    """Build a pyTMD model definition from a CoastSeg tide directory.
+
+    Uses the constituent files present on disk so the same code supports
+    FES2014, FES2022, regional clips, and global downloads.
+
+
+    Args:
+        directory (str | pathlib.Path): The region folder, e.g. tide_model/region3.
+        model (str): Tide model name in any accepted spelling.
+        group (str): 'ocean_tide' (default) or 'load_tide'.
+
+    Returns:
+        dict: A model definition for pyTMD.io.model(directory).from_dict(...),
+            with model_file as POSIX paths relative to directory, plus a
+            compressed flag that indicates whether the files are gzipped.
+
+    Raises:
+        FileNotFoundError: If the model folder or its constituent files are missing.
+
+    Example:
+        >>> d = build_model_definition("tide_model/region3", "FES2022")
+        >>> d["z"]["model_file"][0]
+        'fes2022b/ocean_tide/2n2_fes2022.nc'
+    """
+    directory = pathlib.Path(directory).expanduser().resolve()
+    key = normalize_model_name(model)
+    spec = _MODEL_LAYOUTS[key]
+
+    # The model folder, e.g. fes2022b, under whichever of its known spellings the
+    # install used.
+    model_dir = next(
+        (
+            directory / folder
+            for folder in spec["folders"]
+            if (directory / folder).is_dir()
         ),
-        axis=1,
+        None,
     )
-    # Filter out None values
-    all_tides = all_tides.dropna()
-    # If no tides are predicted return an empty dataframe
-    if all_tides.empty:
-        return pd.DataFrame(columns=["dates", "x", "y", "tide", "transect_id"])
+    if model_dir is None:
+        raise FileNotFoundError(
+            f"No {key} folder under {directory}. Expected one of {spec['folders']}."
+        )
 
-    # Concatenate all the results
-    all_tides_df = pd.concat(all_tides.tolist())
+    group_dir = _find_group_dir(model_dir, group)
 
-    return all_tides_df
+    files = sorted(p for p in group_dir.glob("*.nc") if p.is_file())
+    compressed = False
+    if not files:
+        files = sorted(p for p in group_dir.glob("*.nc.gz") if p.is_file())
+        compressed = bool(files)
+    if not files:
+        raise FileNotFoundError(f"No constituent files in {group_dir}")
+    if len(files) != spec["n_constituents"]:
+        logger.warning(
+            "%s %s holds %d constituent files, expected %d",
+            key,
+            group_dir,
+            len(files),
+            spec["n_constituents"],
+        )
+
+    # pathlib.Path.glob rejects backslashes, and pyTMD resolves every model_file
+    # entry through it, so relative POSIX paths are required.
+    relative = [p.relative_to(directory).as_posix() for p in files]
+    for rel in relative:
+        if any(ch in rel for ch in "*?[]"):
+            raise ValueError(f"Tide model path contains glob metacharacters: {rel}")
+
+    return {
+        "name": key,
+        "format": spec["format"],
+        "version": spec["version"],
+        "compressed": compressed,
+        "z": {
+            "model_file": relative,
+            "units": spec["units"],
+            "variable": spec["variable"],
+        },
+    }
 
 
-def model_tides(
-    x,
-    y,
-    time,
-    transect_id: str = "",
-    model="FES2022",
-    directory=None,
-    epsg=4326,
-    method="bilinear",
-    extrapolate=True,
-    cutoff=10.0,
-):
-    """
-    Compute tides at points and times using tidal harmonics.
-    If multiple x, y points are provided, tides will be
-    computed for all timesteps at each point.
+def resolve_tide_model(
+    directory: Union[str, pathlib.Path], model: str, group: str = "ocean_tide"
+) -> "pyTMD.io.model":
+    """Return a validated pyTMD.io.model for a CoastSeg tide folder.
 
-    This function supports any tidal model supported by
-    `pyTMD`, including the FES2014 Finite Element Solution
-    tide model, and FES2022 Finite Element Solution
-    tide model.
+    Args:
+        directory (str | pathlib.Path): The region folder, e.g. tide_model/region3.
+        model (str): Tide model name in any accepted spelling.
+        group (str): 'ocean_tide' (default) or 'load_tide'.
 
-    This function is a modification of the `pyTMD`
-    package's `compute_tide_corrections` function, adapted
-    to process multiple timesteps for multiple input point
-    locations. For more info:
-    https://pytmd.readthedocs.io/en/stable/user_guide/compute_tide_corrections.html
+    Returns:
+        pyTMD.io.model: Model with all constituent file paths resolved.
 
-    Parameters:
-    -----------
-    x, y : float or list of floats
-        One or more x and y coordinates used to define
-        the location at which to model tides. By default these
-        coordinates should be lat/lon; use `epsg` if they
-        are in a custom coordinate reference system.
-    time : A datetime array or pandas.DatetimeIndex
-        An array containing 'datetime64[ns]' values or a
-        'pandas.DatetimeIndex' providing the times at which to
-        model tides in UTC time.
-    model : string
-        The tide model used to model tides. Options include:
-        - "fes2022b" (only pre-configured option on DEA Sandbox)
-        - "TPXO8-atlas"
-        - "TPXO9-atlas-v5"
-    directory : string
-        The directory containing tide model data files. These
-        data files should be stored in sub-folders for each
-        model that match the structure provided by `pyTMD`:
-        https://pytmd.readthedocs.io/en/latest/getting_started/Getting-Started.html#directories
-        For example:
-        - {directory}/fes2014/ocean_tide/
-          {directory}/fes2014/load_tide/
-    epsg : int
-        Input coordinate system for 'x' and 'y' coordinates.
-        Defaults to 4326 (WGS84).
-    method : string
-        Method used to interpolate tidal contsituents
-        from model files. Options include:
-        - bilinear: quick bilinear interpolation
-        - spline: scipy bivariate spline interpolation
-        - linear, nearest: scipy regular grid interpolations
-    extrapolate : bool
-        Whether to extrapolate tides for locations outside of
-        the tide modelling domain using nearest-neighbor
-    cutoff : int or float
-        Extrapolation cutoff in kilometers. Set to `np.inf`
-        to extrapolate for all points.
-
-    Returns
-    -------
-    A pandas.DataFrame containing tide heights for all the xy points and their corresponding time
-    Contains the columns dates, x, y, tide, transect_id
+    Raises:
+        FileNotFoundError: If the group is incomplete or any constituent file cannot be resolved.
 
     """
-    # Check tide directory is accessible
-    if directory is not None:
-        directory = pathlib.Path(directory).expanduser()
-        if not directory.exists():
-            raise FileNotFoundError("Invalid tide directory")
-    # Validate input arguments
-    assert method in ("bilinear", "spline", "linear", "nearest")
+    directory = pathlib.Path(directory).expanduser().resolve()
+    # get model definition which specifies how the tide model is structured
+    definition = build_model_definition(directory, model, group=group)
+    _check_group_is_complete(directory, normalize_model_name(model), group, definition)
+    compressed = definition.pop("compressed", False)
+    expected = len(definition["z"]["model_file"])
 
-    if "fes2022" in model.lower():
-        model = "FES2022"
-    # Get parameters for tide model; use custom definition file for
-    model = pyTMD.io.model(directory, format="netcdf", compressed=False).elevation(
-        model
+    m = pyTMD.io.model(directory, compressed=compressed, verify=False)
+    m = m.from_dict(definition)
+
+    # get the number of constituent files
+    resolved = list(m["z"].model_file)
+    if len(resolved) != expected:
+        raise FileNotFoundError(
+            f"pyTMD resolved {len(resolved)} of {expected} constituent files under "
+            f"{directory}. The tide model is incomplete try downloading and "
+            f"clipping it again."
+        )
+    return m
+
+
+def clear_tide_model_cache() -> None:
+    """Close and drop every cached tide dataset.
+
+    Call this from tests, and before deleting or re-downloading a tide model on
+    Windows, where open netCDF handles keep the files locked.
+    """
+    with _DATASET_CACHE_LOCK:
+        while _DATASET_CACHE:
+            _, (_, ds) = _DATASET_CACHE.popitem()
+            try:
+                ds.close()
+            except Exception:
+                logger.debug("failed to close a cached tide dataset", exc_info=True)
+
+
+atexit.register(clear_tide_model_cache)
+
+
+def _open_tide_dataset(
+    directory: Union[str, pathlib.Path], model: str, group: str = "ocean_tide"
+) -> Tuple[object, "xr.Dataset"]:  # noqa F821
+    """Return (model, dataset) for a region directory and cache it.
+
+    Opens the dataset lazily when possible and reuses it for subsequent calls with
+    the same directory, model, and group.
+
+    Args:
+        directory (str | pathlib.Path): Folder holding the tide model.
+        model (str): Tide model name in any accepted spelling.
+        group (str): Constituent group, 'ocean_tide' or 'load_tide'.
+
+    Returns:
+        Tuple[pyTMD.io.model, xr.Dataset]: The resolved model and its lazily opened
+            dataset
+
+    Note:
+        The cache itself is thread-safe, but the cached datasets are not safe for
+        concurrent reads.
+    """
+    key = (
+        str(pathlib.Path(directory).expanduser().resolve()),
+        normalize_model_name(model),
+        group,
     )
+    with _DATASET_CACHE_LOCK:
+        hit = _DATASET_CACHE.get(key)
+        if hit is not None:
+            _DATASET_CACHE.move_to_end(key)
+            return hit
 
-    # If time passed as a single Timestamp, convert to datetime64
-    if isinstance(time, pd.Timestamp):
-        time = time.to_datetime64()
-
-    # Handle numeric or array inputs
-    x = np.atleast_1d(x)
-    y = np.atleast_1d(y)
-    time = np.atleast_1d(time)
-
-    # Determine point and time counts
-    assert len(x) == len(y), "x and y must be the same length"
-    n_points = len(x)
-    n_times = len(time)
-
-    # Converting x,y from EPSG to latitude/longitude
+    # Opened outside the lock: reading 34 file headers should not block other ROIs.
+    m = resolve_tide_model(directory, model, group=group)
     try:
-        # EPSG projection code string or int
-        crs1 = pyproj.CRS.from_epsg(int(epsg))
-    except (ValueError, pyproj.exceptions.CRSError):
-        # Projection SRS string
-        crs1 = pyproj.CRS.from_string(epsg)
-
-    # Output coordinate reference system
-    crs2 = pyproj.CRS.from_epsg(4326)
-    transformer = pyproj.Transformer.from_crs(crs1, crs2, always_xy=True)
-    lon, lat = transformer.transform(x.flatten(), y.flatten())
-
-    # Convert datetime
-    timescale = pyTMD.time.timescale().from_datetime(time.flatten())
-    n_points = len(x)
-    # number of time points
-    n_times = len(time)
-
-    amp, ph = pyTMD.io.FES.extract_constants(
-        lon,
-        lat,
-        model.model_file,
-        type=model.type,
-        version=model.version,
-        method=method,
-        extrapolate=extrapolate,
-        cutoff=cutoff,
-        scale=model.scale,
-        compressed=model.compressed,
-    )
-    # Available model constituents
-    c = model.constituents
-    # Delta time (TT - UT1)
-    # calculating the difference between Terrestrial Time (TT) and UT1 (Universal Time 1),
-    deltat = timescale.tt_ut1
-
-    # Calculate complex phase in radians for Euler's
-    cph = -1j * ph * np.pi / 180.0
-
-    # Calculate constituent oscillation
-    hc = amp * np.exp(cph)
-
-    # Repeat constituents to length of time and number of input
-    # coords before passing to `predict_tide_drift`
-
-    # deltat likely represents the time interval between successive data points or time instances.
-    # t =  replicating the timescale.tide array n_points times
-    # hc = creates an array with the tidal constituents repeated for each time instance
-    # Repeat constituents to length of time and number of input
-    # coords before passing to `predict_tide_drift`
-    t, hc, deltat = (
-        np.tile(timescale.tide, n_points),
-        hc.repeat(n_times, axis=0),
-        np.tile(deltat, n_points),
-    )
-
-    # Predict tidal elevations at time and infer minor corrections
-    npts = len(t)
-    tide = np.ma.zeros((npts), fill_value=np.nan)
-    tide.mask = np.any(hc.mask, axis=1)
-
-    # Predict tides
-    tide.data[:] = pyTMD.predict.drift(
-        t, hc, c, deltat=deltat, corrections=model.format
-    )
-    minor = pyTMD.predict.infer_minor(t, hc, c, deltat=deltat, corrections=model.format)
-    tide.data[:] += minor.data[:]
-
-    # Replace invalid values with fill value
-    tide.data[tide.mask] = tide.fill_value
-    if transect_id:
-        df = pd.DataFrame(
-            {
-                "dates": np.tile(time, n_points),
-                "x": np.repeat(x, n_times),
-                "y": np.repeat(y, n_times),
-                "tide": tide,
-                "transect_id": transect_id,
-            }
+        ds = m.open_dataset(group="z", chunks={})
+    except (ImportError, ValueError):
+        logger.warning(
+            "lazy tide model read failed; falling back to an eager read. Large "
+            "regions may need several GB of RAM.",
+            exc_info=True,
         )
-        df["dates"] = pd.to_datetime(df["dates"], utc=True)
-        df.set_index("dates")
-        return df
-    else:
-        df = pd.DataFrame(
-            {
-                "dates": np.tile(time, n_points),
-                "x": np.repeat(x, n_times),
-                "y": np.repeat(y, n_times),
-                "tide": tide,
-            }
-        )
-        df["dates"] = pd.to_datetime(df["dates"], utc=True)
-        df.set_index("dates")
-        return df
+        ds = m.open_dataset(group="z")
+
+    with _DATASET_CACHE_LOCK:
+        existing = _DATASET_CACHE.get(key)
+        if existing is not None:
+            try:
+                ds.close()
+            except Exception:
+                pass
+            _DATASET_CACHE.move_to_end(key)
+            return existing
+        _DATASET_CACHE[key] = (m, ds)
+        while len(_DATASET_CACHE) > TIDE_DATASET_CACHE_SIZE:
+            _, (_, evicted) = _DATASET_CACHE.popitem(last=False)
+            try:
+                evicted.close()
+            except Exception:
+                logger.debug("failed to close an evicted tide dataset", exc_info=True)
+        return _DATASET_CACHE[key]
 
 
 def read_and_filter_geojson(
@@ -1752,16 +1888,17 @@ def read_and_filter_geojson(
     columns_to_keep: Tuple[str, ...] = ("id", "type", "geometry"),
     feature_type: str = "transect",
 ) -> gpd.GeoDataFrame:
-    """
-    Read and filter a GeoJSON file based on specified columns and feature type.
+    """Read and filter a GeoJSON file based on specified columns and feature type.
 
-    Parameters:
-    - file_path: Path to the GeoJSON file.
-    - columns_to_keep: A tuple containing column names to be retained in the resulting GeoDataFrame. Default is ("id", "type", "geometry").
-    - feature_type: Type of feature to be retained in the resulting GeoDataFrame. Default is "transect".
+    Args:
+        file_path (str): Path to the GeoJSON file.
+        columns_to_keep (Tuple[str, ...], optional): Column names to be retained in the
+            resulting GeoDataFrame. Defaults to ("id", "type", "geometry").
+        feature_type (str, optional): Type of feature to be retained in the resulting
+            GeoDataFrame. Defaults to "transect".
 
     Returns:
-    - gpd.GeoDataFrame: A filtered GeoDataFrame.
+        gpd.GeoDataFrame: A filtered GeoDataFrame.
     """
     # Read the GeoJSON file into a GeoDataFrame
     gdf = gpd.read_file(file_path)
@@ -1775,182 +1912,25 @@ def read_and_filter_geojson(
     return filtered_gdf
 
 
-def load_regions_from_geojson(geojson_path: str) -> gpd.GeoDataFrame:
-    """
-    Load regions from a GeoJSON file and assign a region_id based on index.
-
-    Parameters:
-    - geojson_path: Path to the GeoJSON file containing regions.
-
-    Returns:
-    - gpd.GeoDataFrame: A GeoDataFrame containing the loaded regions with an added 'region_id' column.
-    """
-    gdf = gpd.read_file(geojson_path)
-    gdf["region_id"] = gdf.index
-    return gdf
-
-
-def perform_spatial_join(
-    seaward_points_gdf: gpd.GeoDataFrame, regions_gdf: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
-    """
-    Perform a spatial join between seaward points and regions based on intersection.
-    BOTH GeoDataFrames must be in crs 4326. Otherwise the spatial join will not work.
-
-    Parameters:
-    - seaward_points_gdf: A GeoDataFrame containing seaward points.
-    - regions_gdf: A GeoDataFrame containing regions.
-
-    Returns:
-    - gpd.GeoDataFrame: A GeoDataFrame resulting from the spatial join.
-    """
-    joined_gdf = gpd.sjoin(
-        seaward_points_gdf, regions_gdf, how="left", predicate="intersects"
-    )
-    joined_gdf.drop(columns="index_right", inplace=True)
-    return joined_gdf
-
-
-def model_tides_for_all(
-    seaward_points_gdf: gpd.GeoDataFrame,
-    timeseries_df: pd.DataFrame,
-    config: dict,
-) -> pd.DataFrame:
-    """
-    Model tides for all points in the provided GeoDataFrame.
-
-    Parameters:
-    - seaward_points_gdf: A GeoDataFrame containing seaward point for each transect.
-    - timeseries_df: A DataFrame containing time series data for each transect. A DataFrame containing time series data for tides.
-    - config: Configuration dictionary.
-
-    Returns:
-    - pd.DataFrame: A DataFrame containing predicted tides for all points.
-    """
-    return predict_tides_for_df(seaward_points_gdf, timeseries_df, config)
-
-
-def model_tides_by_region_id(
-    seaward_points_gdf: gpd.GeoDataFrame,
-    timeseries_df: pd.DataFrame,
-    config: dict,
-) -> pd.DataFrame:
-    """
-    Model tides for each unique region ID in the provided GeoDataFrame.
-
-    Parameters:
-    - seaward_points_gdf: A GeoDataFrame containing seaward point for each transect.
-    - timeseries_df: A DataFrame containing time series data for each transect. A DataFrame containing time series data for tides.
-    - config: Configuration dictionary.
-
-    Returns:
-    - pd.DataFrame: A DataFrame containing predicted tides segmented by region ID.
-    """
-    unique_ids = seaward_points_gdf["region_id"].unique()
-    all_tides_dfs = []
-
-    for uid in unique_ids:
-        subset_gdf = seaward_points_gdf[seaward_points_gdf["region_id"] == uid]
-        tides_for_region_df = predict_tides_for_df(subset_gdf, timeseries_df, config)
-        all_tides_dfs.append(tides_for_region_df)
-
-    return pd.concat(all_tides_dfs)
-
-
-def handle_tide_predictions(
-    seaward_points_gdf: gpd.GeoDataFrame,
-    timeseries_df: pd.DataFrame,
-    config: dict,
-) -> pd.DataFrame:
-    """
-    Handle tide predictions based on the number of unique region IDs in the provided GeoDataFrame.
-
-    Parameters:
-    - seaward_points_gdf: A GeoDataFrame containing seaward point for each transect.
-    - timeseries_df: A DataFrame containing time series data for each transect. A DataFrame containing time series data for each transect.
-    - config: Configuration dictionary.
-
-    Returns:
-    - pd.DataFrame: A DataFrame containing predicted tides.
-    """
-    if seaward_points_gdf["region_id"].nunique() == 1:
-        all_tides_df = model_tides_for_all(seaward_points_gdf, timeseries_df, config)
-    else:
-        all_tides_df = model_tides_by_region_id(
-            seaward_points_gdf, timeseries_df, config
-        )
-    return all_tides_df
-
-
-def predict_tides(
-    transects_gdf: gpd.GeoDataFrame,
-    timeseries_df: pd.DataFrame,
-    model_regions_geojson_path: str,
-    config: dict,
-) -> pd.DataFrame:
-    """
-    Predict tides based on input data and configurations.
-
-    Parameters:
-    - geojson_file_path: Path to the GeoJSON file containing transect data.
-    - timeseries_df: A DataFrame containing time series data for each transect. A DataFrame containing raw time series data.
-    - model_regions_geojson_path: Path to the GeoJSON file containing model regions.
-    - config: Configuration dictionary.
-
-    Returns:
-    - pd.DataFrame: A DataFrame containing predicted tides.
-    """
-    # Read in the model regions from a GeoJSON file
-    regions_gdf = load_regions_from_geojson(model_regions_geojson_path)
-    # convert to crs 4326 if it is not already
-    if regions_gdf.crs is None:
-        regions_gdf = regions_gdf.set_crs("epsg:4326")
-    else:
-        regions_gdf = regions_gdf.to_crs("epsg:4326")
-    # Get the seaward points in CRS 4326
-    seaward_points_gdf = common.get_seaward_points_gdf(transects_gdf)
-    # Perform a spatial join to get the region_id for each point in seaward_points_gdf
-    regional_seaward_points_gdf = perform_spatial_join(seaward_points_gdf, regions_gdf)
-    # predict the tides
-    all_tides_df = handle_tide_predictions(
-        regional_seaward_points_gdf, timeseries_df, config
-    )
-    return all_tides_df
-
-
-def apply_tide_correction(
-    df: pd.DataFrame, reference_elevation: float, beach_slope: float
-):
-    """
-    Applies tidal correction to the timeseries data.
-
-    Args:
-    - df (DataFrame): Input data with tide predictions and timeseries data.
-    - reference_elevation (float): Reference elevation value.
-    - beach_slope (float): Beach slope value.
-
-    Returns:
-    - DataFrame: Tidally corrected data.
-    """
-    correction = (df["tide"] - reference_elevation) / beach_slope
-    df["cross_distance"] = df["cross_distance"] + correction
-    return df.drop(columns=["correction"], errors="ignore")
-
-
 def timeseries_read_csv(file_path: str, is_merged: bool = False) -> pd.DataFrame:
-    """
-    Reads the timeseries from a CSV file.
+    """Reads the timeseries from a CSV file.
+
     It converts the dates column to datetime in UTC.
     It drops the columns 'x', 'y', and 'Unnamed: 0' if they exist.
 
     Args:
         file_path (str): Path to the CSV file.
-        is_merged (bool): Indicates if the timeseries is merged. Defaults to False.
+        is_merged (bool, optional): Indicates if the timeseries is merged. Defaults to False.
 
     Returns:
-    - DataFrame: Processed data.
+        pd.DataFrame: Processed data.
     """
-    df = pd.read_csv(file_path, parse_dates=["dates"])
+    df = pd.read_csv(file_path)
+    if "dates" not in df.columns:
+        raise ValueError(
+            f"{file_path} has no 'dates' column, so it is not a CoastSeg time "
+            f"series. Columns found: {list(df.columns)}"
+        )
     df["dates"] = pd.to_datetime(df["dates"], utc=True)
     # only for the non merged timeseries do we drop the x, y and Unnamed: 0 columns
     if is_merged is False:

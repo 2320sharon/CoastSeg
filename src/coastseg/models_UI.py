@@ -520,14 +520,20 @@ class UI_Models:
         model = self.tide_selector.model
         tides_file = self.tide_selector.tides_file
         # load in shoreline settings, session directory with model outputs, and a new session name to store extracted shorelines
-        compute_tidal_corrections(
-            session_name,
-            [roi_id],
-            beach_slope,
-            reference_elevation,
-            model=model,
-            tides_file=tides_file,
-        )
+        # compute_tidal_corrections re-raises rather than printing and returning, so
+        # surface the failure in the widget instead of letting ipywidgets swallow it.
+        try:
+            compute_tidal_corrections(
+                session_name,
+                [roi_id],
+                beach_slope,
+                reference_elevation,
+                model=model,
+                tides_file=tides_file,
+            )
+        except Exception as e:
+            logger.exception("tidal correction failed for ROI %s", roi_id)
+            self.launch_error_box("Tide Model Error", str(e), position=2)
 
     def _create_widgets(self) -> None:
         """

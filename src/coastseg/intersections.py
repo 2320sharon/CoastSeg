@@ -14,6 +14,7 @@ from coastseg.common import (
     convert_date_gdf,
     convert_points_to_linestrings,
     get_transect_settings,
+    sort_matrix_columns,
 )
 
 warnings.filterwarnings("ignore")
@@ -713,12 +714,10 @@ def save_transects_timeseries(
         inplace=True
     )  # this turns the dates row index into a column
 
-    # sort the rows by the transect IDs
-    sorted_columns = [transect_timeseries_matrix.columns[0]] + sorted(
-        transect_timeseries_matrix.columns[1:],
-        key=lambda x: int("".join(filter(str.isdigit, x))),
-    )
-    transect_timeseries_matrix = transect_timeseries_matrix[sorted_columns]
+    # sort the columns by the transect IDs
+    transect_timeseries_matrix = transect_timeseries_matrix[
+        sort_matrix_columns(transect_timeseries_matrix.columns)
+    ]
 
     timeseries_output_path = os.path.join(save_location, "raw_transect_time_series.csv")
     transect_timeseries_matrix.to_csv(timeseries_output_path, index=False)

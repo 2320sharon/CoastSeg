@@ -26,10 +26,9 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import onnxruntime as ort
+from coastsat import SDS_sar_model, SDS_tools
 from osgeo import gdal, osr
 from PIL import Image
-
-from coastsat import SDS_sar_model, SDS_tools
 
 from coastseg import core_utilities
 
@@ -72,10 +71,26 @@ MAX_INPUT_PIXELS = 80_000_000
 # Same palette the TensorFlow zoo path uses, so the good/bad segmentation classifier
 # sees the colours it was trained on.
 CLASS_LABEL_COLORMAP = (
-    "#3366CC", "#DC3912", "#FF9900", "#109618", "#990099",
-    "#0099C6", "#DD4477", "#66AA00", "#B82E2E", "#316395",
-    "#ffe4e1", "#ff7373", "#666666", "#c0c0c0", "#66cdaa",
-    "#afeeee", "#0e2f44", "#420420", "#794044", "#3399ff",
+    "#3366CC",
+    "#DC3912",
+    "#FF9900",
+    "#109618",
+    "#990099",
+    "#0099C6",
+    "#DD4477",
+    "#66AA00",
+    "#B82E2E",
+    "#316395",
+    "#ffe4e1",
+    "#ff7373",
+    "#666666",
+    "#c0c0c0",
+    "#66cdaa",
+    "#afeeee",
+    "#0e2f44",
+    "#420420",
+    "#794044",
+    "#3399ff",
 )
 
 _POLARIZATION_TOKEN_RE = re.compile(
@@ -240,7 +255,8 @@ def find_sar_onnx_file(model_directory: str, download: bool = True) -> str:
         return os.path.abspath(cached)
 
     logger.info(
-        "No SAR model in %s; downloading the default model from Hugging Face.", directory
+        "No SAR model in %s; downloading the default model from Hugging Face.",
+        directory,
     )
     print(
         "The Sentinel-1 segmentation model (~130 MB) is not on this machine yet and is "
@@ -263,7 +279,7 @@ def get_sar_model_directory() -> str:
 
     This is the one place a user can drop a manually downloaded model and have *both*
     SAR workflows pick it up: the zoo path reads it directly, and the coastsat path is
-    pointed at it by :func:`find_local_sar_model`.
+    pointed at it by `find_local_sar_model`.
     """
     return str(
         Path(core_utilities.get_base_dir()) / "models" / DEFAULT_SAR_MODEL_DIRNAME
@@ -290,7 +306,7 @@ def is_sar_model_directory(model_directory: Optional[str]) -> bool:
 
     True either because it already holds an ``.onnx``, or because it *is* the designated
     SAR model directory, which may legitimately be empty or absent: the model is
-    downloaded on first use (see :func:`find_sar_onnx_file`). This routes the run, so it
+    downloaded on first use (see `find_sar_onnx_file`). This routes the run, so it
     has to give the same answer before and after that download -- otherwise the first
     SAR run on a fresh clone would be sent down the TensorFlow path.
     """
@@ -437,8 +453,12 @@ def load_sar_model_spec(model_directory: str, use_gpu: bool = False) -> SarModel
             "the band stack cannot be built safely. Re-export the model with metadata."
         )
 
-    mean = np.asarray(_json_metadata(metadata, "normalization_mean", []), dtype=np.float32)
-    std = np.asarray(_json_metadata(metadata, "normalization_std", []), dtype=np.float32)
+    mean = np.asarray(
+        _json_metadata(metadata, "normalization_mean", []), dtype=np.float32
+    )
+    std = np.asarray(
+        _json_metadata(metadata, "normalization_std", []), dtype=np.float32
+    )
     if mean.size != len(channel_order) or std.size != len(channel_order):
         raise SarModelError(
             f"{onnx_path}: normalization_mean/std have {mean.size}/{std.size} entries "
@@ -555,7 +575,9 @@ def grids_match(
     """Return True when two rasters sit on the same grid (size, transform and CRS)."""
     if tuple(shape_a) != tuple(shape_b):
         return False
-    if not np.allclose(np.asarray(geotransform_a), np.asarray(geotransform_b), atol=atol):
+    if not np.allclose(
+        np.asarray(geotransform_a), np.asarray(geotransform_b), atol=atol
+    ):
         return False
     if projection_a == projection_b:
         return True
@@ -587,7 +609,12 @@ def _bounds_from_grid(
         )
     far_x = origin_x + width * pixel_width
     far_y = origin_y + height * pixel_height
-    return (min(origin_x, far_x), min(origin_y, far_y), max(origin_x, far_x), max(origin_y, far_y))
+    return (
+        min(origin_x, far_x),
+        min(origin_y, far_y),
+        max(origin_x, far_x),
+        max(origin_y, far_y),
+    )
 
 
 def _mem_dataset(
@@ -1191,7 +1218,9 @@ def run_sar_segmentation(
             ordered_paths = [paths[polarization] for polarization in required]
             prediction = segment_scene(ordered_paths, spec, session=session)
 
-            valid_fraction = float(prediction.valid.mean()) if prediction.valid.size else 0.0
+            valid_fraction = (
+                float(prediction.valid.mean()) if prediction.valid.size else 0.0
+            )
             logger.info("%s: %.1f%% of pixels are valid", stem, 100.0 * valid_fraction)
 
             save_prediction_png(prediction, spec, png_path)
