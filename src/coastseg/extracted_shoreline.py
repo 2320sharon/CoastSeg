@@ -185,7 +185,7 @@ def warn_if_sar_falls_back_to_otsu(settings: dict, metadata: dict) -> bool:
 def report_sar_segmentation_methods(output: dict) -> Dict[str, int]:
     """Report how many S1 shorelines the model segmented and how many Otsu thresholded.
 
-    The pre-flight check in :func:`warn_if_sar_falls_back_to_otsu` cannot see a *per
+    The pre-flight check in `warn_if_sar_falls_back_to_otsu` cannot see a *per
     scene* fallback -- coastsat also drops to Otsu for an individual scene it cannot
     segment, such as a legacy single-polarization one -- so tally what actually happened
     once the run is over. This is the honest record of how the shorelines were produced.
@@ -716,7 +716,7 @@ def get_band_order_from_meta(meta_info: Dict[str, Union[str, int, float]]) -> Li
 
     Args:
         meta_info (Dict[str, Union[str, int, float]]): Parsed contents of a metadata
-            .txt file, as returned by :func:`read_metadata_file`.
+            .txt file, as returned by `read_metadata_file`.
 
     Returns:
         List[str]: Polarizations in the order they are stacked, or ``[]`` when the file

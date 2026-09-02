@@ -658,6 +658,8 @@ class CoastSeg_Map:
         model: str = "FES2022",
         tides_file: str = "",
         use_progress_bar: bool = True,
+        tide_model_layout: str = "auto",
+        tide_model_location: str = "",
     ) -> None:
         """
         Computes tidal corrections for the specified region of interest (ROI) IDs.
@@ -684,6 +686,16 @@ class CoastSeg_Map:
                     - CSV file containing tide data with columns 'dates', 'latitude', 'longitude', and 'tide'.
                     - CSV file containing the transect ids are the columns and the dates as the row indices
             use_progress_bar (bool, optional): If True, display a progress bar. Defaults to True.
+
+            tide_model_layout (str, optional): Which on-disk layout of the tide model to read.
+                - "auto" (default): the un-clipped model, falling back to the legacy
+                  clipped region0..region10 layout when that is all that is installed.
+                - "unclipped": the un-clipped model, raising if it is not installed.
+                - "clipped": the legacy clipped regions, raising if they are not installed.
+
+            tide_model_location (str, optional): Folder holding the tide model. Defaults to "",
+                meaning CoastSeg/tide_model. Point it at the folder that holds
+                region0..region10 when a clipped model was built somewhere else.
         Returns:
             None
         """
@@ -706,6 +718,8 @@ class CoastSeg_Map:
                 only_keep_points_on_transects=only_keep_points_on_transects,
                 model=model,
                 tides_file=tides_file,
+                tide_model_layout=tide_model_layout,
+                tide_model_location=tide_model_location,
             )
         except Exception as e:
             if self.map is not None:
@@ -745,9 +759,7 @@ class CoastSeg_Map:
         """
         if settings and isinstance(settings, dict):
             return get_metadata(settings)
-        elif (
-            ids
-        ):  # Alternatively loop through each ROI ID and load metadata from that ROI's settings
+        elif ids:  # Alternatively loop through each ROI ID and load metadata from that ROI's settings
             for roi_id in ids:
                 # if the ROI directory did not exist then print a warning and proceed
                 try:
@@ -1014,7 +1026,9 @@ class CoastSeg_Map:
         for feature_name, columns in feature_types.items():
             # collect all the features of the same type into a single geodataframe
             feature_gdf = self.collect_features(
-                gdf, feature_names[feature_name], columns  # type: ignore
+                gdf,
+                feature_names[feature_name],
+                columns,  # type: ignore
             )  # type: ignore
 
             if feature_gdf.empty:
@@ -1830,7 +1844,7 @@ class CoastSeg_Map:
             "sar_water_threshold": 0.5,
             # "" means let coastsat resolve the default model, which it downloads from
             # Hugging Face into its pooch cache on first use. When set, it is stored
-            # relative to the CoastSeg directory -- see common.relativize_sar_model_path.
+            # relative to the CoastSeg directory see common.relativize_sar_model_path.
             "sar_model_path": "",
             "coastseg_version": __version__,
         }

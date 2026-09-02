@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -209,8 +210,124 @@ def test_get_seaward_points_gdf_diff_crs():
         list(seaward_points_gdf.loc[0, "geometry"].coords)[0]
         == list(transects.loc[0, "geometry"].coords)[1]
     )
-    # assert seaward_points_gdf.loc[1, "geometry"] == Point( -75.16862696046286,
-    #         38.11274239609162)
+
+
+def _transects(*entries) -> gpd.GeoDataFrame:
+    """Build a transect frame from (id, geometry) pairs."""
+    return gpd.GeoDataFrame(
+        {"id": [e[0] for e in entries], "geometry": [e[1] for e in entries]},
+        crs="epsg:4326",
+    )
+
+
+def test_seaward_point_is_the_last_vertex_not_the_second():
+    """A transect with an intermediate vertex must not be cut short at vertex 2."""
+    transects = _transects(
+        (
+            "multi_vertex",
+            LineString([(-75.70, 36.10), (-75.69, 36.10), (-75.60, 36.10)]),
+        )
+    )
+
+    result = common.get_seaward_points_gdf(transects)
+
+    assert len(result) == 1
+    assert result.loc[0, "geometry"] == Point(-75.60, 36.10)
+    # the second vertex is the seaward point only by coincidence on 2-vertex lines
+    assert result.loc[0, "geometry"] != Point(-75.69, 36.10)
+
+
+def test_two_vertex_transects_are_unaffected():
+    """The last-vertex rule is identical to the old behaviour for 2-vertex lines."""
+    transects = _transects(
+        ("a", LineString([(0, 0), (1, 1)])),
+        ("b", LineString([(1, 1), (2, 2)])),
+    )
+
+    result = common.get_seaward_points_gdf(transects)
+
+    assert result["geometry"].tolist() == [Point(1, 1), Point(2, 2)]
+
+
+def test_a_contiguous_multilinestring_transect_is_merged():
+    """transects.py accepts MultiLineString, so end-to-end parts must resolve."""
+    transects = _transects(
+        ("joined", MultiLineString([[(0, 0), (1, 1)], [(1, 1), (2, 2)]]))
+    )
+
+    result = common.get_seaward_points_gdf(transects)
+
+    assert len(result) == 1
+    assert result.loc[0, "geometry"] == Point(2, 2)
+
+
+def test_a_disjoint_multilinestring_transect_is_skipped_and_reported(caplog):
+    """Disjoint parts survive linemerge, and have no single seaward end to take.
+
+    Guessing one would put the tide somewhere else along the transect without
+    saying so, which is the failure this whole guard exists to prevent.
+    """
+    transects = _transects(
+        ("split", MultiLineString([[(0, 0), (1, 1)], [(5, 5), (6, 6)]]))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="coastseg.common"):
+        result = common.get_seaward_points_gdf(transects)
+
+    assert result.empty
+    assert "split" in caplog.text and "disjoint" in caplog.text
+
+
+def test_an_empty_transect_geometry_is_skipped_and_reported(caplog):
+    """An empty geometry used to become POINT EMPTY and crash on .x downstream."""
+    transects = _transects(("empty", LineString([])))
+
+    with caplog.at_level(logging.WARNING, logger="coastseg.common"):
+        result = common.get_seaward_points_gdf(transects)
+
+    assert result.empty
+    assert "empty" in caplog.text
+
+
+def test_a_non_line_transect_is_skipped_and_reported(caplog):
+    """Anything that is not a line has no landward-to-seaward direction."""
+    transects = _transects(("area", Polygon([(0, 0), (1, 0), (1, 1)])))
+
+    with caplog.at_level(logging.WARNING, logger="coastseg.common"):
+        result = common.get_seaward_points_gdf(transects)
+
+    assert result.empty
+    assert "area" in caplog.text
+
+
+def test_one_unusable_transect_does_not_take_the_usable_ones_with_it():
+    """The whole point: a single bad transect must not lose the other 100+."""
+    transects = _transects(
+        ("good1", LineString([(-75.70, 36.10), (-75.60, 36.10)])),
+        ("empty", LineString([])),
+        ("split", MultiLineString([[(0, 0), (1, 1)], [(5, 5), (6, 6)]])),
+        ("good2", LineString([(-75.70, 36.20), (-75.69, 36.20), (-75.61, 36.20)])),
+    )
+
+    result = common.get_seaward_points_gdf(transects)
+
+    assert result["transect_id"].tolist() == ["good1", "good2"]
+    assert result["geometry"].tolist() == [Point(-75.60, 36.10), Point(-75.61, 36.20)]
+    # a fresh 0..n-1 index, which perform_spatial_join's antimeridian retry needs
+    assert result.index.tolist() == [0, 1]
+
+
+def test_all_transects_unusable_still_returns_a_frame_with_its_schema():
+    """Callers index 'transect_id' straight away, so the empty frame needs columns."""
+    transects = _transects(("empty", LineString([])))
+
+    result = common.get_seaward_points_gdf(transects)
+
+    assert result.empty
+    assert result.columns.tolist() == ["transect_id", "geometry"]
+    assert result.crs == "epsg:4326"
+    # this is what used to raise KeyError on a column-less empty frame
+    assert result["transect_id"].tolist() == []
 
 
 def test_order_linestrings_gdf_empty():
@@ -227,9 +344,9 @@ def test_order_linestrings_gdf_single_linestring():
     result = common.order_linestrings_gdf(gdf)
     expected_line = common.create_complete_line_string(points)
     assert len(result) == 1, "Expected one linestring in the result"
-    assert result.iloc[0].geometry.equals(
-        expected_line
-    ), "The geometry of the linestring is incorrect"
+    assert result.iloc[0].geometry.equals(expected_line), (
+        "The geometry of the linestring is incorrect"
+    )
     assert result.iloc[0].date == "2023-01-01", "The date is incorrect"
 
 
@@ -247,12 +364,12 @@ def test_order_linestrings_gdf_multiple_linestrings():
     expected_line1 = common.create_complete_line_string(points1)
     expected_line2 = common.create_complete_line_string(points2)
     assert len(result) == 2, "Expected two linestrings in the result"
-    assert result.iloc[0].geometry.equals(
-        expected_line1
-    ), "The geometry of the first linestring is incorrect"
-    assert result.iloc[1].geometry.equals(
-        expected_line2
-    ), "The geometry of the second linestring is incorrect"
+    assert result.iloc[0].geometry.equals(expected_line1), (
+        "The geometry of the first linestring is incorrect"
+    )
+    assert result.iloc[1].geometry.equals(expected_line2), (
+        "The geometry of the second linestring is incorrect"
+    )
     assert result.iloc[0].date == "2023-01-01", "The first date is incorrect"
     assert result.iloc[1].date == "2023-01-02", "The second date is incorrect"
 
@@ -265,9 +382,9 @@ def test_order_linestrings_gdf_duplicate_points():
     result = common.order_linestrings_gdf(gdf)
     expected_line = common.create_complete_line_string(points)
     assert len(result) == 1, "Expected one linestring in the result"
-    assert result.iloc[0].geometry.equals(
-        expected_line
-    ), "The geometry of the linestring is incorrect"
+    assert result.iloc[0].geometry.equals(expected_line), (
+        "The geometry of the linestring is incorrect"
+    )
     assert result.iloc[0].date == "2023-01-01", "The date is incorrect"
 
 
@@ -289,9 +406,9 @@ def test_multiple_points_straight_line():
     result = common.create_complete_line_string(points)
     assert isinstance(result, LineString), "Expected LineString for multiple points"
     expected_coords = [(0, 0), (1, 1), (2, 2)]
-    assert (
-        list(result.coords) == expected_coords
-    ), "Expected coordinates to be in a straight line"
+    assert list(result.coords) == expected_coords, (
+        "Expected coordinates to be in a straight line"
+    )
 
 
 def test_multiple_points_non_straight_line():
@@ -299,9 +416,9 @@ def test_multiple_points_non_straight_line():
     result = common.create_complete_line_string(points)
     assert isinstance(result, LineString), "Expected LineString for multiple points"
     expected_coords = [(0, 0), (1, 1), (2, 2), (3, 3)]
-    assert (
-        list(result.coords) == expected_coords
-    ), "Expected coordinates to be in a sorted line"
+    assert list(result.coords) == expected_coords, (
+        "Expected coordinates to be in a sorted line"
+    )
 
 
 def test_duplicate_points():
@@ -309,9 +426,9 @@ def test_duplicate_points():
     result = common.create_complete_line_string(points)
     assert isinstance(result, LineString), "Expected LineString for multiple points"
     expected_coords = [(0, 0), (1, 1), (2, 2)]
-    assert (
-        list(result.coords) == expected_coords
-    ), "Expected coordinates to be unique and sorted"
+    assert list(result.coords) == expected_coords, (
+        "Expected coordinates to be unique and sorted"
+    )
 
 
 def test_get_missing_roi_dirs():
@@ -1561,9 +1678,9 @@ def test_filter_metadata(
     )
     result = common.filter_metadata_with_dates(sample_metadata, directory, "jpg")
 
-    assert (
-        result == expected_filtered_metadata
-    ), "The output filtered metadata is not as expected."
+    assert result == expected_filtered_metadata, (
+        "The output filtered metadata is not as expected."
+    )
 
 
 @pytest.mark.parametrize("empty_ROI_directory", ["site1"], indirect=True)
@@ -1579,9 +1696,9 @@ def test_empty_roi_directory_filter_metadata(
     )
     result = common.filter_metadata_with_dates(sample_metadata, directory, "jpg")
 
-    assert (
-        result == expected_empty_filtered_metadata
-    ), "The output filtered metadata is not as expected."
+    assert result == expected_empty_filtered_metadata, (
+        "The output filtered metadata is not as expected."
+    )
 
     # should raise an error if the RGB directory within the ROI directory does not exist
     with pytest.raises(Exception):
@@ -1616,9 +1733,9 @@ def test_preprocess_geodataframe():
         {"foo": [1, 2, 3], "geometry": [None, None, None]}
     )
     result = common.preprocess_geodataframe(data_without_id, create_ids=False)
-    assert (
-        "id" not in result.columns
-    ), "Column 'id' should be added when it does not exist."
+    assert "id" not in result.columns, (
+        "Column 'id' should be added when it does not exist."
+    )
 
     # Test when columns_to_keep is specified
     data_with_extra_columns = gpd.GeoDataFrame(
@@ -1626,9 +1743,9 @@ def test_preprocess_geodataframe():
     )
     columns_to_keep = ["id", "geometry"]
     result = common.preprocess_geodataframe(data_with_extra_columns, columns_to_keep)
-    assert set(result.columns) == set(
-        columns_to_keep
-    ), "Only specified columns should be kept."
+    assert set(result.columns) == set(columns_to_keep), (
+        "Only specified columns should be kept."
+    )
 
 
 # Test for remove_z_coordinates function
@@ -1641,9 +1758,9 @@ def test_remove_z_coordinates():
     # Test when geodf contains geometries with z coordinates
     data_with_z = gpd.GeoDataFrame({"geometry": [Point(1, 2, 3), Point(4, 5, 6)]})
     result = common.remove_z_coordinates(data_with_z)
-    assert not any(
-        geom.has_z for geom in result.geometry
-    ), "All z coordinates should be removed."
+    assert not any(geom.has_z for geom in result.geometry), (
+        "All z coordinates should be removed."
+    )
 
     # Test when geodf contains MultiLineStrings
     data_with_multilinestrings = gpd.GeoDataFrame(
@@ -1652,9 +1769,9 @@ def test_remove_z_coordinates():
         }
     )
     result = common.remove_z_coordinates(data_with_multilinestrings)
-    assert all(
-        isinstance(geom, LineString) for geom in result.geometry
-    ), "All MultiLineStrings should be exploded into LineStrings."
+    assert all(isinstance(geom, LineString) for geom in result.geometry), (
+        "All MultiLineStrings should be exploded into LineStrings."
+    )
 
 
 def test_get_transect_points_dict(valid_transects_gdf):
@@ -2955,3 +3072,144 @@ class TestWorkflowIntegration:
         first_roi_id = valid_rois_gdf.iloc[0]["id"]
         polygon_coords = common.get_roi_polygon(valid_rois_gdf, first_roi_id)
         assert polygon_coords is not None
+
+
+def test_shore_points_match_transect_ids_across_dtypes():
+    """Regression: the geojson's 'id' keeps whatever type it was written with, while
+    the timeseries carries transect ids as text. An integer-id transects file matched
+    nothing, so every shore_x/shore_y stayed NaN and the corrected geojson outputs
+    came out geometry-less without a warning.
+    """
+    from shapely.geometry import LineString
+
+    transects = gpd.GeoDataFrame(
+        {"id": [1, 2]},
+        geometry=[
+            LineString([(-75.60, 36.10), (-75.59, 36.11)]),
+            LineString([(-75.50, 36.20), (-75.49, 36.21)]),
+        ],
+        crs="epsg:4326",
+    )
+    timeseries = pd.DataFrame(
+        {
+            "dates": pd.to_datetime(["2021-01-01"] * 2, utc=True),
+            "transect_id": ["1", "2"],
+            "cross_distance": [10.0, 20.0],
+        }
+    )
+
+    result = common.add_shore_points_to_timeseries(timeseries.copy(), transects)
+
+    assert result["shore_x"].notna().all()
+    assert result["shore_y"].notna().all()
+
+
+def test_shore_points_still_match_when_both_sides_are_strings():
+    """The dtype fix must not break the ordinary case."""
+    from shapely.geometry import LineString
+
+    transects = gpd.GeoDataFrame(
+        {"id": ["usa_CA_0001"]},
+        geometry=[LineString([(-120.50, 35.20), (-120.49, 35.21)])],
+        crs="epsg:4326",
+    )
+    timeseries = pd.DataFrame(
+        {
+            "dates": pd.to_datetime(["2021-01-01"], utc=True),
+            "transect_id": ["usa_CA_0001"],
+            "cross_distance": [10.0],
+        }
+    )
+
+    result = common.add_shore_points_to_timeseries(timeseries.copy(), transects)
+
+    assert result["shore_x"].notna().all()
+
+
+def test_rows_without_a_shoreline_position_are_left_out_of_the_geometry():
+    """Tide correction now keeps observations it could not correct, with a NaN
+    cross_distance and so a NaN shore_x/shore_y. A NaN coordinate is not a location:
+    Point(NaN, NaN) is an invalid geometry that GDAL writes as "geometry": null.
+    """
+    df = pd.DataFrame(
+        {
+            "dates": pd.to_datetime(["2021-01-01"] * 2, utc=True),
+            "transect_id": ["t1", "t2"],
+            "cross_distance": [35.0, np.nan],
+            "shore_x": [-75.5997, np.nan],
+            "shore_y": [36.1002, np.nan],
+        }
+    )
+
+    gdf = common.create_merged_timeseries_gdf(df)
+
+    assert len(gdf) == 1
+    assert gdf["transect_id"].tolist() == ["t1"]
+    assert gdf.geometry.is_valid.all()
+
+
+def test_the_points_geojson_has_no_null_geometry(tmp_path):
+    df = pd.DataFrame(
+        {
+            "dates": pd.to_datetime(["2021-01-01"] * 2, utc=True),
+            "transect_id": ["t1", "t2"],
+            "cross_distance": [35.0, np.nan],
+            "shore_x": [-75.5997, np.nan],
+            "shore_y": [36.1002, np.nan],
+        }
+    )
+    gdf = common.create_merged_timeseries_gdf(df)
+
+    common.save_timeseries_points_as_geojson(gdf, "tidally_corrected", str(tmp_path))
+
+    written = gpd.read_file(
+        tmp_path / "tidally_corrected_transect_time_series_points.geojson"
+    )
+    assert len(written) == 1
+    assert int(written.geometry.isna().sum()) == 0
+
+
+def test_uncorrectable_rows_are_not_recorded_as_off_transect(tmp_path):
+    """Regression: a NaN geometry scored as "outside the transect", so an observation
+    that was never geometrically tested landed in dropped_points_time_series.csv under
+    a reason that had nothing to do with why it failed -- and was then deleted from the
+    merged CSV by the filter that reads that file."""
+    from shapely.geometry import LineString
+
+    transects = gpd.GeoDataFrame(
+        {"id": ["t1", "t2"]},
+        geometry=[
+            LineString([(-75.6000, 36.1000), (-75.5990, 36.1010)]),
+            LineString([(-75.5000, 36.2000), (-75.4990, 36.2010)]),
+        ],
+        crs="epsg:4326",
+    )
+    merged = pd.DataFrame(
+        {
+            "dates": pd.to_datetime(["2021-01-01"] * 2, utc=True),
+            "transect_id": ["t1", "t2"],
+            "cross_distance": [35.0, np.nan],
+            "tide": [0.5, np.nan],
+            "shore_x": [-75.59975, np.nan],
+            "shore_y": [36.10024, np.nan],
+        }
+    )
+    matrix = pd.DataFrame(
+        {
+            "dates": pd.to_datetime(["2021-01-01"], utc=True),
+            "t1": [35.0],
+            "t2": [np.nan],
+        }
+    )
+
+    kept_merged, _ = common.filter_points_not_on_transects(
+        merged, matrix, transects, str(tmp_path), "tidally_corrected"
+    )
+
+    dropped = pd.read_csv(tmp_path / "tidally_corrected_dropped_points_time_series.csv")
+    assert "t2" not in set(dropped.get("transect_id", [])), (
+        "an uncorrectable observation was recorded as off-transect"
+    )
+    assert "t2" in set(kept_merged["transect_id"]), (
+        "an uncorrectable observation was deleted from the merged output"
+    )
