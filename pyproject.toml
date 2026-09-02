@@ -103,6 +103,7 @@ scikit-image = "*"
 # pyTMD 3 runtime dependencies. pytmd itself still comes from PyPI (see note above),
 # but these are better as conda-forge builds and pixi lets them satisfy pytmd's PyPI requirements.
 h5netcdf = "*"
+netcdf4 = "*"
 lxml = "*"
 pint = "*"
 platformdirs = "*"
