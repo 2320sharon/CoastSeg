@@ -180,6 +180,29 @@ class UI:
             style={"description_width": "initial"},
         )
 
+        # create dropdown to select how Sentinel-1 land/water is segmented
+        sar_segmentation_dropdown = widgets.Dropdown(
+            options=[
+                ("Segmentation model (recommended)", "model"),
+                ("Otsu threshold", "otsu"),
+            ],
+            value="model",
+            description="sar_segmentation :",
+            disabled=False,
+            style={"description_width": "initial"},
+        )
+
+        # create slider to select the P(water) cutoff used by the SAR model
+        sar_water_threshold_slider = widgets.FloatSlider(
+            description="SAR Water Threshold",
+            value=0.5,
+            min=0.05,
+            max=0.95,
+            step=0.05,
+            readout_format=".2f",
+            style={"description_width": "initial"},
+        )
+
         # create toggle to select cloud mask issue
         cloud_mask_issue = widgets.ToggleButtons(
             options=["False", "True"],
@@ -228,6 +251,27 @@ class UI:
             "cloud_mask_issue",
             "Cloud Mask Issue",
             "Switch to True if sand pixels are masked (in black) on many images",
+            advanced=True,
+            index=-1,
+        )
+
+        settings_dashboard.add_custom_widget(
+            sar_segmentation_dropdown,
+            "sar_segmentation",
+            "SAR Segmentation Method",
+            "Sentinel-1 only. 'Segmentation model' runs the trained land/water model. "
+            "'Otsu threshold' reverts to thresholding the imagery, which is what CoastSeg "
+            "did before the model existed.",
+            advanced=True,
+            index=-1,
+        )
+        settings_dashboard.add_custom_widget(
+            sar_water_threshold_slider,
+            "sar_water_threshold",
+            "SAR Water Threshold",
+            "Sentinel-1 only, and only when the segmentation model is used. A pixel is "
+            "water when the model's probability reaches this value. Raise it for higher "
+            "precision on water, lower it to catch more.",
             advanced=True,
             index=-1,
         )

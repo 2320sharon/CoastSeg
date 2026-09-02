@@ -1,5 +1,10 @@
 # How to Run the Segmentation Workflow
 
+> **Sentinel-1 (SAR) is not run from here.** This workflow is for the optical
+> SegFormer models only. The SAR model is ONNX and runs in the main CoastSeg
+> environment — use `4_zoo_workflow_SAR.py` from the repository root. See
+> `run_SAR_model.txt` in this directory.
+
 ## 1. Install the Environment
 
 Choose one option.

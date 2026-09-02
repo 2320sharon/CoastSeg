@@ -1,4 +1,5 @@
 # Standard library imports
+import copy
 import glob
 import json
 import logging
@@ -43,6 +44,9 @@ from requests.exceptions import SSLError
 from shapely.geometry import LineString, MultiPoint, Point, Polygon, shape
 from shapely.ops import transform
 from tqdm.auto import tqdm
+
+from coastsat.SDS_download import DEFAULT_SENTINEL_1_PROPERTIES
+from coastsat.SDS_tools import SAR_POLARIZATIONS
 
 # Internal dependencies imports
 from coastseg import core_utilities, exceptions, file_utilities
@@ -396,6 +400,14 @@ def extract_roi_settings(
             "sat_list",
             "landsat_collection",
             "filepath",
+            # without these two, reloading a config silently drops them and the
+            # download falls back to coastsat's internal defaults
+            "sentinel_1_properties",
+            "include_T2",
+            # Sentinel-1 segmentation controls, read by coastsat's SDS_shoreline
+            "sar_segmentation",
+            "sar_water_threshold",
+            "sar_model_path",
         }
     if not roi_ids:
         roi_ids = json_data.get("roi_ids", [])
@@ -479,6 +491,80 @@ def get_missing_roi_dirs(
             missing_directories[roi_id] = sitename
 
     return missing_directories
+
+
+def get_default_sentinel_1_properties() -> Dict[str, Any]:
+    """Return the default Sentinel-1 acquisition properties.
+
+    VV and VH are both requested: the SAR segmentation model takes VV, VH and their
+    difference as its three channels, so a VH-only site cannot be segmented. A fresh
+    copy is returned each call so a caller storing it per ROI cannot alias the global.
+
+    Returns:
+        Dict[str, Any]: Sentinel-1 properties, including the requested polarizations.
+    """
+    return copy.deepcopy(dict(DEFAULT_SENTINEL_1_PROPERTIES))
+
+
+def relativize_sar_model_path(sar_model_path: str = "") -> str:
+    """Store a SAR model path relative to the CoastSeg base directory.
+
+    ``config.json`` and session folders get copied between machines. An absolute path
+    baked into one is dead everywhere else, and coastsat would then ``os.path.abspath``
+    a path that does not exist and fail to open the model. Storing it relative to the
+    CoastSeg directory keeps a session portable.
+
+    A path outside the CoastSeg tree cannot be made relative. It is kept verbatim rather
+    than rewritten silently changing a path the user typed is worse than an
+    unportable one  and a warning says so.
+
+    Args:
+        sar_model_path (str): Model path as supplied by the user. May be absolute,
+            relative, or empty.
+
+    Returns:
+        str: A path suitable for writing to ``config.json``, using POSIX separators so a
+        config written on Windows loads on Linux. Empty input returns empty, which means
+        "use coastsat's packaged model".
+    """
+    if not sar_model_path:
+        return ""
+
+    candidate = Path(sar_model_path)
+    if not candidate.is_absolute():
+        return candidate.as_posix()
+
+    try:
+        return candidate.relative_to(core_utilities.get_base_dir()).as_posix()
+    except ValueError:
+        logger.warning(
+            f"sar_model_path {sar_model_path} is outside the CoastSeg directory, so it "
+            "cannot be stored relatively. This session will not load on another machine."
+        )
+        return candidate.as_posix()
+
+
+def resolve_sar_model_path(sar_model_path: str = "") -> str:
+    """Turn a stored SAR model path into one coastsat can open.
+
+    The inverse of :func:`relativize_sar_model_path`. Relative paths resolve against the
+    CoastSeg base directory, *not* the current working directory  coastsat applies
+    ``os.path.abspath`` to whatever it receives, which would otherwise silently resolve
+    against wherever the notebook happens to be running.
+
+    Args:
+        sar_model_path (str): Model path as stored in the settings.
+
+    Returns:
+        str: An absolute path, or ``""`` to let coastsat fall back to its packaged model.
+    """
+    if not sar_model_path:
+        return ""
+
+    candidate = Path(sar_model_path)
+    if candidate.is_absolute():
+        return str(candidate)
+    return str(Path(core_utilities.get_base_dir()) / candidate)
 
 
 def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict:
@@ -585,11 +671,20 @@ def extract_dates_and_sats(
     dates_list = []
     sat_list = []
     for criteria in selected_items:
-        satname, dates = criteria.split("_")
+        try:
+            satname, dates = criteria.split(
+                "_", 1
+            )  # split only on the first underscore to allow for satellite names that contain underscores eg L8_SR_2021-01-01 00:00:00 becomes  satname = L8_SR and dates = 2021-01-01 00:00:00
+            date_obj = datetime.strptime(dates, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+        except (ValueError, AttributeError) as e:
+            logger.warning(
+                "Skipping invalid item %r in extract_dates_and_sats: %s", criteria, e
+            )
+            continue
         sat_list.append(satname)
-        dates_list.append(
-            datetime.strptime(dates, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        )
+        dates_list.append(date_obj)
     return dates_list, sat_list
 
 
@@ -659,6 +754,7 @@ def update_extracted_shorelines_dict_transects_dict(
     Args:
         session_path (str): The path to the session directory.
         filename (str): The name of the JSON file containing the extracted shorelines data.
+            This file is expected to be located in the session_path directory and should contain the extracted shorelines data in a format that can be processed into nested arrays.
         dates_list (List[datetime]): A list of dates to filter the extracted shorelines data.
         sat_list (List[str]): A list of satellite identifiers to filter the extracted shorelines data.
     """
@@ -671,7 +767,7 @@ def update_extracted_shorelines_dict_transects_dict(
         if extracted_shorelines_dict is not None:
             # Get the indexes of the selected items in the extracted_shorelines_dict
             selected_indexes = get_selected_indexes(
-                extracted_shorelines_dict,
+                extracted_shorelines_dict,  # type: ignore
                 dates_list,
                 sat_list,  # type: ignore
             )
@@ -776,6 +872,10 @@ def load_settings(
         "min_chainage",
         "multiple_inter",
         "prc_multiple",
+        "sentinel_1_properties",
+        "sar_segmentation",
+        "sar_water_threshold",
+        "sar_model_path",
     },
     new_settings: dict = {},
 ) -> dict:
@@ -841,6 +941,18 @@ def update_roi_settings_with_global_settings(
     updated_roi_settings = update_roi_settings(
         updated_roi_settings, "min_roi_coverage", min_roi_coverage
     )
+
+    # Sentinel-1 polarizations. add_if_missing=True is required: ROI settings saved
+    # before multi-polarization support have no such key, and update_roi_settings skips
+    # keys that are absent, so those ROIs would stay VH-only forever.
+    sentinel_1_properties = global_settings.get("sentinel_1_properties")
+    if sentinel_1_properties:
+        updated_roi_settings = update_roi_settings(
+            updated_roi_settings,
+            "sentinel_1_properties",
+            copy.deepcopy(sentinel_1_properties),
+            add_if_missing=True,
+        )
 
     return updated_roi_settings
 
@@ -912,7 +1024,6 @@ def get_selected_indexes(
     data_dict.setdefault("satname", [])
     # Convert dictionary to DataFrame
     df = pd.DataFrame(data_dict)
-    print(f"df['dates'] : {df['dates']}")
 
     # Initialize an empty list to store selected indexes
     selected_indexes = []
@@ -920,10 +1031,8 @@ def get_selected_indexes(
     # Iterate over dates and satellite names, and get the index of the first matching row
     for date, sat in zip(dates_list, sat_list):
         match = df[(df["dates"] == date) & (df["satname"] == sat)]
-        print(f"match: {match}")
         if not match.empty:
             selected_indexes.append(match.index[0])
-            print(f"selected_indexes: {selected_indexes}")
 
     return selected_indexes
 
@@ -1009,7 +1118,9 @@ def filter_images_by_roi(roi_settings: Dict[str, Any]) -> None:
             logger.warning(f"Could not filter {ROI_jpg_location} did not exist")
             continue
         roi_gdf = gpd.GeoDataFrame(index=[0], geometry=[polygon], crs="EPSG:4326")
-        bad_images = filter_partial_images(roi_gdf, ROI_jpg_location)
+        bad_images = filter_partial_images(
+            roi_gdf, ROI_jpg_location, roi_directory=roi_location
+        )
         logger.info(f"Partial images filtered out: {bad_images}")
 
 
@@ -1058,6 +1169,7 @@ def filter_partial_images(
     directory: str,
     min_area_percentage: float = 0.40,
     max_area_percentage: float = 1.5,
+    roi_directory: str = "",
 ):
     """
     Filters images in a directory based on their area with respect to the area of the Region of Interest (ROI).
@@ -1086,8 +1198,11 @@ def filter_partial_images(
     """
     # low and high range are in km
     roi_area = get_roi_area(roi_gdf)
-    filter_images(
-        roi_area * min_area_percentage, roi_area * max_area_percentage, directory
+    return filter_images(
+        roi_area * min_area_percentage,
+        roi_area * max_area_percentage,
+        directory,
+        roi_directory=roi_directory,
     )
 
 
@@ -1139,7 +1254,11 @@ def get_satellite_name(filename: str) -> Optional[str]:
 
 
 def filter_images(
-    min_area: float, max_area: float, directory: str, output_directory: str = ""
+    min_area: float,
+    max_area: float,
+    directory: str,
+    output_directory: str = "",
+    roi_directory: str = "",
 ) -> List[str]:
     """
     Filters images in a given directory based on a range of acceptable areas and moves the filtered out
@@ -1156,6 +1275,10 @@ def filter_images(
         output_directory (str): The path to the directory where the bad images will be moved.
                                          If not provided, a new directory named 'bad' will be created
                                          inside the given directory.
+        roi_directory (str): The ROI's data directory, holding the per-satellite GeoTIFF
+                                         folders. When given, each scene's area is measured from its
+                                         GeoTIFF rather than its preview jpg. Required for Sentinel-1,
+                                         whose preview is a matplotlib figure and not a raster.
 
     Returns:
         List[str]: List of bad files that were moved.
@@ -1200,8 +1323,20 @@ def filter_images(
             continue
 
         filepath = os.path.join(directory, file)
-        # Calculate the area of the jpg
-        img_area = calculate_image_area(filepath, pixel_size_per_satellite[satname])
+        # Measure area using the GeoTIFF but not for S1
+        raster = find_source_raster(file, roi_directory)
+        if raster:
+            img_area = calculate_raster_area(raster, pixel_size_per_satellite[satname])
+        elif satname == "S1":
+            # if there is no tif to measure area then skip area calculation for S1
+            logger.warning(
+                f"No GeoTIFF found for {file}; skipping the size filter for it. "
+                "The Sentinel-1 preview is a figure, so its area cannot be measured."
+            )
+            continue
+        else:
+            img_area = calculate_image_area(filepath, pixel_size_per_satellite[satname])
+
         if img_area < min_area or (max_area is not None and img_area > max_area):
             bad_files.append(file)
 
@@ -1215,6 +1350,9 @@ def calculate_image_area(filepath: str, pixel_size: int) -> float:  #
     """
     Calculate the area of an image in square kilometers.
 
+    Only valid for a preview whose pixels are the raster's pixels. Sentinel-1 previews are
+    matplotlib figures, so use :func:`calculate_raster_area` on the GeoTIFF instead.
+
     Args:
         filepath (str): The path to the image file.
         pixel_size (int): The size of a pixel in the image in meters.
@@ -1227,6 +1365,88 @@ def calculate_image_area(filepath: str, pixel_size: int) -> float:  #
         img_area = width * pixel_size * height * pixel_size
         img_area /= 1e6  # convert to square kilometers
     return img_area
+
+
+def calculate_raster_area(filepath: str, pixel_size: Optional[float] = None) -> float:
+    """
+    Calculate the ground area a GeoTIFF covers, in square kilometers.
+
+    The pixel size is read from the raster's own geotransform, so no per-satellite table
+    can go stale. ``pixel_size`` is only a fallback for a raster without a geotransform.
+
+    Args:
+        filepath (str): Path to the GeoTIFF.
+        pixel_size (Optional[float]): Metres per pixel to assume when the raster carries
+            no geotransform.
+
+    Returns:
+        float: Area in square kilometers, or 0.0 when the raster cannot be read.
+    """
+    from osgeo import gdal
+
+    gdal.UseExceptions()
+    try:
+        dataset = gdal.Open(filepath, gdal.GA_ReadOnly)
+    except Exception as e:
+        logger.warning(f"Could not open raster {filepath}: {e}")
+        return 0.0
+    if dataset is None:
+        logger.warning(f"Could not open raster {filepath}")
+        return 0.0
+
+    try:
+        width, height = dataset.RasterXSize, dataset.RasterYSize
+        geotransform = dataset.GetGeoTransform()
+        if geotransform:
+            x_size, y_size = abs(geotransform[1]), abs(geotransform[5])
+        else:
+            x_size = y_size = float(pixel_size or 0)
+        if not x_size or not y_size:
+            logger.warning(f"No pixel size available for {filepath}")
+            return 0.0
+        return (width * x_size) * (height * y_size) / 1e6
+    finally:
+        dataset = None
+
+
+def find_source_raster(jpg_filename: str, roi_directory: str) -> Optional[str]:
+    """
+    Locate the GeoTIFF a preprocessed RGB preview was made from.
+
+    The preview is only a proxy for the scene's footprint, and for Sentinel-1 it is not
+    even that  coastsat renders it as a titled matplotlib figure whose dimensions are
+    figsize times dpi, unrelated to the raster. The GeoTIFF is the authority.
+
+    Args:
+        jpg_filename (str): Preview filename, e.g. ``2023-05-06-02-07-48_RGB_S1.jpg``.
+        roi_directory (str): The ROI's data directory, which holds the per-satellite
+            folders (``S1/VV``, ``S2/ms``, ...).
+
+    Returns:
+        Optional[str]: Path to the matching GeoTIFF, or None when none is found.
+    """
+    if not roi_directory or not os.path.isdir(roi_directory):
+        return None
+
+    basename = os.path.basename(jpg_filename)
+    satname = get_satellite_name(basename)
+    if not satname:
+        return None
+    date = basename[:19]
+
+    if satname == "S1":
+        # one folder per polarization; any of them describes the scene's footprint
+        subdirectories = [os.path.join("S1", polar) for polar in SAR_POLARIZATIONS]
+    else:
+        subdirectories = [os.path.join(satname, "ms")]
+
+    for subdirectory in subdirectories:
+        matches = sorted(
+            glob.glob(os.path.join(roi_directory, subdirectory, f"{date}*.tif"))
+        )
+        if matches:
+            return matches[0]
+    return None
 
 
 def validate_geometry_types(
@@ -3648,6 +3868,9 @@ def create_roi_settings(
     sat_list = settings["sat_list"]
     landsat_collection = settings.get("landsat_collection", "C02")
     dates = settings["dates"]
+    sentinel_1_properties = settings.get("sentinel_1_properties") or (
+        get_default_sentinel_1_properties()
+    )
     for roi in selected_rois["features"]:
         roi_id = str(roi["properties"]["id"])
         sitename = (
@@ -3663,10 +3886,8 @@ def create_roi_settings(
             "sitename": sitename,
             "filepath": filepath,
             "include_T2": False,
-            "sentinel_1_properties": {
-                "transmitterReceiverPolarisation": ["VH"],
-                "instrumentMode": "IW",
-            },  # default sentinel 1 properties
+            # deepcopy so the ROIs do not share one mutable dict
+            "sentinel_1_properties": copy.deepcopy(sentinel_1_properties),
         }
         roi_settings[roi_id] = inputs_dict
     return roi_settings

@@ -388,7 +388,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
       - pypi: https://files.pythonhosted.org/packages/c3/1c/f06ad85180e7dd9855aa5ede901bfc2be858d7bee17d4e978a14c0ecec14/astropy-7.2.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/34/71/1ea5a7352ae516d5512d17babe7e1b87d9db5150b21f794b1377eac1edc0/cryptography-46.0.6-cp311-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -794,7 +794,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: https://files.pythonhosted.org/packages/b4/6d/6330a844bad8dfc4875e0f2fa1db1fee87837ba9805aa8a8d048c071363a/astropy-7.2.0-cp311-abi3-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/23/9285e15e3bc57325b0a72e592921983a701efc1ee8f91c06c5f0235d86d9/cryptography-46.0.6-cp311-abi3-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -1200,7 +1200,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/a6/ba/3418133ba144dfcd1530bca5a6b695f4cdd21a8abaaa2ac4e5450d11b028/astropy-7.2.0-cp311-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/23/9285e15e3bc57325b0a72e592921983a701efc1ee8f91c06c5f0235d86d9/cryptography-46.0.6-cp311-abi3-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -1600,7 +1600,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: https://files.pythonhosted.org/packages/ec/bc/f4378f586dd63902c37d16f68f35f7d555b3b32e08ac6b1d633eb0a48805/astropy-7.2.0-cp311-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c3/f8/c9bcbf0d3e6ad288b9d9aa0b1dee04b063d19e8c4f871855a03ab3a297ab/cryptography-46.0.6-cp311-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -2021,7 +2021,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
       - pypi: https://files.pythonhosted.org/packages/c3/1c/f06ad85180e7dd9855aa5ede901bfc2be858d7bee17d4e978a14c0ecec14/astropy-7.2.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/34/71/1ea5a7352ae516d5512d17babe7e1b87d9db5150b21f794b1377eac1edc0/cryptography-46.0.6-cp311-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -2431,7 +2431,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: https://files.pythonhosted.org/packages/b4/6d/6330a844bad8dfc4875e0f2fa1db1fee87837ba9805aa8a8d048c071363a/astropy-7.2.0-cp311-abi3-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/23/9285e15e3bc57325b0a72e592921983a701efc1ee8f91c06c5f0235d86d9/cryptography-46.0.6-cp311-abi3-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -2841,7 +2841,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/a6/ba/3418133ba144dfcd1530bca5a6b695f4cdd21a8abaaa2ac4e5450d11b028/astropy-7.2.0-cp311-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/23/9285e15e3bc57325b0a72e592921983a701efc1ee8f91c06c5f0235d86d9/cryptography-46.0.6-cp311-abi3-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -3244,7 +3244,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: https://files.pythonhosted.org/packages/ec/bc/f4378f586dd63902c37d16f68f35f7d555b3b32e08ac6b1d633eb0a48805/astropy-7.2.0-cp311-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/21/14/125eb772fc1e8985d4cdc46a7e81a61009eae02492ef62488c53245c9d9f/astropy_iers_data-0.2026.4.1.15.5.49-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/c3/f8/c9bcbf0d3e6ad288b9d9aa0b1dee04b063d19e8c4f871855a03ab3a297ab/cryptography-46.0.6-cp311-abi3-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/a5/97/446fdd7bd98dbaf6b8d255ea2d510862df42cdc6edad0888d07a4dc89711/earthengine_api-1.7.20-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/43/86/a00ea4596780ef3f0721c1f073c0c5ae992da4f35cf12f0d8c92d19267a6/google_api_core-2.30.1-py3-none-any.whl
@@ -5849,35 +5849,52 @@ packages:
   - pkg:pypi/cloudpickle?source=hash-mapping
   size: 27353
   timestamp: 1765303462831
-- pypi: https://files.pythonhosted.org/packages/15/d3/9b93e33a0664978d3692b05c2f75e68593dc936d81a328889a7a0f20fbf3/coastsat_package-0.4.6-py3-none-any.whl
+- pypi: https://files.pythonhosted.org/packages/bf/4b/0add87bcffd9f9a5d31b99a7c1d1cf70fa14d532a9e7cc760be7b76a5282/coastsat_package-0.5.0-py3-none-any.whl
   name: coastsat-package
-  version: 0.4.6
-  sha256: 682637a0fe2fc350bbbf1ac3850d0090c25fe74a3a74a929e85809e2a804b087
+  version: 0.5.0
+  sha256: 1a62414c42de45ed3f9c30c34e74ba8bf549fe671957e20e66a8876abc5e3312
   requires_dist:
-  - scikit-image
-  - earthengine-api>=0.1.304
-  - jupyterlab>=3.0.0
-  - geopandas
-  - matplotlib
   - astropy
-  - tqdm
-  - importlib-resources
-  - pyqt5
-  - scipy
-  - numpy
+  - earthengine-api>=0.1.304
+  - geopandas
+  - google-auth
   - imageio
+  - importlib-resources
+  - joblib
+  - matplotlib
+  - numpy>=2
+  - onnxruntime
+  - pandas
+  - pillow
+  - pooch
+  - pyqt5
+  - pytz
+  - requests
+  - scikit-image>=0.25
   - scikit-learn
-  requires_python: '>=3.8'
+  - scipy
+  - shapely
+  - tqdm
+  - ipykernel ; extra == 'notebook'
+  - jupyterlab>=3 ; extra == 'notebook'
+  - pytest>=8 ; extra == 'test'
+  - pytest-cov>=5 ; extra == 'test'
+  - build>=1.2 ; extra == 'dev'
+  - pytest>=8 ; extra == 'dev'
+  - pytest-cov>=5 ; extra == 'dev'
+  - ruff>=0.9 ; extra == 'dev'
+  - twine>=5 ; extra == 'dev'
+  requires_python: '>=3.10'
 - pypi: ./
   name: coastseg
-  version: 2.0.0
-  sha256: 3faed8aab3bbc5fa9c77004fbf87f3d8272dc6a73c47f92a187a2f41f4c9f162
+  version: 2.0.4
+  sha256: 73f502f4006a04757ef4b9fd86b397c0af9a78f44ed4b41d7dce6412ede6eb6f
   requires_dist:
   - aiohttp
   - onnxruntime
   - chardet
   - dask
-  - coastsat-package>=0.3.3
+  - coastsat-package>=0.5.0
   - geojson
   - geopandas
   - h5py

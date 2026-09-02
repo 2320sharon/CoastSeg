@@ -1541,3 +1541,219 @@ def triangle_polygon_gdf():
     return gpd.GeoDataFrame(
         geometry=[Polygon([(0, 0), (1, 1), (1, 0)])], crs="EPSG:4326"
     )
+
+
+# ---------------------------------------------------------------------------
+# Sentinel-1 / SAR fixtures
+# ---------------------------------------------------------------------------
+
+SAR_SCENE_DATE = "2023-05-01-04-26-29"
+SAR_SITENAME = "ID_test_datetime01-01-25__00_00_00"
+SAR_MODEL_DIR = os.path.join(
+    os.path.dirname(script_dir), "models", "SAR_segmentation_model"
+)
+
+
+def write_sar_tif(
+    path,
+    array,
+    nodata=-9999.0,
+    geotransform=(500000.0, 10.0, 0.0, 4000000.0, 0.0, -10.0),
+    epsg=32610,
+):
+    """Write a single-band float32 GeoTIFF with an explicit nodata value.
+
+    The nodata value matters: GDAL's mask band is derived from it, and an
+    all-valid mask would make the validity tests vacuous.
+    """
+    from osgeo import gdal, osr
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    dataset = gdal.GetDriverByName("GTiff").Create(
+        path, array.shape[1], array.shape[0], 1, gdal.GDT_Float32
+    )
+    dataset.SetGeoTransform(geotransform)
+    spatial_reference = osr.SpatialReference()
+    spatial_reference.ImportFromEPSG(epsg)
+    dataset.SetProjection(spatial_reference.ExportToWkt())
+    band = dataset.GetRasterBand(1)
+    band.SetNoDataValue(nodata)
+    band.WriteArray(array)
+    dataset = None
+    return path
+
+
+def build_sar_bands(height=50, width=70, nodata_rows=6, nodata=-9999.0):
+    """Return (vv, vh) dB arrays: low-backscatter water left, land right."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    columns = np.arange(width)[None, :]
+    vv = np.where(columns < width // 2, -22.0, -8.0) + rng.normal(0, 1.0, (height, width))
+    vh = np.where(columns < width // 2, -30.0, -15.0) + rng.normal(0, 1.0, (height, width))
+    if nodata_rows:
+        vv[-nodata_rows:, :] = nodata
+    return vv.astype("float32"), vh.astype("float32")
+
+
+@pytest.fixture
+def sar_scene_tifs(tmp_path):
+    """A dual-polarization Sentinel-1 site laid out the way coastsat downloads it."""
+    site = tmp_path / SAR_SITENAME
+    vv, vh = build_sar_bands()
+    paths = {}
+    for polarization, array in (("VV", vv), ("VH", vh)):
+        paths[polarization] = write_sar_tif(
+            str(site / "S1" / polarization / f"{SAR_SCENE_DATE}_S1_test_{polarization}.tif"),
+            array,
+        )
+    rgb = site / "jpg_files" / "preprocessed" / "RGB"
+    rgb.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (10, 10)).save(str(rgb / f"{SAR_SCENE_DATE}_RGB_S1.jpg"))
+    meta = site / "S1" / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / f"{SAR_SCENE_DATE}_S1_test.txt").write_text(
+        "filename\t%s_S1_test_VV.tif\nband_order\t['VV', 'VH']\n" % SAR_SCENE_DATE
+    )
+    return {
+        "site": str(site),
+        "vv": paths["VV"],
+        "vh": paths["VH"],
+        "rgb_directory": str(rgb),
+        "shape": (50, 70),
+        "nodata_rows": 6,
+    }
+
+
+@pytest.fixture
+def sar_site_vh_only(tmp_path):
+    """A legacy site downloaded before multi-polarization support (VH only)."""
+    site = tmp_path / "ID_legacy_datetime01-01-20__00_00_00"
+    _, vh = build_sar_bands(nodata_rows=0)
+    path = write_sar_tif(
+        str(site / "S1" / "VH" / f"{SAR_SCENE_DATE}_S1_legacy_VH.tif"), vh
+    )
+    return {"site": str(site), "vh": path}
+
+
+@pytest.fixture
+def sar_grid_mismatch_tifs(tmp_path):
+    """VV and VH on different grids, forcing the reprojection fallback."""
+    site = tmp_path / "ID_mismatch_datetime01-01-25__00_00_00"
+    vv, _ = build_sar_bands(height=64, width=64, nodata_rows=0)
+    _, vh = build_sar_bands(height=32, width=32, nodata_rows=0)
+    vv_path = write_sar_tif(
+        str(site / "S1" / "VV" / f"{SAR_SCENE_DATE}_S1_mismatch_VV.tif"), vv
+    )
+    # half the resolution, same origin, so the grids genuinely differ
+    vh_path = write_sar_tif(
+        str(site / "S1" / "VH" / f"{SAR_SCENE_DATE}_S1_mismatch_VH.tif"),
+        vh,
+        geotransform=(500000.0, 20.0, 0.0, 4000000.0, 0.0, -20.0),
+    )
+    return {"site": str(site), "vv": vv_path, "vh": vh_path, "shape": (64, 64)}
+
+
+@pytest.fixture
+def sar_model_spec_stub():
+    """A SarModelSpec built from literals, so tests never load the real 130 MB model."""
+    import numpy as np
+
+    from coastseg.sar_model import SarModelSpec
+
+    return SarModelSpec(
+        onnx_path="stub.onnx",
+        input_name="image",
+        prob_output="water_prob",
+        channel_order=("VV", "VH", "VV-VH"),
+        mean=np.array([-12.59, -20.26, 10.5465], dtype=np.float32),
+        std=np.array([5.26, 5.91, 7.6855], dtype=np.float32),
+        output_stride=32,
+        nodata=255,
+        classes={0: "land", 1: "water"},
+        input_scale="dB",
+        speckle_filter={"type": "none"},
+    )
+
+
+@pytest.fixture
+def sar_tif_writer():
+    """Expose the SAR raster helpers to tests that need to build extra scenes."""
+    return build_sar_bands, write_sar_tif
+
+
+@pytest.fixture
+def s1_download_inputs(tmp_path):
+    """The per-ROI ``inputs`` block CoastSeg hands to coastsat for a Sentinel-1 download.
+
+    Nothing is written to disk, matching a download that has not run yet.
+    """
+    return {
+        "roi_id": "roi1",
+        "sitename": SAR_SITENAME,
+        "filepath": str(tmp_path),
+        "sat_list": ["S1"],
+        "dates": ["2023-01-01", "2023-06-01"],
+        "landsat_collection": "C02",
+        "sentinel_1_properties": {
+            "transmitterReceiverPolarisation": ["VV", "VH"],
+            "instrumentMode": "IW",
+        },
+    }
+
+
+@pytest.fixture
+def sar_legacy_site_with_meta(tmp_path):
+    """A VH-only site that also carries the coastsat metadata file for its one scene.
+
+    ``sar_site_vh_only`` has no ``S1/meta`` directory, and ``get_metadata`` needs one to
+    build the ``band_order`` list the resume check reads. Kept separate so the tests
+    already using that fixture are unaffected.
+
+    The returned dict exposes ``add_vv()``, which writes the VV sibling the way a resumed
+    download would -- same sitename, same scene date, no ``_dup`` suffix.
+    """
+    sitename = "ID_legacy_datetime01-01-20__00_00_00"
+    site = tmp_path / sitename
+    _, vh = build_sar_bands(nodata_rows=0)
+    vv, _ = build_sar_bands(nodata_rows=0)
+    stem = f"{SAR_SCENE_DATE}_S1_legacy"
+
+    vh_path = write_sar_tif(str(site / "S1" / "VH" / f"{stem}_VH.tif"), vh)
+    meta = site / "S1" / "meta"
+    meta.mkdir(parents=True, exist_ok=True)
+    meta_path = meta / f"{stem}.txt"
+    meta_path.write_text(
+        f"filename\t{stem}_VH.tif\nepsg\t32610\nim_width\t70\nim_height\t50\n"
+        "band_order\t['VH']\n"
+    )
+
+    def add_vv():
+        """Backfill the VV band into the existing site, as a resumed download does."""
+        vv_path = write_sar_tif(str(site / "S1" / "VV" / f"{stem}_VV.tif"), vv)
+        meta_path.write_text(
+            f"filename\t{stem}_VV.tif\nepsg\t32610\nim_width\t70\nim_height\t50\n"
+            "band_order\t['VV', 'VH']\n"
+        )
+        return vv_path
+
+    return {
+        "site": str(site),
+        "sitename": sitename,
+        "filepath": str(tmp_path),
+        "vh": vh_path,
+        "meta": str(meta_path),
+        "scene_date": SAR_SCENE_DATE,
+        "add_vv": add_vv,
+        "inputs": {
+            "roi_id": "legacy1",
+            "sitename": sitename,
+            "filepath": str(tmp_path),
+            "sat_list": ["S1"],
+            "dates": ["2023-01-01", "2023-06-01"],
+            "sentinel_1_properties": {
+                "transmitterReceiverPolarisation": ["VV", "VH"],
+                "instrumentMode": "IW",
+            },
+        },
+    }

@@ -5,8 +5,8 @@ import logging
 import os
 import re
 import shutil
-from shutil import SameFileError
 from pathlib import Path
+from shutil import SameFileError
 from typing import Any, Collection, Dict, Iterable, List, Optional, Set, Tuple
 
 # Third-party imports
@@ -23,6 +23,7 @@ from coastseg import (
     extracted_shoreline,
     file_utilities,
     geodata_processing,
+    sar_model,
 )
 from coastseg.intersections import save_transects, transect_timeseries
 from coastseg.model_info import ModelInfo
@@ -166,6 +167,8 @@ def get_imagery_directory(img_type: str, RGB_path: str) -> str:
     1. 'NDWI' for 'NIR'
     2. 'MNDWI' for 'SWIR'
     3. 'RGB' for 'RGB'
+    4. 'SAR' for 'RGB' (no conversion; the SAR model reads the Sentinel-1 GeoTIFFs
+       directly, and the RGB previews are only used to name outputs)
 
     Note:
         Directories containing 'NIR','NIR' and 'RGB' imagery must be at the same level as the 'RGB' imagery.
@@ -176,7 +179,7 @@ def get_imagery_directory(img_type: str, RGB_path: str) -> str:
             SWIR
 
     Args:
-        img_type (str): The type of imagery to generate. Available options: 'RGB', 'NDWI', 'MNDWI'
+        img_type (str): The type of imagery to generate. Available options: 'RGB', 'NDWI', 'MNDWI', 'SAR'
         RGB_path (str): The path to the RGB imagery directory.
 
     Returns:
@@ -185,6 +188,10 @@ def get_imagery_directory(img_type: str, RGB_path: str) -> str:
     img_type = img_type.upper()
     output_path = os.path.dirname(RGB_path)
     if img_type == "RGB":
+        output_path = RGB_path
+    elif img_type == "SAR":
+        # The Sentinel-1 ONNX model reads data/<site>/S1/<polarization>/*.tif, not
+        # jpgs. The RGB preview directory is still what identifies the scenes.
         output_path = RGB_path
     # default filetype is NIR and if NDWI is selected else filetype to SWIR
     elif img_type == "NDWI":
@@ -195,7 +202,7 @@ def get_imagery_directory(img_type: str, RGB_path: str) -> str:
         output_path = RGB_to_infrared(RGB_path, SWIR_path, output_path, "MNDWI")
     else:
         raise ValueError(
-            f"{img_type} not reconigzed as one of the valid types 'RGB', 'NDWI', 'MNDWI'"
+            f"{img_type} not reconigzed as one of the valid types 'RGB', 'NDWI', 'MNDWI', 'SAR'"
         )
     return output_path
 
@@ -226,9 +233,10 @@ def run_segmentation_in_external_env(
         RuntimeError: If standalone segmentation fails.
         ValueError: If environment selection is invalid.
     """
-    from coastseg import core_utilities
     import subprocess
     from pathlib import Path
+
+    from coastseg import core_utilities
 
     try:
         from IPython import get_ipython  # type: ignore
@@ -1115,6 +1123,14 @@ class Zoo_Model:
             "drop_intersection_pts": False,  # whether to drop intersection points not on the transect
             "coastseg_version": __version__,  # version of coastseg used to generate the data
             "apply_segmentation_filter": False,  # whether to apply to sort the segmentations as good or bad
+            # Sentinel-1 only: mask the empty parts of a SAR swath so they are excluded
+            # from the shoreline contour search instead of being traced as land
+            "sar_mask_nodata": True,
+            # Sentinel-1 only: re-segment scenes whose outputs already exist
+            "sar_overwrite_segmentation": True,
+            # Sentinel-1 only: P(water) cutoff the segmentation model thresholds at.
+            # Same key the coastsat workflow reads, so one setting drives both paths.
+            "sar_water_threshold": 0.5,
         }
         if kwargs:
             self.settings.update({key: value for key, value in kwargs.items()})
@@ -1198,6 +1214,33 @@ class Zoo_Model:
         """
         return retrieve_model_weights(self.weights_directory, model_choice)
 
+    def _resolve_local_model_path(
+        self, model_setting: Dict[str, Any], is_sar_request: bool
+    ) -> str:
+        """Return the configured local model path, tolerating an absent SAR directory.
+
+        Args:
+            model_setting (Dict[str, Any]): Model settings for the run.
+            is_sar_request (bool): Whether ``img_type`` selects the SAR model.
+
+        Returns:
+            str: Configured local model path, or ``""`` when none is set.
+
+        Raises:
+            FileNotFoundError: If a non-SAR ``local_model_path`` does not exist.
+        """
+        try:
+            return self.get_local_model_path(model_setting)
+        except FileNotFoundError:
+            # The SAR model is downloaded on first use, so its directory is
+            # legitimately absent on a fresh clone -- the same reason
+            # is_sar_model_directory answers True for it before the download.
+            # Every other missing path is still a genuine mistake.
+            configured_path = str(model_setting.get("local_model_path", "")).strip()
+            if is_sar_request and sar_model.is_sar_model_directory(configured_path):
+                return configured_path
+            raise
+
     def resolve_model_directory(self, model_setting: Dict[str, Any]) -> str:
         """Resolve a runnable model directory for the current settings.
 
@@ -1212,10 +1255,18 @@ class Zoo_Model:
             FileNotFoundError: If required model files are unavailable.
         """
         implementation = str(model_setting.get("implementation", "BEST")).upper()
+        is_sar_request = str(model_setting.get("img_type", "")).upper() == "SAR"
 
-        local_model_path = self.get_local_model_path(model_setting)
+        local_model_path = self._resolve_local_model_path(model_setting, is_sar_request)
         if local_model_path:
             model_directory = Path(local_model_path)
+        elif is_sar_request:
+            # 'SAR' names an image type, not a zoo model id. Without this branch an
+            # unset 'local_model_path' sends "SAR_segmentation_model" to the zoo
+            # downloader, which looks it up on Zenodo and fails with a 404. The UI
+            # never reaches here because it populates 'local_model_path' itself;
+            # scripts and notebooks that set only 'img_type' do.
+            model_directory = Path(sar_model.get_sar_model_directory())
         else:
             model_id = str(model_setting.get("model_type", "")).strip()
             if not model_id:
@@ -1227,8 +1278,29 @@ class Zoo_Model:
                 self.ensure_model_downloaded(implementation, model_id)[0]
             )
 
-        retrieve_model_weights(str(model_directory), implementation)
-        ModelInfo(model_directory=str(model_directory)).load()
+        if sar_model.is_sar_model_directory(str(model_directory)):
+            # ONNX SAR model: no .h5 weights to resolve. Loading the spec validates the
+            # file and its embedded preprocessing contract.
+            sar_model.load_sar_model_spec(str(model_directory))
+        elif is_sar_request:
+            # Only reachable when 'local_model_path' was pointed somewhere that is
+            # neither the designated SAR directory nor a directory holding a .onnx --
+            # the designated one downloads the model instead of failing. Fail on the
+            # actual problem instead of the confusing "no BEST_MODEL.txt" error
+            # retrieve_model_weights would raise for a directory with no .h5.
+            raise FileNotFoundError(
+                f"'SAR' was selected but {model_directory} does not contain a .onnx "
+                "model. Point 'local_model_path' at the directory holding your model, "
+                f"or leave it as models/{sar_model.DEFAULT_SAR_MODEL_DIRNAME} to have "
+                "the default model downloaded automatically."
+            )
+        else:
+            retrieve_model_weights(str(model_directory), implementation)
+            # Validation only -- the result is discarded. Skipped for SAR, where
+            # load_sar_model_spec above is the real check: ModelInfo needs a
+            # modelcard a bare downloaded .onnx does not have, and would fall back
+            # to the 4-class Zoo mapping whose water indices are wrong for SAR.
+            ModelInfo(model_directory=str(model_directory)).load()
 
         self.weights_directory = str(model_directory)
         logger.info("Using model directory: %s", model_directory)
@@ -1282,9 +1354,48 @@ class Zoo_Model:
         return current_path
 
     def run_model(
-        self, model_setting: dict, sample_directory: str, session_directory: str
+        self,
+        model_setting: dict,
+        sample_directory: str,
+        session_directory: str,
+        roi_directory: str = "",
     ) -> None:
+        """Run the configured model over an ROI's imagery.
+
+        SAR models run in-process via onnxruntime; the SegFormer models run in the
+        separate TensorFlow environment.
+
+        Args:
+            model_setting (dict): Model configuration for this run.
+            sample_directory (str): Directory of preprocessed imagery (the RGB dir).
+            session_directory (str): Directory the segmentation outputs are written to.
+            roi_directory (str): ROI data directory, required for the SAR path because
+                the model reads the Sentinel-1 GeoTIFFs rather than the jpg previews.
+        """
         model_directory = self.resolve_model_directory(model_setting)
+
+        if sar_model.is_sar_model_directory(model_directory):
+            if not roi_directory:
+                raise ValueError(
+                    "The SAR model reads Sentinel-1 GeoTIFFs, so the ROI directory "
+                    "containing the S1 folder must be provided."
+                )
+            summary = sar_model.run_sar_segmentation(
+                roi_directory=roi_directory,
+                session_directory=session_directory,
+                model_directory=model_directory,
+                rgb_directory=sample_directory,
+                overwrite=model_setting.get("sar_overwrite_segmentation", True),
+                use_gpu=(model_setting.get("use_GPU", "0") == "1"),
+                water_threshold=model_setting.get("sar_water_threshold"),
+            )
+            print(
+                f"Segmented {summary['written_npz']} of {summary['total_images']} "
+                f"Sentinel-1 scenes."
+            )
+            if summary["failures"]:
+                print(f"{len(summary['failures'])} scene(s) failed or were skipped.")
+            return
 
         run_segmentation_in_external_env(
             input_dir=sample_directory,
@@ -1347,6 +1458,7 @@ class Zoo_Model:
             session_directory=os.path.join(
                 core_utilities.get_base_dir(), "sessions", session_name
             ),
+            roi_directory=roi_directory,
         )
 
     def run_model_and_extract_shorelines(
@@ -1706,6 +1818,20 @@ class Zoo_Model:
             model_directory = self.weights_directory
             if not model_directory or not os.path.isdir(model_directory):
                 model_directory = self.resolve_model_directory(settings)
+
+        # A SAR ONNX directory carries no *modelcard.json: the model is downloaded as a
+        # bare .onnx into coastsat's cache, and a user who supplies their own drops in
+        # one file. ModelInfo.load() would then silently fall back to the 4-class Zoo
+        # mapping, whose water indices are [0, 1] -- which on SAR's {0: land, 1: water}
+        # labels marks the whole raster as water and yields no shoreline at all. The
+        # .onnx records its own classes, so read them from there.
+        if sar_model.is_sar_model_directory(model_directory):
+            spec = sar_model.load_sar_model_spec(model_directory)
+            model_info = ModelInfo(
+                model_directory=model_directory, class_mapping=dict(spec.classes)
+            )
+            model_info.load()
+            return model_info
 
         model_info = ModelInfo(model_directory=model_directory)
         model_info.load()

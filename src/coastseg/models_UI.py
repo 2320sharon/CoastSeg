@@ -2,6 +2,7 @@ import contextlib
 import io
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from ipyfilechooser import FileChooser
@@ -24,6 +25,7 @@ from coastseg import (
     common,
     core_utilities,
     file_utilities,
+    sar_model,
     settings_UI,
     zoo_model,
 )
@@ -89,6 +91,10 @@ class UI_Models:
         self.NDWI_models = [
             "global_segformer_NDWI_4class_14172182",  # global segformer model
             "AK_segformer_NDWI_4class_14183210",  # AK segformer model
+        ]
+
+        self.SAR_models = [
+            sar_model.DEFAULT_SAR_MODEL_DIRNAME,
         ]
         self.session_name = ""
         self.shoreline_session_directory = ""
@@ -557,6 +563,7 @@ class UI_Models:
                 "RGB",
                 "MNDWI",
                 "NDWI",
+                "SAR",
             ],
             value="RGB",
             description="Model Input:",
@@ -797,8 +804,19 @@ class UI_Models:
             self.model_dropdown.options = self.MNDWI_models
         if change["new"] == "NDWI":
             self.model_dropdown.options = self.NDWI_models
+        if change["new"] == "SAR":
+            self.model_dropdown.options = self.SAR_models
 
         self.model_dict["img_type"] = change["new"]
+
+        if change["new"] == "SAR":
+            self.model_dict["local_model_path"] = str(
+                Path(core_utilities.get_base_dir())
+                / "models"
+                / sar_model.DEFAULT_SAR_MODEL_DIRNAME
+            )
+        else:
+            self.model_dict["local_model_path"] = ""
 
     @model_download_view.capture(clear_output=True)
     def download_model_button_clicked(self, button: Button) -> None:
@@ -811,6 +829,18 @@ class UI_Models:
                 "Select a model before downloading.",
                 position=1,
             )
+            return
+
+        if str(self.model_dict.get("img_type", "")).upper() == "SAR":
+            # The SAR model is not shipped with CoastSeg: it is fetched from Hugging Face
+            # on first use and cached, so this button is a no-op once it is on disk.
+            local_model_path = self.model_dict.get("local_model_path", "")
+            try:
+                onnx_path = sar_model.find_sar_onnx_file(local_model_path)
+            except (sar_model.SarModelError, FileNotFoundError) as error:
+                self.launch_error_box("Download Failed", str(error))
+                return
+            print(f"The SAR model is ready.\nIt will be read from: {onnx_path}")
             return
 
         button.disabled = True
