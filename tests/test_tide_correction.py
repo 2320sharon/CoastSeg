@@ -440,8 +440,18 @@ def test_the_layout_is_resolved_once_not_per_roi(tmp_path, monkeypatch):
     monkeypatch.setattr(tc, "require_tide_groups", lambda *a, **k: ())
     monkeypatch.setattr(tc, "correct_tides", lambda *a, **k: pd.DataFrame())
 
+    # tmp_path stands in for the model folder: locate_tide_model's one real disk
+    # read is "does this directory exist", and pointing it at the default,
+    # CoastSeg/tide_model, would only pass on a machine that has the model
+    # downloaded. This test is about how often the layout is resolved, not about
+    # what is installed.
     tc.correct_all_tides(
-        ["roi_1", "roi_2", "roi_3"], "session", 0.0, 0.1, use_progress_bar=False
+        ["roi_1", "roi_2", "roi_3"],
+        "session",
+        0.0,
+        0.1,
+        use_progress_bar=False,
+        tide_model_location=str(tmp_path),
     )
 
     # Two calls, not one per ROI: locate_tide_model probes the disk once, then
