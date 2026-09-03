@@ -10,19 +10,15 @@ import re
 import shutil
 import string
 import time
+from collections.abc import Callable, Collection, Hashable, Iterable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Collection,
     Dict,
-    Hashable,
-    Iterable,
     List,
     Optional,
-    Sequence,
     Set,
     Tuple,
     Union,
@@ -34,6 +30,8 @@ import numpy as np
 import pandas as pd
 import requests
 import shapely
+from coastsat.SDS_download import DEFAULT_SENTINEL_1_PROPERTIES
+from coastsat.SDS_tools import SAR_POLARIZATIONS
 from ipyfilechooser import FileChooser
 from ipywidgets import HTML, HBox, Layout, ToggleButton, VBox
 from PIL import Image
@@ -42,11 +40,8 @@ from requests.exceptions import SSLError
 
 # Third-party imports
 from shapely.geometry import LineString, MultiPoint, Point, Polygon, shape
-from shapely.ops import transform
+from shapely.ops import linemerge, transform
 from tqdm.auto import tqdm
-
-from coastsat.SDS_download import DEFAULT_SENTINEL_1_PROPERTIES
-from coastsat.SDS_tools import SAR_POLARIZATIONS
 
 # Internal dependencies imports
 from coastseg import core_utilities, exceptions, file_utilities
@@ -80,8 +75,7 @@ def initialize_gee(
     force: bool = False,
     **kwargs,
 ) -> None:
-    """
-    Initialize Google Earth Engine (GEE). If initialization fails due to authentication issues, prompt the user to authenticate and try again.
+    """Initialize Google Earth Engine (GEE). If initialization fails due to authentication issues, prompt the user to authenticate and try again.
 
     Args:
         auth_mode (str, optional): The authentication mode. 'gcloud' and 'colab' methods are not supported. See https://developers.google.com/earth-engine/guides/auth for more details.
@@ -176,8 +170,7 @@ def authenticate_and_initialize(
     init_kwargs: dict,
     max_attempts: int = 2,
 ) -> None:
-    """
-    Handles the authentication and initialization of Google Earth Engine.
+    """Handles the authentication and initialization of Google Earth Engine.
 
     Args:
         print_mode (bool): Flag indicating whether to print status messages.
@@ -240,8 +233,7 @@ def authenticate_and_initialize(
 def merge_tide_corrected_with_raw_timeseries(
     session_path: str, tide_timeseries: pd.DataFrame
 ) -> pd.DataFrame:
-    """
-    Merges tide-corrected timeseries data with raw timeseries data to add columns such as classifier scores, thresholds, and other relevant information to the tide-corrected timeseries data.
+    """Merges tide-corrected timeseries data with raw timeseries data to add columns such as classifier scores, thresholds, and other relevant information to the tide-corrected timeseries data.
 
     If the timeseries passed in is not the tide-corrected one, then it is returned as is.
 
@@ -299,8 +291,7 @@ def merge_dataframes(
     df2: pd.DataFrame,
     columns_to_merge_on: Collection[str] = {"transect_id", "dates"},
 ) -> pd.DataFrame:
-    """
-    Merges two DataFrames based on column names provided in columns_to_merge_on (default: "transect_id", "dates").
+    """Merges two DataFrames based on column names provided in columns_to_merge_on (default: "transect_id", "dates").
 
     Args:
         df1 (pd.DataFrame): First DataFrame.
@@ -315,8 +306,7 @@ def merge_dataframes(
 
 
 def update_config(config_json: dict, roi_settings: dict) -> dict:
-    """
-    Update the configuration JSON with the provided ROI settings.
+    """Update the configuration JSON with the provided ROI settings.
 
     Args:
         config_json (dict): The original configuration JSON.
@@ -334,8 +324,7 @@ def update_config(config_json: dict, roi_settings: dict) -> dict:
 def update_downloaded_configs(
     roi_settings: Dict[str, Any], roi_ids: Optional[List[str]] = None
 ) -> None:
-    """
-    Update the downloaded configuration files for the specified ROI(s).
+    """Update the downloaded configuration files for the specified ROI(s).
 
     Args:
         roi_settings (Dict[str, Any]): Dictionary containing the ROI settings. ROI settings should contain the ROI IDs as the keys and a dictionary of settings as the values. Each ROI ID should have the following keys: "dates", "sitename", "polygon", "roi_id", "sat_list", "landsat_collection", "filepath"
@@ -373,15 +362,14 @@ def update_downloaded_configs(
             logging.info(
                 f"Successfully updated config for ROI {roi_id} at {config_path}"
             )
-        except IOError as e:
+        except OSError as e:
             logging.error(f"Failed to update config for ROI {roi_id}: {e}")
 
 
 def extract_roi_settings(
     json_data: dict, fields_of_interest: set = set(), roi_ids: Optional[list] = None
 ) -> dict:
-    """
-    Extracts the settings for regions of interest (ROI) from the given JSON data.
+    """Extracts the settings for regions of interest (ROI) from the given JSON data.
 
     Args:
         json_data (dict): The JSON data containing ROI information.
@@ -425,8 +413,7 @@ def update_roi_settings(
     value: Any,
     add_if_missing: bool = False,
 ) -> Dict[str, Dict[str, Any]]:
-    """
-    Updates a specific key in all ROI settings dictionaries. Optionally adds the key if it's missing.
+    """Updates a specific key in all ROI settings dictionaries. Optionally adds the key if it's missing.
 
     Args:
         roi_settings (Dict[str, Dict[str, Any]]): Dictionary of ROI settings (dict of dicts).
@@ -444,8 +431,7 @@ def update_roi_settings(
 
 
 def process_roi_settings(json_data: Dict[str, Any], data_path: str) -> Dict[str, Any]:
-    """
-    Process the ROI settings from the given JSON data and update the filepath to be the data_path.
+    """Process the ROI settings from the given JSON data and update the filepath to be the data_path.
 
     Args:
         json_data (Dict[str, Any]): The JSON data containing ROI settings.
@@ -463,8 +449,7 @@ def process_roi_settings(json_data: Dict[str, Any], data_path: str) -> Dict[str,
 def get_missing_roi_dirs(
     roi_settings: Dict[str, Any], roi_ids: Optional[List[str]] = None
 ) -> Dict[str, str]:
-    """
-    Get the missing ROI directories based on the provided ROI settings and data path.
+    """Get the missing ROI directories based on the provided ROI settings and data path.
 
     Args:
         roi_settings (Dict[str, Any]): A dictionary containing ROI settings.
@@ -547,7 +532,7 @@ def relativize_sar_model_path(sar_model_path: str = "") -> str:
 def resolve_sar_model_path(sar_model_path: str = "") -> str:
     """Turn a stored SAR model path into one coastsat can open.
 
-    The inverse of :func:`relativize_sar_model_path`. Relative paths resolve against the
+    The inverse of `relativize_sar_model_path`. Relative paths resolve against the
     CoastSeg base directory, *not* the current working directory  coastsat applies
     ``os.path.abspath`` to whatever it receives, which would otherwise silently resolve
     against wherever the notebook happens to be running.
@@ -568,14 +553,14 @@ def resolve_sar_model_path(sar_model_path: str = "") -> str:
 
 
 def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict:
-    """
-    Creates a new configuration dictionary by combining the given settings and ROI settings.
+    """Creates a new configuration dictionary by combining the given settings and ROI settings.
 
     Args:
         roi_ids (list): A list of ROI IDs to include in the new configuration.
         settings (dict): A dictionary containing general settings for the configuration.
         roi_settings (dict): A dictionary containing ROI-specific settings for the configuration.
-            Example:
+
+    Example:
                 {'example_roi_id': {'dates':[]}}
 
     Returns:
@@ -583,17 +568,17 @@ def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict
 
     Example:
         >>> roi_settings = {
-        ...     'roi1': {
-        ...         'dates': ['2021-01-01', '2021-12-31'],
-        ...         'sitename': 'SiteA',
-        ...         'polygon': [[...]],
-        ...         'roi_id': 'roi1',
-        ...         'sat_list': ['L8', 'S2'],
-        ...         'landsat_collection': 'LC08'
+        ...     "roi1": {
+        ...         "dates": ["2021-01-01", "2021-12-31"],
+        ...         "sitename": "SiteA",
+        ...         "polygon": [[...]],
+        ...         "roi_id": "roi1",
+        ...         "sat_list": ["L8", "S2"],
+        ...         "landsat_collection": "LC08",
         ...     }
         ... }
-        >>> settings = {'cloud_thresh': 20, 'min_beach_area': 500}
-        >>> roi_ids = ['roi1']
+        >>> settings = {"cloud_thresh": 20, "min_beach_area": 500}
+        >>> roi_ids = ["roi1"]
         >>> new_config = create_new_config(roi_ids, settings, roi_settings)
         >>> print(new_config)
         {
@@ -626,8 +611,7 @@ def create_new_config(roi_ids: list, settings: dict, roi_settings: dict) -> dict
 def update_transect_time_series(
     filepaths: List[str], dates_list: List[datetime]
 ) -> None:
-    """
-    Updates a series of CSV files by removing rows based on certain dates.
+    """Updates a series of CSV files by removing rows based on certain dates.
 
     Args:
         filepaths (List[str]): A list of file paths to the CSV files.
@@ -653,8 +637,7 @@ def update_transect_time_series(
 def extract_dates_and_sats(
     selected_items: List[str],
 ) -> Tuple[List[datetime], List[str]]:
-    """
-    Parse a list of strings containing satellite names and timestamps, and return separate lists of UTC-aware datetimes and satellite identifiers.
+    """Parse a list of strings containing satellite names and timestamps, and return separate lists of UTC-aware datetimes and satellite identifiers.
 
     Each input string must follow the format: "<satellite>_<YYYY-MM-DD HH:MM:SS>"
 
@@ -665,7 +648,9 @@ def extract_dates_and_sats(
         Tuple[List[datetime], List[str]]: Tuple containing a list of UTC datetime objects and a list of satellite identifiers.
 
     Example:
-        >>> extract_dates_and_sats(["L8_2021-01-01 00:00:00", "S2_2021-02-01 00:00:00"])
+        >>> extract_dates_and_sats(
+        ...     ["L8_2021-01-01 00:00:00", "S2_2021-02-01 00:00:00"]
+        ... )
         ([datetime.datetime(2021, 1, 1, 0, 0, tzinfo=datetime.timezone.utc), datetime.datetime(2021, 2, 1, 0, 0, tzinfo=datetime.timezone.utc)], ["L8", "S2"])
     """
     dates_list = []
@@ -691,8 +676,7 @@ def extract_dates_and_sats(
 def transform_data_to_nested_arrays(
     data_dict: Dict[str, Union[List[Union[int, float, np.ndarray]], np.ndarray]],
 ) -> Dict[str, np.ndarray]:
-    """
-    Convert a dictionary of data to a new dictionary with nested NumPy arrays.
+    """Convert a dictionary of data to a new dictionary with nested NumPy arrays.
 
     Args:
         data_dict (dict): A dictionary of data, where each value is either a list of integers, floats, or NumPy arrays, or a NumPy array.
@@ -718,8 +702,7 @@ def transform_data_to_nested_arrays(
 def process_data_input(
     data: Union[Dict[str, Any], str],
 ) -> Optional[Dict[str, np.ndarray]]:
-    """
-    Process the data input and transform it to nested arrays.
+    """Process the data input and transform it to nested arrays.
 
     Args:
         data (Union[Dict[str, Any], str]): The data input to process. If data is a string, it is assumed to be the full path to the JSON file.
@@ -747,8 +730,8 @@ def process_data_input(
 def update_extracted_shorelines_dict_transects_dict(
     session_path: str, filename: str, dates_list: List[datetime], sat_list: List[str]
 ) -> None:
-    """
-    Updates the extracted shorelines and transects dictionaries by removing selected indexes.
+    """Updates the extracted shorelines and transects dictionaries by removing selected indexes.
+
     Reads data from a JSON file, processes it into nested arrays, and removes selected indexes based on the provided dates and satellite lists. Also updates the transects dictionary if the corresponding file exists.
 
     Args:
@@ -804,8 +787,7 @@ def update_extracted_shorelines_dict_transects_dict(
 def delete_selected_indexes(
     input_dict: Dict[str, Any], selected_indexes: List[int]
 ) -> Dict[str, Any]:
-    """
-    Delete the selected indexes from the input dictionary.
+    """Delete the selected indexes from the input dictionary.
 
     Args:
         input_dict (Dict[str, Any]): The dictionary to modify.
@@ -860,8 +842,6 @@ def load_settings(
         "min_beach_area",
         "min_length_sl",
         "output_epsg",
-        "sand_color",
-        "pan_off",
         "max_dist_ref",
         "dist_clouds",
         "percent_no_data",
@@ -879,8 +859,7 @@ def load_settings(
     },
     new_settings: dict = {},
 ) -> dict:
-    """
-    Loads settings from a JSON file and applies them to the object.
+    """Loads settings from a JSON file and applies them to the object.
 
     Args:
         filepath (str, optional): The filepath to the JSON file containing the settings. Defaults to an empty string.
@@ -920,8 +899,7 @@ def load_settings(
 def update_roi_settings_with_global_settings(
     roi_settings: dict, global_settings: dict
 ) -> dict:
-    """
-    Update the ROI settings with the global settings.
+    """Update the ROI settings with the global settings.
 
     Args:
         roi_settings (dict): A dictionary containing the ROI settings.
@@ -958,8 +936,7 @@ def update_roi_settings_with_global_settings(
 
 
 def remove_matching_rows(gdf: gpd.GeoDataFrame, **kwargs) -> gpd.GeoDataFrame:
-    """
-    Remove rows from a GeoDataFrame that match ALL the columns and items specified in the keyword arguments.
+    """Remove rows from a GeoDataFrame that match ALL the columns and items specified in the keyword arguments.
 
     Args:
         gdf (gpd.GeoDataFrame): The input GeoDataFrame.
@@ -968,7 +945,6 @@ def remove_matching_rows(gdf: gpd.GeoDataFrame, **kwargs) -> gpd.GeoDataFrame:
     Returns:
         gpd.GeoDataFrame: The modified GeoDataFrame with matching rows removed.
     """
-
     # Initialize a mask with all True values
     combined_mask = pd.Series([True] * len(gdf))
 
@@ -1002,8 +978,7 @@ def get_selected_indexes(
     dates_list: Iterable[Union[str, pd.Timestamp]],
     sat_list: Iterable[Union[str, pd.Timestamp]],
 ) -> List[int]:
-    """
-    Retrieve indexes of rows in a dictionary that match specified dates and satellite names.
+    """Retrieve indexes of rows in a dictionary that match specified dates and satellite names.
 
     Args:
         data_dict (Dict[str, Union[List[Any], pd.Series]]): The dictionary containing data arrays. Expected keys are 'dates' and 'satname'.
@@ -1014,8 +989,11 @@ def get_selected_indexes(
         List[int]: A list of integer indexes where the 'dates' and 'satname' in the data_dict match the provided lists. Returns an empty list if no matches are found or if the data_dict is empty.
 
     Example:
-        >>> data = {'dates': ['2021-01-01', '2021-01-02'], 'satname': ['sat1', 'sat2']}
-        >>> get_selected_indexes(data, ['2021-01-01'], ['sat1'])
+        >>> data = {
+        ...     "dates": ["2021-01-01", "2021-01-02"],
+        ...     "satname": ["sat1", "sat2"],
+        ... }
+        >>> get_selected_indexes(data, ["2021-01-01"], ["sat1"])
         [0]
     """
     if not data_dict:
@@ -1029,7 +1007,7 @@ def get_selected_indexes(
     selected_indexes = []
 
     # Iterate over dates and satellite names, and get the index of the first matching row
-    for date, sat in zip(dates_list, sat_list):
+    for date, sat in zip(dates_list, sat_list, strict=False):
         match = df[(df["dates"] == date) & (df["satname"] == sat)]
         if not match.empty:
             selected_indexes.append(match.index[0])
@@ -1040,8 +1018,7 @@ def get_selected_indexes(
 def save_new_config(
     path: str, roi_ids: Union[List[str], str, None], destination: str
 ) -> None:
-    """
-    Save a new config file to a path.
+    """Save a new config file to a path.
 
     Args:
         path (str): The path to read the original config file from.
@@ -1068,8 +1045,7 @@ def save_new_config(
 
 
 def filter_images_by_roi(roi_settings: Dict[str, Any]) -> None:
-    """
-    Filters images in specified locations based on their Regions of Interest (ROI).
+    """Filters images in specified locations based on their Regions of Interest (ROI).
 
     This function iterates over the given list of ROI settings dictionaries. For each ROI,
     it constructs a GeoDataFrame and filters images located in a predefined directory based
@@ -1093,10 +1069,10 @@ def filter_images_by_roi(roi_settings: Dict[str, Any]) -> None:
     Example:
         >>> roi_settings = [
         ...     {
-        ...         'roi_id': 1,
-        ...         'sitename': 'site1',
-        ...         'filepath': '/path/to/site1',
-        ...         'polygon': [[[x1, y1], [x2, y2], [x3, y3], [x4, y4]]],
+        ...         "roi_id": 1,
+        ...         "sitename": "site1",
+        ...         "filepath": "/path/to/site1",
+        ...         "polygon": [[[x1, y1], [x2, y2], [x3, y3], [x4, y4]]],
         ...     },
         ...     # More dictionaries for other ROIs
         ... ]
@@ -1127,8 +1103,7 @@ def filter_images_by_roi(roi_settings: Dict[str, Any]) -> None:
 def delete_jpg_files(
     dates_list: List[datetime], sat_list: List[str], jpg_path: str
 ) -> None:
-    """
-    Delete JPEG files based on the given dates and satellite list.
+    """Delete JPEG files based on the given dates and satellite list.
 
     Args:
         dates_list (List[datetime]): A list of datetime objects representing the dates.
@@ -1139,9 +1114,9 @@ def delete_jpg_files(
         None
     """
     # assert that datetime objects are passed
-    assert all(
-        isinstance(date, datetime) for date in dates_list
-    ), "dates_list must contain datetime objects"
+    assert all(isinstance(date, datetime) for date in dates_list), (
+        "dates_list must contain datetime objects"
+    )
     # Format the dates in dates_list as strings
     formatted_dates = [date.strftime("%Y-%m-%d-%H-%M-%S") for date in dates_list]
 
@@ -1151,7 +1126,7 @@ def delete_jpg_files(
     # Create a list of filenames to delete
     delete_list = [
         date + "_" + sat + ".jpg"
-        for date, sat in zip(formatted_dates, sat_list)
+        for date, sat in zip(formatted_dates, sat_list, strict=False)
         if (date + "_" + sat + ".jpg") in jpg_files
     ]
 
@@ -1171,8 +1146,7 @@ def filter_partial_images(
     max_area_percentage: float = 1.5,
     roi_directory: str = "",
 ):
-    """
-    Filters images in a directory based on their area with respect to the area of the Region of Interest (ROI).
+    """Filters images in a directory based on their area with respect to the area of the Region of Interest (ROI).
 
     This function uses the specified area percentages of the ROI to create a permissible area range. It then checks
     each image in the directory against this permissible range, and filters out any images whose areas are outside
@@ -1193,8 +1167,8 @@ def filter_partial_images(
         FileNotFoundError: If the specified directory does not exist or doesn't contain any image files.
 
     Example:
-        >>> roi_gdf = geopandas.read_file('path_to_roi_file')
-        >>> filter_partial_images(roi_gdf, 'path_to_image_directory')
+        >>> roi_gdf = geopandas.read_file("path_to_roi_file")
+        >>> filter_partial_images(roi_gdf, "path_to_image_directory")
     """
     # low and high range are in km
     roi_area = get_roi_area(roi_gdf)
@@ -1207,8 +1181,7 @@ def filter_partial_images(
 
 
 def get_roi_area(gdf: gpd.GeoDataFrame) -> float:
-    """
-    Calculates the area of the Region of Interest (ROI) from the given GeoDataFrame.
+    """Calculates the area of the Region of Interest (ROI) from the given GeoDataFrame.
 
     The function re-projects the GeoDataFrame to the appropriate UTM zone before calculating the area to ensure accurate area measurements.
 
@@ -1223,7 +1196,7 @@ def get_roi_area(gdf: gpd.GeoDataFrame) -> float:
         ValueError: If the re-projection to the UTM zone fails.
 
     Example:
-        >>> gdf = geopandas.read_file('path_to_file')
+        >>> gdf = geopandas.read_file("path_to_file")
         >>> get_roi_area(gdf)
         12.34  # example output in km^2
     """
@@ -1237,8 +1210,7 @@ def get_roi_area(gdf: gpd.GeoDataFrame) -> float:
 
 
 def get_satellite_name(filename: str) -> Optional[str]:
-    """
-    Returns the satellite name in the jpg filename. Does not work with tiffs.
+    """Returns the satellite name in the jpg filename. Does not work with tiffs.
 
     Args:
         filename (str): The filename to extract the satellite name from.
@@ -1260,8 +1232,7 @@ def filter_images(
     output_directory: str = "",
     roi_directory: str = "",
 ) -> List[str]:
-    """
-    Filters images in a given directory based on a range of acceptable areas and moves the filtered out
+    """Filters images in a given directory based on a range of acceptable areas and moves the filtered out
     images to a specified output directory.
 
     The function calculates the area of each image in the specified directory. If the area is outside of
@@ -1289,7 +1260,7 @@ def filter_images(
                   pixel_size_per_satellite dictionary.
 
     Example:
-        >>> filter_images(1, 10, 'path/to/images', 'path/to/bad_images')
+        >>> filter_images(1, 10, "path/to/images", "path/to/bad_images")
     """
     if not os.path.exists(directory):
         raise FileNotFoundError(f"The specified directory does not exist: {directory}")
@@ -1347,11 +1318,10 @@ def filter_images(
 
 
 def calculate_image_area(filepath: str, pixel_size: int) -> float:  #
-    """
-    Calculate the area of an image in square kilometers.
+    """Calculate the area of an image in square kilometers.
 
     Only valid for a preview whose pixels are the raster's pixels. Sentinel-1 previews are
-    matplotlib figures, so use :func:`calculate_raster_area` on the GeoTIFF instead.
+    matplotlib figures, so use `calculate_raster_area` on the GeoTIFF instead.
 
     Args:
         filepath (str): The path to the image file.
@@ -1368,8 +1338,7 @@ def calculate_image_area(filepath: str, pixel_size: int) -> float:  #
 
 
 def calculate_raster_area(filepath: str, pixel_size: Optional[float] = None) -> float:
-    """
-    Calculate the ground area a GeoTIFF covers, in square kilometers.
+    """Calculate the ground area a GeoTIFF covers, in square kilometers.
 
     The pixel size is read from the raster's own geotransform, so no per-satellite table
     can go stale. ``pixel_size`` is only a fallback for a raster without a geotransform.
@@ -1410,8 +1379,7 @@ def calculate_raster_area(filepath: str, pixel_size: Optional[float] = None) -> 
 
 
 def find_source_raster(jpg_filename: str, roi_directory: str) -> Optional[str]:
-    """
-    Locate the GeoTIFF a preprocessed RGB preview was made from.
+    """Locate the GeoTIFF a preprocessed RGB preview was made from.
 
     The preview is only a proxy for the scene's footprint, and for Sentinel-1 it is not
     even that  coastsat renders it as a titled matplotlib figure whose dimensions are
@@ -1455,8 +1423,7 @@ def validate_geometry_types(
     feature_type: str = "Feature",
     help_message: Optional[str] = None,
 ) -> None:
-    """
-    Check if all geometries in a GeoDataFrame are of the given valid types.
+    """Check if all geometries in a GeoDataFrame are of the given valid types.
 
     Args:
         gdf (gpd.GeoDataFrame): The GeoDataFrame containing the geometries to check.
@@ -1487,8 +1454,7 @@ def validate_geometry_types(
 def get_roi_polygon(
     roi_gdf: gpd.GeoDataFrame, roi_id: int
 ) -> Optional[List[List[float]]]:
-    """
-    Extract polygon coordinates for a given ROI ID from a GeoDataFrame.
+    """Extract polygon coordinates for a given ROI ID from a GeoDataFrame.
 
     Parameters:
     - roi_gdf (gpd.GeoDataFrame): GeoDataFrame with "id" and "geometry" columns.
@@ -1508,8 +1474,7 @@ def get_roi_polygon(
 
 
 def get_cert_path_from_config(config_file: str = "certifications.json") -> str:
-    """
-    Get the certification path from the given configuration file.
+    """Get the certification path from the given configuration file.
 
     This function checks if the configuration file exists, reads the config file contents, and gets the certification path.
     If the certification path found in the config file is a valid file, it returns the certification path. Otherwise,
@@ -1524,7 +1489,7 @@ def get_cert_path_from_config(config_file: str = "certifications.json") -> str:
     logger.info(f"os.path.exists(config_file): {os.path.exists(config_file)}")
     if os.path.exists(config_file):
         # Read the config file
-        with open(config_file, "r") as f:
+        with open(config_file) as f:
             config_string = f.read()
             logger.info(f"certifications.json contents: {config_string}")
         try:
@@ -1545,8 +1510,7 @@ def get_cert_path_from_config(config_file: str = "certifications.json") -> str:
 
 
 def get_response(url: str, stream: bool = True):
-    """
-    Get the response from the given URL with or without a certification path.
+    """Get the response from the given URL with or without a certification path.
 
     This function uses the get_cert_path_from_config() function to get a certification path, then sends an HTTP request (GET) to the
     specified URL. The certification is used if available, otherwise the request is sent without it. The stream parameter
@@ -1575,8 +1539,7 @@ def get_response(url: str, stream: bool = True):
 
 
 def extract_date_from_filename(filename: str) -> str:
-    """
-    Extracts the first instance date string "YYYY-MM-DD-HH-MM-SS" from a filename.
+    """Extracts the first instance date string "YYYY-MM-DD-HH-MM-SS" from a filename.
 
     Args:
         filename (str): The filename to extract the date from.
@@ -1585,7 +1548,9 @@ def extract_date_from_filename(filename: str) -> str:
         str: The extracted date string in "YYYY-MM-DD-HH-MM-SS" format, or empty string if not found.
 
     Example:
-        >>> extract_date_from_filename("2024-05-28-22-18-07_S2_ID_1_datetime11-04-24__04_30_52_ms.tif")
+        >>> extract_date_from_filename(
+        ...     "2024-05-28-22-18-07_S2_ID_1_datetime11-04-24__04_30_52_ms.tif"
+        ... )
         "2024-05-28-22-18-07"
     """
     pattern = r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}"
@@ -1600,8 +1565,7 @@ def get_filtered_dates_dict(
     directory: str,
     file_type: str,
 ) -> Dict[str, Set[str]]:
-    """
-    Scans the directory for files with the given file_type and extracts the date from the filename.
+    """Scans the directory for files with the given file_type and extracts the date from the filename.
 
     Args:
         directory (str): The directory where the files are located.
@@ -1656,8 +1620,7 @@ def get_filtered_dates_dict(
 def filter_metadata_with_dates(
     metadata: dict, directory: str, file_type: str = "jpg"
 ) -> dict[str, Any]:
-    """
-    This function filters metadata to include only those files that exist in the given directory.
+    """This function filters metadata to include only those files that exist in the given directory.
 
     Parameters:
     -----------
@@ -1690,7 +1653,7 @@ def edit_metadata_by_dates(
     metadata: Dict[str, Dict[str, Union[str, List[Union[str, datetime, int, float]]]]],
     filtered_dates: Dict[str, Set[str]],
 ) -> dict:
-    """Filters the metadata so that it contains the data for the filenames in filered_files
+    """Filters the metadata so that it contains the data for the filenames in filered_files.
 
     Args:
         metadata (dict): A dictionary containing the metadata for each satellite
@@ -1774,8 +1737,7 @@ def edit_metadata_by_dates(
 def create_unique_ids(
     data: gpd.GeoDataFrame, prefix_length: int = 3
 ) -> gpd.GeoDataFrame:
-    """
-    Creates unique IDs for a GeoDataFrame if not all IDs are unique.
+    """Creates unique IDs for a GeoDataFrame if not all IDs are unique.
 
     Args:
         data (gpd.GeoDataFrame): The GeoDataFrame to process.
@@ -1797,8 +1759,7 @@ def extract_feature_from_geodataframe(
     feature_type: Union[int, str, Iterable],
     type_column: str = "type",
 ) -> Union[gpd.GeoDataFrame, pd.DataFrame]:
-    """
-    Extracts a GeoDataFrame of features of a given type and specified columns from a larger GeoDataFrame.
+    """Extracts a GeoDataFrame of features of a given type and specified columns from a larger GeoDataFrame.
 
     Args:
         gdf (Union[gpd.GeoDataFrame, pd.DataFrame]): The GeoDataFrame containing the features to extract.
@@ -1829,8 +1790,7 @@ def extract_feature_from_geodataframe(
 
 
 def random_prefix(length: int) -> str:
-    """
-    Generates a random prefix string of specified length.
+    """Generates a random prefix string of specified length.
 
     Args:
         length (int): The length of the prefix to generate.
@@ -1842,8 +1802,7 @@ def random_prefix(length: int) -> str:
 
 
 def generate_ids(num_ids: int, prefix_length: int) -> List[str]:
-    """
-    Generate a list of sequential IDs with a random prefix.
+    """Generate a list of sequential IDs with a random prefix.
 
     Args:
         num_ids (int): The number of IDs to generate.
@@ -1857,8 +1816,8 @@ def generate_ids(num_ids: int, prefix_length: int) -> List[str]:
 
 
 def create_complete_line_string(points):
-    """
-    Create a complete LineString from a list of points.
+    """Create a complete LineString from a list of points.
+
     If there is only a single point in the list, a Point object is returned instead of a LineString.
 
     Args:
@@ -1912,8 +1871,7 @@ def create_complete_line_string(points):
 
 
 def order_linestrings_gdf(gdf, output_crs="epsg:4326"):
-    """
-    Orders the linestrings in a GeoDataFrame by creating complete line strings from the given points.
+    """Orders the linestrings in a GeoDataFrame by creating complete line strings from the given points.
 
     Args:
         gdf (GeoDataFrame): The input GeoDataFrame containing linestrings.
@@ -1945,20 +1903,18 @@ def add_shore_points_to_timeseries(
     timeseries_data: pd.DataFrame,
     transects: gpd.GeoDataFrame,
 ) -> pd.DataFrame:
-    """
-    Edits the transect_timeseries_merged.csv or transect_timeseries_tidally_corrected.csv
-    so that there are additional columns with lat (shore_y) and lon (shore_x).
-
+    """Edits the transect_timeseries_merged.csv or transect_timeseries_tidally_corrected.csv so that there are additional columns with lat (shore_y) and lon (shore_x).
 
     inputs:
     timeseries_data (pd.DataFrame): dataframe containing the data from transect_timeseries_merged.csv
     transects (gpd.GeoDataFrame): geodataframe containing the transects
 
-    returns:
+    Returns:
     pd.DataFrame: the new timeseries_data with the lat and lon columns
-    """
 
-    ##Gonna do this in UTM to keep the math simple...problems when we get to longer distances (10s of km)
+    Credit to Mark Lundine who originally wrote this function. This function has minimal modifications to it.
+    """
+    # Peformed in UTM to keep the math simple...problems when we get to longer distances (10s of km)
     org_crs = transects.crs
     utm_crs = transects.estimate_utm_crs()
     transects_utm = transects.to_crs(utm_crs)
@@ -1967,6 +1923,8 @@ def add_shore_points_to_timeseries(
     timeseries_data["shore_x"] = np.nan
     timeseries_data["shore_y"] = np.nan
 
+    transect_ids = timeseries_data["transect_id"].astype(str)
+
     ##loop over all transects
     for i, transect in transects_utm.iterrows():
         transect_id = transect["id"]
@@ -1974,29 +1932,29 @@ def add_shore_points_to_timeseries(
         last = transect.geometry.coords[-1]
 
         # Filter timeseries data for the current transect_id
-        idx = timeseries_data["transect_id"] == transect_id
+        idx = transect_ids == str(transect_id)
         if not np.any(idx):
             continue
 
         timeseries_data_filter = timeseries_data[idx]
         distances = timeseries_data_filter["cross_distance"].values
-        # idxes = timeseries_data_filter.index
-        # distances = timeseries_data_filter['cross_distance']
 
         angle = np.arctan2(last[1] - first[1], last[0] - first[0])
 
         shore_x_utm = first[0] + distances * np.cos(angle)
         shore_y_utm = first[1] + distances * np.sin(angle)
-        # points_utm = [shapely.Point(xy) for xy in zip(shore_x_utm, shore_y_utm)]
 
         # conversion from utm to wgs84, put them in the transect_timeseries csv and utm gdf
         points_utm = gpd.GeoDataFrame(
-            {"geometry": [Point(x, y) for x, y in zip(shore_x_utm, shore_y_utm)]},
+            {
+                "geometry": [
+                    Point(x, y) for x, y in zip(shore_x_utm, shore_y_utm, strict=False)
+                ]
+            },
             crs=utm_crs,
         )
         # Convert shore points to WGS84
         points_wgs84 = points_utm.to_crs(org_crs)
-        # dummy_gdf_wgs84 = dummy_gdf_utm.to_crs(org_crs)
         coords_wgs84 = np.array([point.coords[0] for point in points_wgs84.geometry])
 
         # Update timeseries data with shore_x and shore_y
@@ -2007,8 +1965,7 @@ def add_shore_points_to_timeseries(
 
 
 def make_timezone_naive(df, column_name):
-    """
-    Converts a specified column in a DataFrame from timezone aware or timezone naive
+    """Converts a specified column in a DataFrame from timezone aware or timezone naive
     to a timezone naive format.
 
     Parameters:
@@ -2018,7 +1975,6 @@ def make_timezone_naive(df, column_name):
     Returns:
     - None, the operation modifies the DataFrame in place.
     """
-
     # Convert column to datetime if it's not already
     df[column_name] = pd.to_datetime(df[column_name])
 
@@ -2031,14 +1987,13 @@ def make_timezone_naive(df, column_name):
 
 
 def convert_date_gdf(gdf):
-    """
-    Converts the date columns in a GeoDataFrame to string format.
+    """Converts the date columns in a GeoDataFrame to string format.
     Converts either 'dates' or 'date' columns to string format after converting it to naive timezone.
 
-     Args:
+    Args:
          gdf (GeoDataFrame): The input GeoDataFrame.
 
-     Returns:
+    Returns:
          GeoDataFrame: The converted GeoDataFrame with date columns in datetime format.
     """
     gdf = gdf.copy()
@@ -2053,8 +2008,7 @@ def convert_date_gdf(gdf):
 def intersect_with_buffered_transects(
     points_gdf, transects, buffer_distance=0.00000001
 ):
-    """
-    Intersects points from a GeoDataFrame with another GeoDataFrame and exports the result to a new GeoDataFrame, retaining all original attributes.
+    """Intersects points from a GeoDataFrame with another GeoDataFrame and exports the result to a new GeoDataFrame, retaining all original attributes.
     Additionally, returns the points that do not intersect with the buffered transects.
 
     Parameters:
@@ -2066,7 +2020,6 @@ def intersect_with_buffered_transects(
     - filtered: GeoDataFrame - The resulting GeoDataFrame containing the intersected points within the buffered transects.
     - dropped_rows: GeoDataFrame - The rows that were filtered out during the intersection process.
     """
-
     buffered_lines_gdf = transects.copy()  # Create a copy to preserve the original data
     buffered_lines_gdf["geometry"] = transects.geometry.buffer(buffer_distance)
     points_within_buffer = points_gdf[
@@ -2091,8 +2044,7 @@ def intersect_with_buffered_transects(
 
 
 def sort_transects(gdf, sort_by="start_lon"):
-    """
-    Sorts a GeoDataFrame of transects based on the starting points.
+    """Sorts a GeoDataFrame of transects based on the starting points.
 
     Args:
         gdf (GeoDataFrame): The GeoDataFrame containing the transects.
@@ -2122,10 +2074,76 @@ def sort_transects(gdf, sort_by="start_lon"):
     return gdf_sorted
 
 
-def get_seaward_points_gdf(transects_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def _seaward_endpoint(geometry: Any, transect_id: Any) -> Optional[Point]:
+    """Return the seaward end of one transect, or None when it cannot be determined.
+
+    A transect is drawn landward to seaward, so its seaward end is its last
+    vertex. Geometries that do not reduce to a single line have no unambiguous last
+    vertex; those are reported and skipped rather than guessed at, because a guess
+    would silently predict the tide somewhere else along the transect.
+
+    Args:
+        geometry: The transect's geometry, in EPSG:4326.
+        transect_id: The transect's id, used only in the warnings.
+
+    Returns:
+        Optional[Point]: The seaward endpoint, or None when the geometry cannot
+        supply one.
     """
-    Creates a GeoDataFrame containing the seaward points from a given GeoDataFrame containing transects.
+    if geometry is None or geometry.is_empty:
+        logger.warning(
+            "Transect %s has no geometry, so it will not receive a tide.", transect_id
+        )
+        return None
+
+    if geometry.geom_type == "MultiLineString":
+        # Parts that touch end-to-end merge into one line. Disjoint parts come back
+        # as a MultiLineString, which has no single seaward end to take.
+        geometry = linemerge(geometry)
+        if geometry.geom_type != "LineString":
+            logger.warning(
+                "Transect %s is a MultiLineString whose %d parts are disjoint, so its "
+                "seaward end is ambiguous and it will not receive a tide.",
+                transect_id,
+                len(geometry.geoms),
+            )
+            return None
+
+    if geometry.geom_type != "LineString":
+        logger.warning(
+            "Transect %s is a %s rather than a line, so it will not receive a tide.",
+            transect_id,
+            geometry.geom_type,
+        )
+        return None
+
+    coords = list(geometry.coords)
+    if len(coords) < 2:
+        logger.warning(
+            "Transect %s has %d vertex/vertices, so it has no seaward end and will "
+            "not receive a tide.",
+            transect_id,
+            len(coords),
+        )
+        return None
+
+    return Point(coords[-1])
+
+
+def get_seaward_points_gdf(transects_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Creates a GeoDataFrame containing the seaward points from a given GeoDataFrame containing transects.
     CRS will always be 4326.
+
+    The seaward point is a transect's last vertex. Two-vertex transects everything
+    CoastSeg draws itself are unaffected by that wording, but a transect digitised
+    with intermediate vertices has its true seaward end taken rather than its second
+    vertex.
+
+    Transects whose geometry cannot yield a seaward end (empty, single-vertex, a
+    disjoint MultiLineString, or not a line at all) are logged and left out. They
+    therefore carry no tide, and their observations come through with a NaN
+    cross_distance, matching how `tide_correction.predict_tides_for_df` already
+    treats a transect that falls outside every tide region.
 
     Parameters:
     - transects_gdf: A GeoDataFrame containing transect data.
@@ -2143,11 +2161,22 @@ def get_seaward_points_gdf(transects_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     # Prepare data for the new GeoDataFrame
     data = []
     for index, row in transects_gdf.iterrows():
-        points = list(row["geometry"].coords)
-        seaward_point = Point(points[1]) if len(points) > 1 else Point()
+        # use a helper function to ensure seaward point reguardless of transect geometry
+        seaward_point = _seaward_endpoint(row["geometry"], row["id"])
+        if seaward_point is None:
+            continue
 
         # Append data for each transect to the data list
         data.append({"transect_id": row["id"], "geometry": seaward_point})
+
+    if not data:
+        # A GeoDataFrame built from an empty list carries no columns at all, which
+        # every caller would then KeyError on. Give the empty frame its schema.
+        return gpd.GeoDataFrame(
+            {"transect_id": pd.Series(dtype="object")},
+            geometry=gpd.GeoSeries([], dtype="geometry"),
+            crs="epsg:4326",
+        )
 
     # Create the new GeoDataFrame
     seaward_points_gdf = gpd.GeoDataFrame(data, crs="epsg:4326")
@@ -2155,12 +2184,40 @@ def get_seaward_points_gdf(transects_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     return seaward_points_gdf
 
 
-def convert_transect_ids_to_rows(df):
-    """
-    Reshapes the timeseries data so that transect IDs become rows.
+def sort_matrix_columns(columns: Collection[Any]) -> List[Any]:
+    """Order a dates x transect_id matrix's columns: the date column, then the transects.
+
+    Transect ids are ordered by the number they contain, so t1, t2 ... t10 come out in
+    survey order rather than the lexicographic 1, 10, 2. Ids holding no digits at all
+    sort last, by name.
 
     Args:
-    - df (DataFrame): Input data with transect IDs as columns.
+        columns (Collection[Any]): The matrix's columns, date column first.
+
+    Returns:
+        List[Any]: The same columns, reordered.
+
+    Example:
+        >>> sort_matrix_columns(["dates", "t10", "t2", "north"])
+        ['dates', 't2', 't10', 'north']
+    """
+    columns = list(columns)
+    if not columns:
+        return columns
+
+    def key(name: Any) -> Tuple[int, int, str]:
+        digits = "".join(filter(str.isdigit, str(name)))
+        # sorty by (has-no-digits, number, name): numbered ids are first, the rest non digit containing columns after them alphabetically
+        return (0, int(digits), str(name)) if digits else (1, 0, str(name))
+
+    return columns[:1] + sorted(columns[1:], key=key)
+
+
+def convert_transect_ids_to_rows(df: pd.DataFrame):
+    """Reshapes the timeseries data so that transect IDs become rows.
+
+    Args:
+        df (DataFrame): Input data with transect IDs as columns.
 
     Returns:
     - DataFrame: Reshaped data with transect IDs as rows.
@@ -2174,8 +2231,7 @@ def convert_transect_ids_to_rows(df):
 def filter_dropped_points_out_of_timeseries(
     timeseries_df: pd.DataFrame, dropped_points_df: pd.DataFrame
 ) -> pd.DataFrame:
-    """
-    Filter out dropped points from a timeseries dataframe.
+    """Filter out dropped points from a timeseries dataframe.
 
     Args:
         timeseries_df (pandas.DataFrame): The timeseries dataframe to filter.
@@ -2183,14 +2239,33 @@ def filter_dropped_points_out_of_timeseries(
 
     Returns:
         pandas.DataFrame: The filtered timeseries dataframe with dropped points set to NaN.
+
+    Note:
+        timeseries_df is the wide matrix, so each transect id is a column.
     """
+    # columns are transect ids; match them as strings so an int id from the geojson still lines up with a stringified column label
+    columns_by_id = {str(c): c for c in timeseries_df.columns}
+
     # Iterate through unique transect ids from drop_df to avoid setting the same column multiple times
+    unmatched = []
     for t_id in dropped_points_df["transect_id"].unique():
+        column = columns_by_id.get(str(t_id))
+        if column is None:
+            unmatched.append(str(t_id))
+            continue
         # Find all the dates associated with this transect_id in dropped_points_df
         dates_to_drop = dropped_points_df.loc[
             dropped_points_df["transect_id"] == t_id, "dates"
         ]
-        timeseries_df.loc[timeseries_df["dates"].isin(dates_to_drop), t_id] = np.nan  # type: ignore
+        timeseries_df.loc[timeseries_df["dates"].isin(dates_to_drop), column] = np.nan  # type: ignore
+
+    if unmatched:
+        logger.warning(
+            "%d dropped-point transect id(s) have no column in the time series "
+            "matrix and were skipped rather than added as empty columns: %s",
+            len(unmatched),
+            sorted(unmatched)[:20],
+        )
     return timeseries_df
 
 
@@ -2202,8 +2277,7 @@ def add_lat_lon_to_timeseries(
     only_keep_points_on_transects: bool = False,
     extension: str = "",
 ):
-    """
-    Adds latitude and longitude coordinates to a timeseries dataframe based on shoreline positions.
+    """Adds latitude and longitude coordinates to a timeseries dataframe based on shoreline positions.
 
     Args:
         merged_timeseries_df (pandas.DataFrame): The timeseries dataframe to add latitude and longitude coordinates to.
@@ -2241,14 +2315,14 @@ def add_lat_lon_to_timeseries(
     merged_timeseries_gdf = create_merged_timeseries_gdf(merged_timeseries_df)
 
     if merged_timeseries_gdf.empty:
-        logger.warning(
-            f"No extracted shorelines intersected the transects. Will not create '{ext}_transect_time_series_vectors.geojson' and '{ext}_transect_time_series_points.geojson' ."
+        message = (
+            "No shoreline positions to map: no extracted shoreline intersected the "
+            "transects, or none of the intersections could be placed. Will not create "
+            f"'{ext}_transect_time_series_vectors.geojson' and "
+            f"'{ext}_transect_time_series_points.geojson'."
         )
-        print(
-            (
-                f"No extracted shorelines intersected the transects. Will not create '{ext}_transect_time_series_vectors.geojson' and '{ext}_transect_time_series_points.geojson'."
-            )
-        )
+        logger.warning(message)
+        print(message)
         return merged_timeseries_df, timeseries_df
 
     # saves the merged_timeseries to a geojson file called '{ext}_transect_time_series_points.geojson'. with the shore_x and shore_y values as points
@@ -2260,13 +2334,12 @@ def add_lat_lon_to_timeseries(
 
 
 def points_to_linestrings(gdf, date_column):
-    """
-    Converts points in a GeoDataFrame to LineStrings based on a specified date column.
-
+    """Converts points in a GeoDataFrame to LineStrings based on a specified date column.
 
     Parameters:
     gdf (GeoDataFrame): A GeoDataFrame containing point geometries.
     date_column (str): The name of the column containing date information to group points by.
+
     Returns:
     GeoDataFrame: A new GeoDataFrame with LineString geometries created from the points.
                   Each LineString is created by grouping points by the specified date column.
@@ -2314,23 +2387,25 @@ def points_to_linestrings(gdf, date_column):
 def create_merged_timeseries_gdf(
     merged_timeseries_df: pd.DataFrame,
 ) -> gpd.GeoDataFrame:
-    """
-    Convert a DataFrame containing timeseries data into a GeoDataFrame with geometry based on shore_x and shore_y columns.
-    Geodataframe is in crs 4326.
+    """Convert timeseries data to a GeoDataFrame using shoreline coordinates for geometry.
+
+    Rows with missing 'shore_x' or 'shore_y' values are excluded because
+    they do not have a valid shoreline location.
+
     Args:
-        merged_timeseries_df (pd.DataFrame): The merged timeseries DataFrame containing 'shore_x' and 'shore_y' columns.
+        merged_timeseries_df(pd.DataFrame): DataFrame containing 'shore_x' and 'shore_y'.
 
     Returns:
-        gpd.GeoDataFrame: A GeoDataFrame with the same data as the input DataFrame, but with an added geometry column.
+        gpd.GeoDataFrame: GeoDataFrame in EPSG:4326 with point geometries for valid shoreline
+        locations.
     """
+    locatable = merged_timeseries_df.dropna(subset=["shore_x", "shore_y"])
     # convert to geodataframe
     merged_timeseries_gdf = gpd.GeoDataFrame(
-        merged_timeseries_df,
+        locatable,
         geometry=[
             Point(xy)
-            for xy in zip(
-                merged_timeseries_df["shore_x"], merged_timeseries_df["shore_y"]
-            )
+            for xy in zip(locatable["shore_x"], locatable["shore_y"], strict=False)
         ],
         crs="EPSG:4326",
     )
@@ -2343,8 +2418,7 @@ def save_timeseries_points_as_geojson(
     ext: str = "raw",
     save_location: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
-    """
-    Save the merged timeseries that includes the shore_x and shore_y columns to a GeoJSON file.
+    """Save the merged timeseries that includes the shore_x and shore_y columns to a GeoJSON file.
 
     Args:
         merged_timeseries_gdf (gpd.GeoDataFrame): The merged timeseries GeoDataFrame. Must contain columns 'shore_x', 'shore_y' and 'dates'.
@@ -2388,8 +2462,7 @@ def save_timeseries_vectors_as_geojson(
     ext: str = "raw",
     save_location: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
-    """
-    Save the time series of along shore points as vectors to a GeoJSON file called '{ext}_transect_time_series_vectors.geojson'.
+    """Save the time series of along shore points as vectors to a GeoJSON file called '{ext}_transect_time_series_vectors.geojson'.
 
     Args:
         merged_timeseries_gdf (gpd.GeoDataFrame): The merged timeseries GeoDataFrame.
@@ -2440,8 +2513,7 @@ def filter_points_not_on_transects(
     save_location: str,
     ext: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Filter out points from the timeseries that do not land on the transects.
+    """Filter out points from the timeseries that do not land on the transects.
     Returns both the modified merged timeseries and timeseries dataframes after dropping the points that
     do not land on the transects.
 
@@ -2487,8 +2559,7 @@ def save_transects(
     transects_gdf: gpd.GeoDataFrame,
     drop_intersection_pts=False,
 ) -> None:
-    """
-    Save transect data, including raw timeseries, intersection data, and cross distances.
+    """Save transect data, including raw timeseries, intersection data, and cross distances.
 
     Args:
         roi_id (str): The ID of the ROI.
@@ -2563,8 +2634,7 @@ def filter_points_outside_transects(
     save_location: str,
     name: str = "",
 ):
-    """
-    Filters points outside of transects from a merged timeseries GeoDataFrame.
+    """Filters points outside of transects from a merged timeseries GeoDataFrame.
 
     Args:
         merged_timeseries_gdf (GeoDataFrame): The merged timeseries GeoDataFrame containing the shore x and shore y columns that indicated where the shoreline point was along the transect
@@ -2604,8 +2674,7 @@ def convert_points_to_linestrings(
     group_col="date",
     output_crs: Optional[Union[str, int, CRS]] = "epsg:4326",
 ) -> gpd.GeoDataFrame:
-    """
-    Convert points to LineStrings.
+    """Convert points to LineStrings.
 
     Args:
         gdf (gpd.GeoDataFrame): The input GeoDataFrame containing points.
@@ -2677,8 +2746,7 @@ def get_downloaded_models_dir() -> str:
 
 
 def get_value_by_key_pattern(d: dict, patterns: list | set | tuple):
-    """
-    Function to extract the value from the first key in a dictionary that matches a pattern.
+    """Function to extract the value from the first key in a dictionary that matches a pattern.
 
     Parameters:
     d (dict): The dictionary from which to extract the value.
@@ -2728,8 +2796,8 @@ def create_file_chooser(
     filter_pattern: Optional[str] = None,
     starting_directory: Optional[str] = None,
 ):
-    """
-    This function creates a file chooser and a button to close the file chooser.
+    """This function creates a file chooser and a button to close the file chooser.
+
     It takes a callback function and an optional title as arguments.
     It only searches for .geojson files.
 
@@ -2781,10 +2849,11 @@ def create_file_chooser(
 
 
 def get_most_accurate_epsg(epsg_code: Union[int, str], polygon: gpd.GeoDataFrame):
-    """Returns most accurate epsg code based on lat and lon if epsg code is 4326 or 4327. If not 4326 or 4327 returns unchanged epsg code
+    """Returns most accurate epsg code based on lat and lon if epsg code is 4326 or 4327. If not 4326 or 4327 returns unchanged epsg code.
+
     Args:
         epsg_code(int or str): current epsg code
-        bbox (gpd.GeoDataFrame): GeoDataFrame for bounding box on map
+        polygon (gpd.GeoDataFrame): GeoDataFrame for bounding box on map
     Returns:
         int: epsg code that is most accurate or unchanged if crs not 4326 or 4327
     """
@@ -2803,8 +2872,7 @@ def get_most_accurate_epsg(epsg_code: Union[int, str], polygon: gpd.GeoDataFrame
 def create_dir_chooser(
     callback, title: Optional[str] = None, starting_directory: str = "data"
 ):
-    """
-    Creates a directory chooser widget.
+    """Creates a directory chooser widget.
 
     Args:
         callback: The function to be called when a directory is selected.
@@ -2859,9 +2927,7 @@ def get_transect_settings(settings: dict) -> dict:
 
 
 def is_in_google_colab() -> bool:
-    """
-    Returns True if the code is running in Google Colab, False otherwise.
-    """
+    """Returns True if the code is running in Google Colab, False otherwise."""
     if os.getenv("COLAB_RELEASE_TAG"):
         return True
     else:
@@ -2869,9 +2935,7 @@ def is_in_google_colab() -> bool:
 
 
 def load_cross_distances_from_file(dir_path: str) -> Optional[dict]:
-    """
-    Load transect cross-shore distances from 'transects_cross_distances.json'
-    in the given directory. Converts each list of distances into a NumPy array.
+    """Load transect cross-shore distances from 'transects_cross_distances.json' in the given directory. Converts each list of distances into a NumPy array.
 
     Args:
         dir_path (str): Directory path containing the JSON file.
@@ -2898,8 +2962,7 @@ def load_cross_distances_from_file(dir_path: str) -> Optional[dict]:
 def create_hover_box(
     title: str, feature_html: HTML = HTML(""), default_msg: str = "Hover over a feature"
 ) -> VBox:
-    """
-    Creates a box with a title and optional HTML containing information about the feature that was
+    """Creates a box with a title and optional HTML containing information about the feature that was
     last hovered over.
     The hover box has two buttons, an 'uncollapse' and 'collapse' button.
     The 'uncollapse' button opens the hover box to reveal details about the feature that was
@@ -2958,8 +3021,7 @@ def create_warning_box(
     msg_width: str = "75%",
     box_width: str = "60%",
 ) -> HBox:
-    """
-    Creates a warning box with a title and message that can be closed with a close button.
+    """Creates a warning box with a title and message that can be closed with a close button.
 
     Parameters:
     title (str, optional): The title of the warning box. Default is 'Warning'.
@@ -3024,7 +3086,7 @@ def create_warning_box(
 
 
 def clear_row(row: HBox):
-    """close widgets in row/column and clear all children
+    """Close widgets in row/column and clear all children
     Args:
         row (HBox)(VBox): row or column
     """
@@ -3034,8 +3096,7 @@ def clear_row(row: HBox):
 
 
 def check_url_status(url: str) -> int:
-    """
-    Retrieve the HTTP status code for a Zenodo download endpoint without downloading the payload.
+    """Retrieve the HTTP status code for a Zenodo download endpoint without downloading the payload.
 
     Args:
         url (str): Zenodo download URL to query.
@@ -3065,8 +3126,7 @@ def check_url_status(url: str) -> int:
 def download_url(
     url: str, save_path: str, filename: Optional[str] = None, chunk_size: int = 128
 ) -> None:
-    """
-    Downloads a file from a URL and saves it to the specified path.
+    """Downloads a file from a URL and saves it to the specified path.
 
     Args:
         url (str): The URL to download from.
@@ -3114,8 +3174,7 @@ def download_url(
 
 
 def get_center_point(coords: List[Tuple[float, float]]) -> Tuple[float, float]:
-    """
-    Returns the center point of rectangle specified by points coords.
+    """Returns the center point of rectangle specified by points coords.
 
     Args:
         coords (List[Tuple[float, float]]): Lat, lon coordinates.
@@ -3131,8 +3190,7 @@ def get_center_point(coords: List[Tuple[float, float]]) -> Tuple[float, float]:
 
 def get_epsg_from_geometry(geometry: "shapely.geometry.polygon.Polygon") -> int:
     """Uses geometry of shapely rectangle in crs 4326 to return the most accurate
-    utm code as a string of format 'epsg:utm_code'
-    example: 'espg:32610'
+    utm code as a string of format 'epsg:utm_code' example: 'espg:32610'
 
     Args:
         geometry (shapely.geometry.polygon.Polygon): geometry of a rectangle
@@ -3147,7 +3205,7 @@ def get_epsg_from_geometry(geometry: "shapely.geometry.polygon.Polygon") -> int:
 
 
 def convert_wgs_to_utm(lon: float, lat: float) -> str:
-    """return most accurate utm epsg-code based on lat and lng
+    """Return most accurate utm epsg-code based on lat and lng
     convert_wgs_to_utm function, see https://stackoverflow.com/a/40140326/4556479
     Args:
         lon (float): longitude
@@ -3166,12 +3224,13 @@ def convert_wgs_to_utm(lon: float, lat: float) -> str:
 
 
 def extract_roi_data(json_data: dict, roi_id: str, fields_of_interest: list = None):
-    """
-    Extracts the specified fields for a specific ROI from a JSON data dictionary.
+    """Extracts the specified fields for a specific ROI from a JSON data dictionary.
 
     Args:
         json_data (dict): The JSON data dictionary.
         roi_id (str): The ID of the ROI to extract data for.
+        fields_of_interest (list[str], optional): A list of strings representing the fields to extract from the dictionary.
+                    If not provided, the default fields of interest will be used.
 
     Returns:
         dict: A dictionary containing the extracted fields for the ROI.
@@ -3191,8 +3250,7 @@ def extract_roi_data(json_data: dict, roi_id: str, fields_of_interest: list = No
 def extract_fields(
     data: dict, key=None, fields_of_interest: Optional[list] = None
 ) -> dict:
-    """
-    Extracts specified fields from a given dictionary.
+    """Extracts specified fields from a given dictionary.
 
     Args:
         data (dict): A dictionary containing the data to extract fields from.
@@ -3219,8 +3277,7 @@ def extract_fields(
 
 
 def check_unique_ids(data: gpd.GeoDataFrame) -> bool:
-    """
-    Checks if all the ids in the 'id' column of a GeoDataFrame are unique. If the 'id' column does not exist returns False
+    """Checks if all the ids in the 'id' column of a GeoDataFrame are unique. If the 'id' column does not exist returns False
 
     Args:
         data (gpd.GeoDataFrame): A GeoDataFrame with an 'id' column.
@@ -3234,19 +3291,21 @@ def check_unique_ids(data: gpd.GeoDataFrame) -> bool:
 
 
 def preprocess_geodataframe(
-    data: gpd.GeoDataFrame = gpd.GeoDataFrame(),
+    data: Optional[gpd.GeoDataFrame] = None,
     columns_to_keep: Optional[Iterable[str]] = None,
     create_ids: bool = True,
     output_crs: Optional[Union[str, int, CRS]] = None,
 ) -> gpd.GeoDataFrame:
-    """
-    This function preprocesses a GeoDataFrame. It performs several transformations:
+    """Preprocess a GeoDataFrame for downstream use.
 
-    - If 'ID' column exists, it's renamed to lowercase 'id'.
-    - Z-axis coordinates are removed from data.
+     The following transformations are applied to non-empty input data:
+    - Renames 'ID' columnto lowercase 'id'.
+    - Removes Z coordinates from geometries.
     - If an 'id' column does not exist, it creates one with unique IDs generated by a function generate_ids()
       with prefix of length 3. This option can be turned off by setting the parameter create_ids=False.
-    - If the list of columns_to_keep is provided, only those columns are retained in the data.
+    - Retains only the columns specified in columns_to_keep, if provided.
+      Column matching is case-insensitive.
+    - Reprojects the GeoDataFrame to ``output_crs``, if provided.
 
     Args:
         data (gpd.GeoDataFrame, optional): The input GeoDataFrame to be preprocessed.
@@ -3255,10 +3314,16 @@ def preprocess_geodataframe(
             Defaults to None, in which case all columns are kept.
         create_ids (bool, optional): Flag to decide whether to create 'id' column if it doesn't exist.
             Defaults to True.
+        output_crs: Target coordinate reference system for the output.
+            May be specified as a CRS string, EPSG code, or pyproj.CRS
+            instance. If ``None``, the existing CRS is preserved.
 
     Returns:
         gpd.GeoDataFrame: The preprocessed GeoDataFrame.
     """
+    if data is None:
+        data = gpd.GeoDataFrame()
+
     if not data.empty:
         # rename 'ID' to lowercase if it exists
         data.rename(columns={"ID": "id"}, inplace=True)
@@ -3283,14 +3348,16 @@ def preprocess_geodataframe(
 
 
 def get_transect_points_dict(feature: gpd.GeoDataFrame) -> dict:
-    """Returns dict of np.arrays of transect start and end points
-    Example
+    """Returns dict of np.arrays of transect start and end points.
+
+    Example:
     {
         'usa_CA_0289-0055-NA1': array([[-13820440.53165404,   4995568.65036405],
         [-13820940.93156407,   4995745.1518021 ]]),
         'usa_CA_0289-0056-NA1': array([[-13820394.24579453,   4995700.97802925],
         [-13820900.16320004,   4995862.31860808]])
     }
+
     Args:
         feature (gpd.GeoDataFrame): clipped transects within roi
     Returns:
@@ -3317,79 +3384,83 @@ def get_transect_points_dict(feature: gpd.GeoDataFrame) -> dict:
 def get_cross_distance_df(
     extracted_shorelines: dict, cross_distance_transects: dict
 ) -> pd.DataFrame:
-    """
-    Creates a DataFrame from extracted shorelines and cross distance transects by
-    getting the dates from extracted shorelines and saving it to the as the intersection time for each extracted shoreline
-    for each transect
+    """Create a DataFrame of shoreline intersection distances by transect and date.
 
-    Parameters:
-    extracted_shorelines : dict
-        A dictionary containing the extracted shorelines. It must have a "dates" key with a list of dates.
-    cross_distance_transects : dict
-        A dictionary containing the transects and the cross distance where the extracted shorelines intersected it. The keys are transect names and the values are lists of cross distances.
-        eg.
-        {  'tranect 1': [1,2,3],
-            'tranect 2': [4,5,6],
+    The function combines shoreline acquisition dates with cross-shore distances
+    measured at each transect. Each row represents an extracted shoreline date,
+    and each transect is stored as a separate column containing the corresponding
+    cross-shore distance.
+
+    Args:
+        extracted_shorelines: Dictionary containing extracted shoreline data.
+            Must include a "dates" key whose value is a sequence of shoreline
+            acquisition dates.
+        cross_distance_transects: Dictionary mapping transect names or IDs to
+            sequences of cross-shore distances. Each sequence should have the
+            same length as extracted_shorelines["dates"].
+
+    Example:
+        cross_distance_transects = {
+            "transect 1": [1, 2, 3],
+            "transect 2": [4, 5, 6],
         }
+
     Returns:
-    DataFrame
-        A DataFrame where each column is a transect from cross_distance_transects and the "dates" column from extracted_shorelines. Each row corresponds to a date and contains the cross distances for each transect on that date.
+        DataFrame: A DataFrame where each column is a transect from cross_distance_transects and the "dates" column from extracted_shorelines.
+        Each row corresponds to a date and contains the cross distances for each transect on that date.
     """
     transects_csv = {}
     # copy dates from extracted shoreline
     transects_csv["dates"] = extracted_shorelines["dates"]
     # add cross distances for each transect within the ROI
     transects_csv = {**transects_csv, **cross_distance_transects}
-    # df = pd.DataFrame(transects_csv)
     # this would add the satellite the image was captured on to the timeseries
     # df['satname'] = extracted_shorelines["satname"]
     return pd.DataFrame(transects_csv)
 
 
 def remove_z_coordinates(geodf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """If the GeoDataFrame has z coordinates in any rows, the z coordinates are dropped.
-    Otherwise the original GeoDataFrame is returned.
+    """Remove Z coordinates and explode multipart geometries.
 
-    Additionally any multi part geometeries will be exploded into single geometeries.
-    eg. MutliLineStrings will be converted into LineStrings.
+    If any geometry contains a Z coordinate, the Z dimension is removed from
+    those geometries. Multipart geometries are also exploded into individual
+    geometries, regardless of whether Z coordinates are present.
+
+    For example, a MultiLineString is converted into separate LineString
+    geometries.
+
+    If the input GeoDataFrame is empty, it is returned unchanged.
+
     Args:
-        geodf (gpd.GeoDataFrame): GeoDataFrame to check for z-axis
+        geodf (gpd.GeoDataFrame): GeoDataFrame containing the geometries to process.
 
     Returns:
-        gpd.GeoDataFrame: original dataframe if there is no z axis. If a z axis is found
-        a new GeoDataFrame is returned with z axis dropped.
+        A GeoDataFrame with multipart geometries exploded into individual
+        geometries and any Z coordinates removed. If the input is empty, the
+        original GeoDataFrame is returned unchanged.
     """
     if geodf.empty:
         logger.warning("Empty GeoDataFrame has no z-axis")
         return geodf
 
-    # if any row has a z coordinate then remove the z_coordinate
-    logger.info(f"Has Z axis: {geodf['geometry'].has_z.any()}")
+    logger.info(f"Has Z axis: {geodf.geometry.has_z.any()}")
+
+    geodf = geodf.explode(ignore_index=True)
+
     if geodf["geometry"].has_z.any():
-
-        def remove_z_from_row(row):
-            if row.geometry.has_z:
-                row.geometry = shapely.ops.transform(
-                    lambda x, y, z=None: (x, y), row.geometry
-                )
-                return row
-            else:
-                return row
-
-        # Use explode to break multilinestrings in linestrings
-        feature_exploded = geodf.explode(ignore_index=True)
-        # For each linestring portion of feature convert to lat,lon tuples
-        no_z_gdf = feature_exploded.apply(remove_z_from_row, axis=1)
-        return no_z_gdf
-    else:
-        # @debug not sure if this will break everything
-        # Use explode to break multilinestrings in linestrings
-        return geodf.explode(ignore_index=True)
+        geodf["geometry"] = geodf.geometry.apply(
+            lambda geometry: shapely.ops.transform(
+                lambda x, y, z=None: (x, y),
+                geometry,
+            )
+            if geometry.has_z
+            else geometry
+        )
+    return geodf
 
 
 def save_extracted_shoreline_figures(settings: dict, save_path: str):
-    """
-    Save extracted shoreline figures to the specified save path.
+    """Save extracted shoreline figures to the specified save path.
 
     Args:
         settings (dict): A dictionary containing the settings for the extraction process.
@@ -3421,17 +3492,15 @@ def save_extracted_shoreline_figures(settings: dict, save_path: str):
 
 
 def convert_linestrings_to_multipoints(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """
-    Convert LineString geometries in a GeoDataFrame to MultiPoint geometries.
+    """Convert LineString geometries in a GeoDataFrame to MultiPoint geometries.
 
     Args:
-    - gdf (gpd.GeoDataFrame): The input GeoDataFrame.
+        gdf (gpd.GeoDataFrame): The input GeoDataFrame.
 
     Returns:
     - gpd.GeoDataFrame: A new GeoDataFrame with MultiPoint geometries. If the input GeoDataFrame
                         already contains MultiPoints, the original GeoDataFrame is returned.
     """
-
     # Check if all geometries in the gdf are MultiPoints
     if all(gdf.geometry.type == "MultiPoint"):
         return gdf
@@ -3450,8 +3519,7 @@ def convert_linestrings_to_multipoints(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFram
 def save_extracted_shorelines(
     extracted_shorelines: "Extracted_Shoreline", save_path: str
 ):
-    """
-    Save extracted shorelines, settings, and dictionary to their respective files.
+    """Save extracted shorelines, settings, and dictionary to their respective files.
 
     The function saves the following files in the specified save_path:
     - extracted_shorelines.geojson: contains the extracted shorelines as a GeoJSON object.
@@ -3507,8 +3575,7 @@ def save_extracted_shorelines(
 def stringify_datetime_columns(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
-    """
-    Convert all datetime columns in a DataFrame or GeoDataFrame to string.
+    """Convert all datetime columns in a DataFrame or GeoDataFrame to string.
 
     Args:
         df (Union[pd.DataFrame, gpd.GeoDataFrame]): The input DataFrame or GeoDataFrame.
@@ -3532,11 +3599,25 @@ def stringify_datetime_columns(
 
 
 def create_json_config(
-    inputs: dict, settings: dict = {}, roi_ids: list[str] = []
+    inputs: dict,
+    settings: Optional[dict] = None,
+    roi_ids: Optional[list[str]] = None,
 ) -> dict:
-    """returns config dictionary with the settings, currently selected_roi ids, and
-    each of the inputs specified by roi id.
-    sample config:
+    """Create a configuration dictionary for the selected ROIs.
+
+    The returned configuration contains the input data for each ROI, the list
+    of selected ROI IDs, and the provided settings. If roi_ids is not provided,
+    all keys from inputs are used as the ROI IDs
+
+    Args:
+        inputs: Dictionary mapping ROI IDs to their corresponding input
+            configuration.
+        settings: Configuration settings to include under the "settings" key.
+            If None, an empty dictionary is used.
+        roi_ids: ROI IDs to include under the "roi_ids" key. If None or empty,
+            all keys from inputs are used.
+
+    Example Config:
     {
         'roi_ids': ['17','20']
         'settings':{ 'dates': ['2018-12-01', '2019-03-01'],
@@ -3559,14 +3640,16 @@ def create_json_config(
         }
     }
 
-    Args:
-        inputs (dict): json style dictionary with roi ids at the keys with inputs as values
-        settings (dict):  json style dictionary containing map settings
     Returns:
-        dict: json style dictionary, config
+        dict: A configuration dictionary containing the ROI input data, selected
+        ROI IDs, and settings.
     """
+    if settings is None:
+        settings = {}
+
     if not roi_ids:
         roi_ids = list(inputs.keys())
+
     config = {**inputs}
     config["roi_ids"] = roi_ids
     config["settings"] = settings
@@ -3592,8 +3675,7 @@ def create_config_gdf(
     epsg_code: Optional[int] = None,
     shoreline_extraction_area_gdf: Optional[gpd.GeoDataFrame] = None,
 ) -> gpd.GeoDataFrame:
-    """
-    Create a concatenated GeoDataFrame from provided GeoDataFrames with a consistent CRS.
+    """Create a concatenated GeoDataFrame from provided GeoDataFrames with a consistent CRS.
 
     Parameters:
     - rois_gdf (gpd.GeoDataFrame): The GeoDataFrame containing Regions of Interest (ROIs).
@@ -3647,38 +3729,57 @@ def create_config_gdf(
 
 def save_config_files(
     save_location: str = "",
-    roi_ids: list[str] = [],
-    roi_settings: dict = {},
-    shoreline_settings: dict = {},
+    roi_ids: Optional[list[str]] = None,
+    roi_settings: Optional[dict] = None,
+    shoreline_settings: Optional[dict] = None,
     transects_gdf: Optional[gpd.GeoDataFrame] = None,
     shorelines_gdf: Optional[gpd.GeoDataFrame] = None,
     shoreline_extraction_area_gdf: Optional[gpd.GeoDataFrame] = None,
     roi_gdf: Optional[gpd.GeoDataFrame] = None,
     epsg_code: str = "epsg:4326",
 ):
-    """
-    Save configuration files. The config.json file and the config GeoDataFrame
-    containing the ROIs, reference shoreline, and transects are saved to the specified location.
+    """Save configuration data to the specified location.
+
+    Creates and saves a JSON configuration containing the selected ROI IDs,
+    ROI settings, and shoreline settings. A configuration GeoDataFrame is also
+    created and saved containing the available ROIs, reference shorelines,
+    transects, and shoreline extraction areas. This saves the config.json and
+    config_gdf.geojson to the specified location.
+
+    If a non-empty ROI GeoDataFrame is provided, its coordinate reference
+    system is used instead of epsg_code when creating the configuration
+    GeoDataFrame.
 
     Args:
         save_location (str): The directory where the configuration files will be saved.
-        roi_ids (list[str]): List of ROI IDs.
+        roi_ids (list[str]): ROI IDs to include in the configuration. If None, the ROI IDs
+            are determined from roi_settings.
         roi_settings (dict): Dictionary containing ROI settings.
         shoreline_settings (dict): Dictionary containing shoreline settings.
         transects_gdf (GeoDataFrame): GeoDataFrame containing transects.
         shorelines_gdf (GeoDataFrame): GeoDataFrame containing shorelines.
+        shoreline_extraction_area_gdf (GeoDataFrame): GeoDataFrame containing shoreline
+            extraction areas.
         roi_gdf (GeoDataFrame): GeoDataFrame containing ROIs.
         epsg_code (str): EPSG code for the coordinate reference system.
 
     Returns:
         None
     """
+    if roi_settings is None:
+        roi_settings = {}
+
+    if shoreline_settings is None:
+        shoreline_settings = {}
+
     # save config files
     config_json = create_json_config(roi_settings, shoreline_settings, roi_ids=roi_ids)
     file_utilities.config_to_file(config_json, save_location)
+
     # save a config GeoDataFrame with the rois, reference shoreline and transects
-    if roi_gdf is not None and not roi_gdf.empty:
+    if roi_gdf is not None and not roi_gdf.empty and roi_gdf.crs is not None:
         epsg_code = roi_gdf.crs
+
     config_gdf = create_config_gdf(
         rois_gdf=roi_gdf,
         shorelines_gdf=shorelines_gdf,
@@ -3690,7 +3791,8 @@ def save_config_files(
 
 
 def rename_jpgs(src_path: str) -> None:
-    """Renames all the jpgs in the data directory in coastseg
+    """Renames all the jpgs in the data directory in coastseg.
+
     Args:
         src_path (str): full path to the data directory in coastseg
     """
@@ -3710,7 +3812,8 @@ def rename_jpgs(src_path: str) -> None:
 
 
 def do_rois_filepaths_exist(roi_settings: dict, roi_ids: list) -> bool:
-    """Returns true if all rois have filepaths that exist
+    """Returns true if all rois have filepaths that exist.
+
     Args:
         roi_settings (dict): settings of all rois on map
         roi_ids (list): ids of rois selected on map
@@ -3732,7 +3835,8 @@ def do_rois_filepaths_exist(roi_settings: dict, roi_ids: list) -> bool:
 
 
 def do_rois_have_sitenames(roi_settings: dict, roi_ids: list) -> bool:
-    """Returns true if all rois have "sitename" with non-empty string
+    """Returns true if all rois have "sitename" with non-empty string.
+
     Args:
         roi_settings (dict): settings of all rois on map
         roi_ids (list): ids of rois selected on map
@@ -3753,9 +3857,11 @@ def do_rois_have_sitenames(roi_settings: dict, roi_ids: list) -> bool:
 
 def were_rois_downloaded(roi_settings: dict, roi_ids: list) -> bool:
     """Returns true if rois were downloaded before. False if they have not.
+
     Uses 'sitename' key for each roi to determine if roi was downloaded.
-    And checks if filepath were roi is saved is valid
-    If each roi's 'sitename' is not empty string returns true
+    And checks if filepath were roi is saved is valid.
+    If each roi's 'sitename' is not empty string returns true.
+
     Args:
         roi_settings (dict): settings of all rois on map
         roi_ids (list): ids of rois selected on map
@@ -3794,7 +3900,8 @@ def create_roi_settings(
     filepath: str,
     date_str: str = "",
 ) -> dict:
-    """returns a dict of settings for each roi with roi id as the key.
+    r"""Returns a dict of settings for each roi with roi id as the key.
+
     Example:
     "2": {
             "dates": ["2018-12-01", "2019-03-01"],
@@ -3863,7 +3970,6 @@ def create_roi_settings(
     }
 
     """
-
     roi_settings = {}
     sat_list = settings["sat_list"]
     landsat_collection = settings.get("landsat_collection", "C02")
@@ -3894,13 +4000,12 @@ def create_roi_settings(
 
 
 def scale(matrix: np.ndarray, rows: int, cols: int) -> np.ndarray:
-    """returns resized matrix with shape(rows,cols)
-        for 2d discrete labels
-        for resizing 2d integer arrays
+    """Returns resized matrix with shape(rows,cols)for 2d discrete labels for resizing 2d integer arrays.
+
     Args:
-        im (np.ndarray): 2d matrix to resize
-        nR (int): number of rows to resize 2d matrix to
-        nC (int): number of columns to resize 2d matrix to
+        matrix (np.ndarray): 2d matrix to resize
+        rows (int): number of rows to resize 2d matrix to
+        cols (int): number of columns to resize 2d matrix to
 
     Returns:
         np.ndarray: resized matrix with shape(rows,cols)
@@ -3918,8 +4023,7 @@ def scale(matrix: np.ndarray, rows: int, cols: int) -> np.ndarray:
 
 
 def rescale_array(dat: np.ndarray, mn: float, mx: float) -> np.ndarray:
-    """
-    Rescales an input array between mn and mx.
+    """Rescales an input array between mn and mx.
 
     Args:
         dat (np.ndarray): Input array to rescale.

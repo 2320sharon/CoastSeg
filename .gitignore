@@ -36,10 +36,13 @@ src/*/saved_transects/*
 src/*/test_new_model/*
 src/*/working_new_downloaded_models/*
 *tide_models*
+*models*
 *Transects_grid_regions*
 *log_*.txt
 
 
+# ignore the shorelines downloaded
+*shorelines*
 *downloaded_shorelines/*
 ./downloaded_shorelines/*
 
