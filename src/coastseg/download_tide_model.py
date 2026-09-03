@@ -36,6 +36,11 @@ PROGRAM DEPENDENCIES:
     utilities.py: download and management utilities for syncing files
 
 UPDATE HISTORY:
+    Updated 08/2026: retry constituents whose transfer is interrupted, recognize the
+        connection failures that carry no error message, and write each file
+        so a partial download is never mistaken for a finished one
+    Updated 08/2026: resolve the newest dated FES2022 release from the AVISO listing
+        instead of hardcoding it, and expose the extrapolated ocean tide option
     Updated 12/16/2025: Added ResilientFTP class for downloading files with timeout handling
     Update 1/7/2025: added option to download FES2022 by Sharon Fitzpatrick Batiste
     Updated 11/2022: added encoding for writing ascii files
@@ -54,39 +59,39 @@ UPDATE HISTORY:
 
 # Python built-in modules
 from __future__ import print_function
+
 import calendar
-import io
-import logging
-import os
-import tarfile
-import time
-import traceback
-import socket
-from functools import partial
 
 # Standard libraries
 import ftplib
 import gzip
+import io
 import json
+import logging
+import lzma
+import os
+import pathlib
 import posixpath
+import re
 import shutil
+import tarfile
+import time
+import traceback
+from functools import partial
 from glob import glob
 from typing import BinaryIO
 
 # Third-party libraries
 import numpy as np
-import xarray as xr
-from tqdm.auto import tqdm
-import lzma
-import pathlib
-import re
 
 # Local application/library specific imports
-import netCDF4  # do this otherwise pyTMD will have issues loading netCDF4.Dataset
 import pyTMD.utilities
-from coastseg.file_utilities import progress_bar_context, load_package_resource
-from coastseg import core_utilities
+import xarray as xr
+from tqdm.auto import tqdm
 
+from coastseg import core_utilities
+from coastseg.file_utilities import load_package_resource, progress_bar_context
+from coastseg.tide_correction import rank_release_dirs
 
 # FILE SIZES for files in these files
 LOAD_TIDE_FILES = {
@@ -163,6 +168,63 @@ OCEAN_TIDE_FILES = {
     "t2.nc.gz": 79210226,
 }
 
+FES2022_FALLBACK_DIRS = {
+    "ocean_tide": "ocean_tide_20241025",
+    "load_tide": "load_tide",
+    "ocean_tide_extrapolated": "ocean_tide_extrapolated",
+}
+
+# Number of times a single constituent is re-downloaded before the run gives up
+DOWNLOAD_RETRIES = 3
+
+
+class IncompleteDownloadError(Exception):
+    """Raised when a transfer ended before every byte of the remote file arrived."""
+
+
+# Errors that mean "the transfer was interrupted", as opposed to "the request was
+# invalid". A FES constituent takes ~9 minutes to transfer, during which the AVISO
+# control connection sits idle and gets torn down; how that surfaces depends on how
+# the server drops the session:
+#   OSError        socket.timeout/TimeoutError (identical since 3.10),
+#                     ConnectionResetError, ConnectionAbortedError
+#   EOFError       ftplib.getline() reading a control socket the server closed.
+#                     Raised bare, so str(exc) is '' and it prints as just "Error:"
+#   ftplib.error_temp / error_proto 4xx replies such as "421 Timeout"
+# ftplib.error_perm (550 no such file, 530 not logged in) is deliberately excluded:
+# retrying those cannot help.
+TRANSFER_INTERRUPTED = (
+    OSError,
+    EOFError,
+    ftplib.error_temp,
+    ftplib.error_proto,
+)
+
+
+def describe_exception(exc: BaseException) -> str:
+    """
+    Render an exception as a non-empty, human-readable string.
+
+    Several of the FTP failures raised mid-download carry no message at all
+    ftplib raises a bare EOFError when the server closes the control socket
+    so f"Error: {exc}" renders as Error: with nothing after it. Always
+    including the class name keeps those failures identifiable.
+
+    Args:
+        exc (BaseException): The exception to describe.
+
+    Returns:
+        str: The exception class name, plus its message when it has one.
+
+    Example:
+        >>> describe_exception(EOFError())
+        'EOFError'
+        >>> describe_exception(ValueError("bad value"))
+        'ValueError: bad value'
+    """
+    message = str(exc).strip()
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
 
 class ResilientFTP:
     """
@@ -206,7 +268,7 @@ class ResilientFTP:
         if self._ftp is None:
             self._connect()
 
-    def _with_retry(self, fn, *args, **kwargs):
+    def _with_retry(self, method_name: str, *args, **kwargs):
         """
         Run an FTP method with automatic reconnect/retry.
         Used for small control commands (SIZE, MDTM, NLST, etc).
@@ -216,28 +278,32 @@ class ResilientFTP:
         for attempt in range(1, self.max_retries + 1):
             try:
                 self._ensure_connected()
-                return fn(*args, **kwargs)
-            except (TimeoutError, socket.timeout, ftplib.error_temp, OSError) as e:
+                return getattr(self._ftp, method_name)(*args, **kwargs)
+            except TRANSFER_INTERRUPTED as e:
                 last_exc = e
                 self.logger.warning(
-                    "FTP error (%s) on attempt %d/%d, reconnecting...",
-                    e,
+                    "FTP %s failed on attempt %d/%d (%s), reconnecting...",
+                    method_name,
                     attempt,
                     self.max_retries,
+                    describe_exception(e),
                 )
-                self._connect()
-        self.logger.error("All retries failed: %s", last_exc)
+                # drop the dead connection; _ensure_connected reopens it next attempt
+                self.close()
+        self.logger.error(
+            "All retries of FTP %s failed: %s",
+            method_name,
+            describe_exception(last_exc),
+        )
         raise last_exc
 
     # --- proxied FTP methods you actually use for control plane ---
 
     def sendcmd(self, cmd):
-        self._ensure_connected()
-        return self._with_retry(self._ftp.sendcmd, cmd)
+        return self._with_retry("sendcmd", cmd)
 
     def nlst(self, *args, **kwargs):
-        self._ensure_connected()
-        return self._with_retry(self._ftp.nlst, *args, **kwargs)
+        return self._with_retry("nlst", *args, **kwargs)
 
     # You can still expose raw retrbinary if you want:
     def retrbinary(self, cmd, callback, blocksize=8192):
@@ -268,7 +334,11 @@ class ResilientFTP:
         """
         Retrieve the size of a file on the FTP server.
 
-        Returns int size in bytes, or None if SIZE is not available.
+        Args:
+            remote_file (str): The path to the file on the remote FTP server.
+
+        Returns:
+            int | None: The size of the file in bytes, or None if SIZE is not available.
         """
         try:
             self._ensure_connected()
@@ -284,30 +354,67 @@ class ResilientFTP:
             )
             return None
 
-    def handle_timeout(
-        self, remote_file: str, bytes_read, file_size: int | None, e: Exception
+    def note_interrupted_transfer(
+        self, remote_file: str, bytes_read: int, file_size: int | None, e: Exception
     ):
-        self.logger.warning("Timeout in retrbinary for %s after : %s", remote_file, e)
+        """
+        Record an interrupted transfer and drop the connection so the next call reconnects.
+
+        This does not decide whether the download succeeded verify_transfer_complete
+        does that from the byte count, so a transfer that finished before the control
+        channel died is still accepted.
+
+        Args:
+            remote_file (str): Path of the file being transferred on the ftp server.
+            bytes_read (int): Number of bytes received before the interruption.
+            file_size (int | None): Expected size of the file, or None if SIZE failed.
+            e (Exception): The exception that interrupted the transfer.
+
+        Returns:
+            None
+        """
+        self.logger.warning(
+            "Transfer of %s interrupted after %d/%s bytes: %s",
+            remote_file,
+            bytes_read,
+            file_size if file_size is not None else "unknown",
+            describe_exception(e),
+        )
         # This connection is likely dead; close it so next call reconnects.
         self.close()
 
-        complete = file_size is not None and bytes_read == file_size
+    def verify_transfer_complete(
+        self, remote_file: str, bytes_read: int, file_size: int | None
+    ):
+        """
+        Check that every byte of a remote file arrived.
 
+        Args:
+            remote_file (str): Path of the file that was transferred on the ftp server.
+            bytes_read (int): Number of bytes actually received.
+            file_size (int | None): Expected size of the file, or None if SIZE failed.
+
+        Returns:
+            None
+
+        Raises:
+            IncompleteDownloadError: If the size is known and fewer bytes arrived.
+        """
         if file_size is None:
             self.logger.warning(
-                "Timeout downloading %s with unknown file size; downloaded %d bytes",
+                "Downloaded %s with unknown file size; received %d bytes",
                 remote_file,
                 bytes_read,
             )
             return
 
-        if not complete:
-            raise TimeoutError(
+        if bytes_read < file_size:
+            raise IncompleteDownloadError(
                 f"Download incomplete for {remote_file}: {bytes_read}/{file_size} bytes"
-            ) from e
+            )
 
-        self.logger.warning(
-            "FTP response timeout, but download completed for %s (%d bytes)",
+        self.logger.info(
+            "Download complete for %s (%d bytes)",
             remote_file,
             file_size,
         )
@@ -322,6 +429,7 @@ class ResilientFTP:
         This method downloads a file from the remote FTP server and stores it in memory
         as a BytesIO object. It includes progress tracking via tqdm and handles timeouts
         gracefully for large file downloads.
+
         Args:
             remote_file (str): The path to the file on the remote FTP server to download.
             chunk_size (int, optional): The size of chunks to use when downloading the file
@@ -330,8 +438,11 @@ class ResilientFTP:
             io.BytesIO | str: A BytesIO object containing the downloaded file data, or
                 potentially a string in case of special handling scenarios.
         Raises:
-            socket.timeout and TimeoutError: Raised when the FTP connection times out during download,
-                though this is caught and handled internally.
+            IncompleteDownloadError: If the transfer was interrupted before every byte
+                of a known-size file arrived. An interruption that happens after the
+                last byte the usual case for the large FES constituents, where the
+                idle control connection dies before it can send "226 Transfer complete"
+                is logged and accepted instead.
         Note:
             - Progress bar is displayed only when file size can be determined.
         """
@@ -365,12 +476,14 @@ class ResilientFTP:
         try:
             callback = partial(on_chunk, sink=fileobj)
             self._ftp.retrbinary(f"RETR {remote_file}", callback, blocksize=chunk_size)
-        # this exception is raised on large downloads even if data transfer completed
-        except (socket.timeout, TimeoutError) as e:
-            self.handle_timeout(remote_file, bytes_read, file_size, e)
+        # these are raised on large downloads even when the data transfer completed,
+        # because the control connection goes idle for the whole transfer and dies
+        except TRANSFER_INTERRUPTED as e:
+            self.note_interrupted_transfer(remote_file, bytes_read, file_size, e)
         finally:
             if pbar is not None:
                 pbar.close()
+        self.verify_transfer_complete(remote_file, bytes_read, file_size)
         return fileobj
 
     def download_file_directly(
@@ -381,18 +494,35 @@ class ResilientFTP:
         opener=open,
     ) -> io.BytesIO | str:
         """
-        Download a file into a BytesIO with the following behavior:
+        Download a file from the FTP server straight to a local file.
 
-        - Try to get file size (if use_size=True).
-        - On timeout:
+        The download behaves as follows:
+
+        - Try to get the file size.
+        - On an interrupted transfer (timeout, reset, or a closed control channel):
             * If file size is known and bytes_read == size:
-                  treat as success and return the BytesIO.
+                  treat as success and return the local file.
             * If file size is known and bytes_read < size:
-                  raise TimeoutError (known incomplete).
+                  delete the truncated file and raise IncompleteDownloadError.
             * If file size is unknown:
                   return whatever bytes were downloaded (caller validates).
 
-        The FTP connection is closed on timeout. Next call will reconnect.
+        The FTP connection is closed on an interrupted transfer. Next call reconnects.
+
+        Args:
+            remote_file (str): The path to the file on the remote FTP server to download.
+            chunk_size (int, optional): The size of chunks to use when downloading the file
+                in bytes. Defaults to 8192.
+            local_file (str, optional): The path to write the downloaded file to. Defaults to "".
+            opener (Callable, optional): Callable used to open the local file, e.g. gzip.open
+                to compress it on the way out. Defaults to open.
+
+        Returns:
+            str: The path of the local file that was written.
+
+        Raises:
+            IncompleteDownloadError: If the transfer ended with a known, incomplete byte
+                count. The truncated local file is removed before this is raised.
         """
         self._ensure_connected()
         file_size = self.retrieve_file_size(remote_file)
@@ -425,36 +555,124 @@ class ResilientFTP:
                 self._ftp.retrbinary(
                     f"RETR {remote_file}", callback, blocksize=chunk_size
                 )
-        # this exception is raised on large downloads even if data transfer completed
-        except (socket.timeout, TimeoutError) as e:
-            self.handle_timeout(remote_file, bytes_read, file_size, e)
+        # these are raised on large downloads even when the data transfer completed,
+        # because the control connection goes idle for the whole transfer and dies
+        except TRANSFER_INTERRUPTED as e:
+            self.note_interrupted_transfer(remote_file, bytes_read, file_size, e)
         finally:
             if pbar is not None:
                 pbar.close()
+        try:
+            self.verify_transfer_complete(remote_file, bytes_read, file_size)
+        except IncompleteDownloadError:
+            # never leave a truncated file behind: the next run checks only for
+            # existence, so a partial file would be mistaken for a finished download
+            if local_file:
+                pathlib.Path(local_file).unlink(missing_ok=True)
+            raise
         return local_file
 
 
-def decompress_lzma_file(fileobj, dest_path):
+def decompress_lzma_file(fileobj, dest_path, opener=open):
     """
     Decompresses an LZMA-compressed file object and writes the output to the specified destination path.
 
-    Parameters:
-    fileobj (io.BytesIO): The LZMA-compressed file object to be decompressed.
-    dest_path (str or pathlib.Path): The destination path where the decompressed file will be saved.
+    Args:
+        fileobj (io.BytesIO): The LZMA-compressed file object to be decompressed.
+        dest_path (str | pathlib.Path): The destination path where the decompressed file will be saved.
+        opener (Callable, optional): Callable used to open the destination file. Pass
+            gzip.open to re-compress the decompressed data, which the caller must do
+            whenever it names the output '.gz': CoastSeg reads a directory of '.nc.gz'
+            files with pyTMD's compressed flag set, and pyTMD opens those with
+            gzip.open, so a '.gz' holding plain netCDF fails to read. Defaults to open.
 
     Returns:
-    None
+        None
+
+    Raises:
+        IncompleteDownloadError: If the compressed stream is incomplete or corrupt.
     """
     try:
         fileobj.seek(0)  # reset file pointer to the beginning
-        with lzma.open(fileobj) as f_in, open(dest_path, "wb") as f_out:
+        with lzma.open(fileobj) as f_in, opener(dest_path, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
-    except lzma.LZMAError as e:
-        # Compressed stream is incomplete / corrupt
-        print(
-            f"Decompression failed - download is incomplete, need to retry. Error: {e}"
+    except (lzma.LZMAError, EOFError) as e:
+        # a stream that stops early raises EOFError from the lzma reader while a
+        # corrupt one raises LZMAError; either way the file has to be downloaded again
+        message = (
+            f"Decompression failed - the download of {dest_path} is incomplete or "
+            f"corrupt, need to retry. Error: {describe_exception(e)}"
         )
-        raise e
+        print(message)
+        raise IncompleteDownloadError(message) from e
+
+
+def download_lzma_file(
+    ftp_client,
+    remote_file: str,
+    local_file: pathlib.Path,
+    logger: logging.Logger,
+    chunk: int = 8192,
+    retries: int = DOWNLOAD_RETRIES,
+    opener=open,
+) -> None:
+    """
+    Download one lzma-compressed tide constituent and decompress it into place.
+
+    Retries interrupted transfers on a fresh FTP connection. Data is written to a
+    .part file and renamed to local_file only after a successful download.
+
+    The FES constituents are ~150MB each and take several minutes to transfer, which
+    is long enough that AVISO regularly drops the connection part-way through. A
+    single failure used to abandon the whole model download, so each file is retried
+    on a fresh connection here.
+
+    Args:
+        ftp_client (ResilientFTP): Authenticated ftp client for downloading the file.
+        remote_file (str): Full path to the compressed file on the ftp server.
+        local_file (pathlib.Path): Path to write the decompressed file to.
+        logger (logging.Logger): Logger for reporting failed attempts.
+        chunk (int, optional): Block size for downloading the file. Defaults to 8192.
+        retries (int, optional): Number of attempts before giving up. Defaults to
+            DOWNLOAD_RETRIES.
+        opener (Callable, optional): Callable used to open the output file, e.g.
+            gzip.open when local_file is named '.gz'. Defaults to open.
+
+    Returns:
+        None
+
+    Raises:
+        IncompleteDownloadError: If every attempt failed. The message names the file
+            and the last underlying error.
+    """
+    part_file = local_file.with_name(local_file.name + ".part")
+    last_exc: BaseException | None = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            fileobj = ftp_client.download_fileobj(remote_file, chunk_size=chunk)
+            decompress_lzma_file(fileobj, part_file, opener=opener)
+        # Delete the part file if the transfer was interrupted
+        except (IncompleteDownloadError, *TRANSFER_INTERRUPTED) as e:
+            last_exc = e
+            attempt_msg = (
+                f"Attempt {attempt} of {retries} to download "
+                f"{posixpath.basename(remote_file)} failed: {describe_exception(e)}"
+            )
+            logger.warning(attempt_msg)
+            print(attempt_msg)
+            # drop the connection so the next attempt reconnects, and clear the
+            # partial file so a resumed attempt cannot append to stale bytes
+            ftp_client.close()
+            part_file.unlink(missing_ok=True)
+            continue
+        os.replace(part_file, local_file)
+        return
+
+    raise IncompleteDownloadError(
+        f"Failed to download {remote_file} after {retries} attempts. "
+        f"Last error: {describe_exception(last_exc)}"
+    ) from last_exc
 
 
 # PURPOSE: compare the modification time of two files
@@ -462,8 +680,21 @@ def newer(t1: int, t2: int) -> bool:
     return pyTMD.utilities.even(t1) <= pyTMD.utilities.even(t2)
 
 
+# ---------------------------------------------------------------------------
+# LEGACY: tide-model clipping helpers.
+#
+# These support clip_model_to_regions, which is no longer required CoastSeg reads
+# the un-clipped model by default. SUPPORT FOR THE CLIPPED LAYOUT MAY BE REMOVED IN A
+# FUTURE VERSION OF COASTSEG. See clip_model_to_regions for the details.
+# ---------------------------------------------------------------------------
+
+
 def normalize_longitude(ds):
-    """Normalize dataset longitudes from 0-360 to -180 to 180."""
+    """Normalize dataset longitudes from 0-360 to -180 to 180.
+
+    LEGACY: only used when clipping. The un-clipped model keeps its native 0..360
+    convention, which tide_correction._match_lon_convention handles at read time.
+    """
     ds = ds.assign_coords({"lon": (((ds.lon + 180) % 360) - 180)})
     if ds.lon[-1] == 0:
         ds = ds.isel(lon=slice(None, -1))
@@ -471,7 +702,16 @@ def normalize_longitude(ds):
 
 
 def get_coordinates(ds, region):
-    """Get coordinates within the given region, or the nearest if not found."""
+    """Get coordinates within the given region, or the nearest if not found.
+
+    LEGACY: only used when clipping.
+
+    Known limitation: the min(lon) < 0 branch normalises the grid to -180..180 and
+    then filters with a plain min/max range, which cannot express a longitude band
+    that wraps. Regions 0 and 6 are declared past -180, so their clipped grids come
+    out truncated at -180 and lose their trans-antimeridian halves. Reading the
+    un-clipped model avoids this entirely.
+    """
     # get the lats and lons from the region
     lon, lat = (
         np.array(region["coordinates"][0])[:, 0],
@@ -499,18 +739,25 @@ def write_clipped_data(
     ds, dest_dir, filename, region_number, model_name, directory_name
 ):
     """
+    LEGACY: only used when clipping.
+
+    Note this writes each region as a single netCDF chunk, which is why reading a
+    clipped region is slower than reading the chunked original: one point costs a
+    full-file decompress.
+
     Saves the content of ds to a new netCDF file at the follow location:
     dest_dir/region{region_number}/{model_name}/{directory_name}/{filename}
 
-    Parameters:
-    ds (xarray.Dataset): The dataset to be written to a netCDF file.
-    dest_dir (str): The destination directory where the netCDF file will be saved.
-    filename (str): The name of the file to be saved.
-    region_number (int): The region number used to create a subdirectory.
-    model_name (str): The model name used to create a subdirectory.
-    directory_name (str): The directory name used to create a subdirectory.
+    Args:
+        ds (xr.Dataset): The dataset to be written to a netCDF file.
+        dest_dir (str): The destination directory where the netCDF file will be saved.
+        filename (str): The name of the file to be saved.
+        region_number (int): The region number used to create a subdirectory.
+        model_name (str): The model name used to create a subdirectory.
+        directory_name (str): The directory name used to create a subdirectory.
+
     Returns:
-    None
+        None
     """
     """Write clipped dataset to a new netCDF file."""
     region_name = f"region{region_number}"
@@ -534,6 +781,8 @@ def clip_and_write_new_nc_files(
     """
     Clips netCDF files to specified regions and writes the clipped data to new netCDF files.
 
+    LEGACY: only used when clipping.
+
     Saves the netCDF files in the following format
     dest_dir/region{region_number}/{model_name}/{directory_name}/{filename}
 
@@ -545,18 +794,17 @@ def clip_and_write_new_nc_files(
         dest_dir/region/fes2014/ocean_tide/filename.nc
         dest_dir/region1/fes2014/load_tide/filename.nc
 
-    Parameters:
-        files (list of str): List of file paths to the netCDF files to be clipped.
-        geometries (list of dict): List of geometries defining the regions to clip to.
+    Args:
+        files (List[str]): List of file paths to the netCDF files to be clipped.
+        geometries (List[dict]): List of geometries defining the regions to clip to.
         dest_dir (str): Destination directory where the new clipped netCDF files will be saved.
-        progress_bar_name (str, optional): Name to display on the progress bar. Default is an empty string.
-        use_progress_bar (bool, optional): Whether to display a progress bar. Default is True.
-        model_name (str, optional): Name of the model used for naming the output files. Default is "fes2014".
-        directory_name (str, optional): Name of the subdirectory to save the output files. Default is "ocean_tide".
+        progress_bar_name (str, optional): Name to display on the progress bar. Defaults to "".
+        use_progress_bar (bool, optional): Whether to display a progress bar. Defaults to True.
+        model_name (str, optional): Name of the model used for naming the output files. Defaults to "fes2014".
+        subdirectory_name (str, optional): Name of the subdirectory to save the output files. Defaults to "ocean_tide".
 
     Returns:
-    None
-
+        None
     """
     progress_description = f"Clipping {progress_bar_name} files"
 
@@ -614,9 +862,7 @@ def unzip_gzip_files(directory: str, use_progress_bar: bool = True):
 
     Args:
         directory (str): The path of the directory in which to find .gz files to unzip.
-
-    Prints:
-        A message for each .gz file that is unzipped and removed, indicating the path of the file.
+        use_progress_bar (bool, optional): Whether to display a progress bar. Defaults to True.
 
     Returns:
         None
@@ -646,6 +892,8 @@ def unzip_gzip_files(directory: str, use_progress_bar: bool = True):
 
 def create_region_directories(base_dir, region_names, model_name="fes2014"):
     """
+    LEGACY: only used when clipping.
+
     Creates a series of directories for each region and creates subdirectories for each tide model in each region.
 
     base_dir
@@ -661,13 +909,11 @@ def create_region_directories(base_dir, region_names, model_name="fes2014"):
 
     Args:
         base_dir (str): The base directory path.
-        region_names (list): A list of region names.
-        model_name (str): The name of the model. Defaults to 'fes2014'.
-
+        region_names (List[str]): A list of region names.
+        model_name (str, optional): The name of the model. Defaults to 'fes2014'.
 
     Returns:
         None
-
     """
     for region_name in region_names:
         region_dir = os.path.join(base_dir, region_name)
@@ -718,28 +964,20 @@ def ftp_download(
     """
     Pull file from a remote ftp server and decompress if tar file
 
-    Parameters
-    ----------
-    logger: logging.logger object
-        Logger for outputting file transfer information
-    ftp_client: ResilientFTP
-        Authenticated ftp client for downloading files
-    remote_path: list
-        Remote path components to file on ftp server
-    local_dir: pathlib.Path
-        Local directory to save file
-    LZMA: bool, default None
-        Decompress lzma-compressed file
-    TARMODE: str, default None
-        Mode for reading tar-compressed file
-    FLATTEN: bool, default None
-        Flatten tar file structure when extracting files
-    GZIP: bool, default False
-        Compress output ascii and netCDF4 tide files
-    CHUNK: int, default 8192
-        Block size for downloading files from ftp server
-    MODE: oct, default 0o775
-        Local permissions mode of the files downloaded
+    Args:
+        logger (logging.Logger): Logger for outputting file transfer information.
+        ftp_client (ResilientFTP): Authenticated ftp client for downloading files.
+        remote_path (list): Remote path components to file on ftp server.
+        local_dir (pathlib.Path): Local directory to save file.
+        LZMA (bool, optional): Decompress lzma-compressed file. Defaults to None.
+        TARMODE (str, optional): Mode for reading tar-compressed file. Defaults to None.
+        FLATTEN (bool, optional): Flatten tar file structure when extracting files. Defaults to None.
+        GZIP (bool, optional): Compress output ascii and netCDF4 tide files. Defaults to False.
+        CHUNK (int, optional): Block size for downloading files from ftp server. Defaults to 8192.
+        MODE (oct, optional): Local permissions mode of the files downloaded. Defaults to 0o775.
+
+    Returns:
+        None
     """
     # remote and local directory for data product
     remote_file = posixpath.join("auxiliary", "tide_model", *remote_path)
@@ -774,8 +1012,7 @@ def ftp_download(
                 local_file = local_dir.joinpath(*posixpath.split(output))
                 # check if the local file exists
                 if local_file.exists() and newer(m.mtime, local_file.stat().st_mtime):
-                    # check the modification time of the local file
-                    # if remote file is newer: overwrite the local file
+                    # Skip if the local copy is at least as new; newer remote files overwrite it.
                     pbar.set_postfix_str(f"Already exists {member} - skipping")
                     pbar.update(1)
                     continue
@@ -810,12 +1047,12 @@ def ftp_download(
         logger.info(f"Downloading remote file {remote_file} to {str(local_file)}")
         # recursively create output directory if non-existent
         local_file.parent.mkdir(mode=MODE, parents=True, exist_ok=True)
-        file_obj = ftp_client.download_fileobj(
-            remote_file,
-            chunk_size=CHUNK,
+        # download and decompress into local_dir, retrying interrupted transfers.
+        # opener re-compresses the output when GZIP named it '.gz', so the file's
+        # contents match its name and pyTMD can read it back with gzip.open
+        download_lzma_file(
+            ftp_client, remote_file, local_file, logger, chunk=CHUNK, opener=opener
         )
-        # decompress lzma file and extract contents to local directory
-        decompress_lzma_file(file_obj, local_file)
         # get last modified date of remote file within tar file
         # keep remote modification time of file and local access time
         os.utime(local_file, (local_file.stat().st_atime, mtime))
@@ -862,28 +1099,20 @@ def aviso_fes_tar(
 ):
     """
     Download FES tidal model files from AVISO ftp server
-    Parameters
-    ----------
-    model: str
-        FES tidal model to download
-    ftp_client: ResilientFTP
-        Authenticated ftp client for downloading files
-    logger: logging.Logger
-        Logger for outputting file transfer information
-    DIRECTORY: str or pathlib.Path, default None
-        Local directory to save FES files
-    LOAD: bool, default False
-        Download load tide files for FES2014
-    CURRENTS: bool, default False
-        Download current files for FES2012 and FES2014
-    GZIP: bool, default False
-        Compress output ascii and netCDF4 tide files
-    MODE: oct, default 0o775
-        Local permissions mode of the files downloaded
-    use_progress_bar: bool, default True
-        Use progress bar to track file downloads
-    LOG: bool, default True
-        Log file transfer information
+
+    Args:
+        model (str): FES tidal model to download.
+        ftp_client (ResilientFTP): Authenticated ftp client for downloading files.
+        logger (logging.Logger): Logger for outputting file transfer information.
+        DIRECTORY (str | pathlib.Path, optional): Local directory to save FES files. Defaults to None.
+        LOAD (bool, optional): Download load tide files for FES2014. Defaults to False.
+        CURRENTS (bool, optional): Download current files for FES2012 and FES2014. Defaults to False.
+        GZIP (bool, optional): Compress output ascii and netCDF4 tide files. Defaults to False.
+        MODE (oct, optional): Local permissions mode of the files downloaded. Defaults to 0o775.
+        use_progress_bar (bool, optional): Use progress bar to track file downloads. Defaults to True.
+
+    Returns:
+        None
     """
     # check if local directory exists and recursively create if not
     localpath = os.path.join(DIRECTORY, model.lower())
@@ -987,26 +1216,19 @@ def aviso_fes_list(
     """
     Download AVISO FES2022 tide model files from the AVISO FTP server
 
-    Parameters
-    ----------
-    MODEL: str
-        FES tide model to download
-    ftp_client: ResilientFTP
-        Authenticated ftp client for downloading files
-    logger: logging.logger object
-        Logger for outputting file transfer information
-    DIRECTORY: str or pathlib.Path
-        Working data directory
-    LOAD: bool, default False
-        Download load tide model outputs
-    CURRENTS: bool, default False
-        Download tide model current outputs
-    EXTRAPOLATED: bool, default False
-        Download extrapolated tide model outputs
-    GZIP: bool, default False
-        Compress output ascii and netCDF4 tide files
-    MODE: oct, default 0o775
-        Local permissions mode of the files downloaded
+    Args:
+        model (str): FES tide model to download.
+        ftp_client (ResilientFTP): Authenticated ftp client for downloading files.
+        logger (logging.Logger): Logger for outputting file transfer information.
+        DIRECTORY (str | pathlib.Path, optional): Working data directory. Defaults to None.
+        LOAD (bool, optional): Download load tide model outputs. Defaults to False.
+        CURRENTS (bool, optional): Download tide model current outputs. Defaults to False.
+        EXTRAPOLATED (bool, optional): Download extrapolated tide model outputs. Defaults to False.
+        GZIP (bool, optional): Compress output ascii and netCDF4 tide files. Defaults to False.
+        MODE (oct, optional): Local permissions mode of the files downloaded. Defaults to 0o775.
+
+    Returns:
+        None
     """
     # validate local directory
     DIRECTORY = pathlib.Path(DIRECTORY).expanduser().absolute()
@@ -1015,14 +1237,31 @@ def aviso_fes_list(
     FES = {}
     # 2022 model
     FES["FES2022"] = []
-    # example of path to ocean tide files: fes2022b/ocean_tide_20241025
-    FES["FES2022"].append(["fes2022b", "ocean_tide_20241025"])
+
+    # resolve each group against the live listing so the newest AVISO release is
+    # downloaded, e.g. fes2022b/ocean_tide_20241025
+    def latest(group: str) -> list:
+        return [
+            "fes2022b",
+            find_latest_release_dir(
+                ftp_client,
+                "fes2022b",
+                group,
+                logger,
+                fallback=FES2022_FALLBACK_DIRS[group],
+            ),
+        ]
+
+    FES["FES2022"].append(latest("ocean_tide"))
     if LOAD:
-        FES["FES2022"].append(["fes2022b", "load_tide"])
+        FES["FES2022"].append(latest("load_tide"))
     if EXTRAPOLATED:
-        FES["FES2022"].append(["fes2022b", "ocean_tide_extrapolated"])
+        FES["FES2022"].append(latest("ocean_tide_extrapolated"))
     if CURRENTS:
         logger.warning("FES2022 does not presently have current outputs")
+
+    # files that could not be downloaded, reported together once the run finishes
+    failed = []
 
     # for each model file type
     for subdir in FES[model]:
@@ -1030,18 +1269,34 @@ def aviso_fes_list(
         file_list = ftp_list(ftp_client, subdir, basename=True, sort=True)
         for fi in tqdm(file_list, desc=f"Downloading {model} files"):
             # example remote path : ['fes2022b', 'ocean_tide_20241025', 'filename']
+            # where the release folder was resolved by find_latest_release_dir
             remote_path = [*subdir, fi]
             LZMA = fi.endswith(".xz")
-            ftp_download(
-                logger,
-                ftp_client,
-                remote_path,
-                local_dir,
-                LZMA=LZMA,
-                GZIP=GZIP,
-                CHUNK=32768,
-                MODE=MODE,
-            )
+            try:
+                ftp_download(
+                    logger,
+                    ftp_client,
+                    remote_path,
+                    local_dir,
+                    LZMA=LZMA,
+                    GZIP=GZIP,
+                    CHUNK=32768,
+                    MODE=MODE,
+                )
+            except Exception as e:
+                # carry on with the remaining constituents: one unreachable file
+                # should not cost the user the rest of a multi-hour download, and
+                # re-running skips whatever already made it to disk
+                failed.append(posixpath.join(*subdir, fi))
+                logger.error("Could not download %s: %s", fi, describe_exception(e))
+                print(f"Could not download {fi}: {describe_exception(e)}")
+
+    if failed:
+        raise IncompleteDownloadError(
+            f"{len(failed)} of the {model} files could not be downloaded: "
+            f"{', '.join(failed)}. Re-run the download to retry them the files "
+            "that already finished are skipped."
+        )
 
 
 # PURPOSE: List a directory on a ftp host
@@ -1049,18 +1304,15 @@ def ftp_list(ftp_client, remote_path, basename=False, pattern=None, sort=False):
     """
     List a directory on a ftp host
 
-    Parameters
-    ----------
-    f: ftplib.FTP object
-        Active ftp connection to AVISO server
-    remote_path: list
-        Remote path components to directory on ftp server
-    basename: bool, default False
-        Return only the basenames of the listed items
-    pattern: str, default None
-        Regular expression pattern to filter listed items
-    sort: bool, default False
-        Sort the listed items alphabetically
+    Args:
+        ftp_client (ResilientFTP): Active ftp connection to the AVISO server.
+        remote_path (list): Remote path components to directory on ftp server.
+        basename (bool, optional): Return only the basenames of the listed items. Defaults to False.
+        pattern (str, optional): Regular expression pattern to filter listed items. Defaults to None.
+        sort (bool, optional): Sort the listed items alphabetically. Defaults to False.
+
+    Returns:
+        List[str]: The items found in the remote directory.
     """
     # list remote path
     output = ftp_client.nlst(posixpath.join("auxiliary", "tide_model", *remote_path))
@@ -1079,6 +1331,73 @@ def ftp_list(ftp_client, remote_path, basename=False, pattern=None, sort=False):
         output = [output[indice] for indice in i]
     # return the list of items
     return output
+
+
+def find_latest_release_dir(
+    ftp_client,
+    parent: str,
+    group: str,
+    logger: logging.Logger,
+    fallback: str = "",
+) -> str:
+    """
+    Find the newest release folder for a tide group on the AVISO ftp server.
+
+    AVISO ships each group either under its plain name ('ocean_tide') or under a
+    dated re-release ('ocean_tide_20241025'), and adds a new dated folder every time
+    the constituents are republished. Resolving the name from the live listing keeps
+    CoastSeg on the latest release.
+
+    A dated folder always outranks the undated one, and the newest date wins.
+
+    Args:
+        ftp_client (ResilientFTP): Authenticated ftp client for listing the remote directory.
+        parent (str): Remote model directory holding the groups, e.g. 'fes2022b'.
+        group (str): Tide group to resolve, e.g. 'ocean_tide' or 'load_tide'.
+        logger (logging.Logger): Logger for reporting which release was selected.
+        fallback (str, optional): Folder name to use if the listing cannot be read or
+            matches nothing. Defaults to ''.
+
+    Returns:
+        str: The folder name to download from, relative to parent.
+
+    Example:
+        >>> find_latest_release_dir(client, "fes2022b", "ocean_tide", logger)
+        'ocean_tide_20241025'
+    """
+
+    try:
+        entries = ftp_list(ftp_client, [parent], basename=True)
+    except Exception as e:
+        logger.warning(
+            "Could not list %s to find the latest %s release (%s); using %r",
+            parent,
+            group,
+            e,
+            fallback,
+        )
+        return fallback
+
+    candidates = rank_release_dirs(entries, group)
+    if not candidates:
+        logger.warning(
+            "No %s release folder found in %s (listing: %s); using %r",
+            group,
+            parent,
+            sorted(entries),
+            fallback,
+        )
+        return fallback
+
+    latest = candidates[-1]
+    logger.info(
+        "Using the %s release %s/%s (available: %s)",
+        group,
+        parent,
+        latest,
+        candidates,
+    )
+    return latest
 
 
 def create_logger(
@@ -1152,28 +1471,20 @@ def aviso_fes_tides(
     """
     Download AVISO FES global tide models from the AVISO FTP server
 
-    Parameters
-    ----------
-    model: str
-        FES tide model to download
-    directory: str or pathlib.Path
-        Working data directory
-    user: str, default ''
-        Username for AVISO Login
-    password: str, default ''
-        Password for AVISO Login
-    load: bool, default False
-        Download load tide model outputs
-    currents: bool, default False
-        Download tide model current outputs
-    extrapolated: bool, default False
-        Download extrapolated tide model outputs
-    compressed: bool, default False
-        Compress output ascii and netCDF4 tide files
-    timeout: int, default None
-        Timeout in seconds for blocking operations
-    mode: oct, default 0o775
-        Local permissions mode of the files downloaded
+    Args:
+        model (str): FES tide model to download.
+        DIRECTORY (str | pathlib.Path, optional): Working data directory. Defaults to None.
+        USER (str, optional): Username for AVISO Login. Defaults to ''.
+        PASSWORD (str, optional): Password for AVISO Login. Defaults to ''.
+        LOAD (bool, optional): Download load tide model outputs. Defaults to False.
+        CURRENTS (bool, optional): Download tide model current outputs. Defaults to False.
+        GZIP (bool, optional): Compress output ascii and netCDF4 tide files. Defaults to False.
+        LOG (bool, optional): Log file transfer information to a file. Defaults to True.
+        MODE (oct, optional): Local permissions mode of the files downloaded. Defaults to 0o775.
+        EXTRAPOLATED (bool, optional): Download extrapolated tide model outputs. Defaults to False.
+
+    Returns:
+        None
     """
     # check if local directory exists and recursively create if not
     # create log file with list of downloaded files (or print to terminal)
@@ -1227,13 +1538,14 @@ def get_missing_files(
     """
     Determine the missing files based on the filename and check them in the respective directories.
 
-    Parameters:
-    - local_file (str): Path to the local file.
-    - local_dir (str): Base directory where the files are located.
-    - OCEAN_TIDE_FILES (dict): Dictionary of expected ocean tide files.
-    - LOAD_TIDE_FILES (dict): Dictionary of expected load tide files.
+    Args:
+        local_file (str): Path to the local file.
+        local_dir (str): Base directory where the files are located.
+        OCEAN_TIDE_FILES (dict): Dictionary of expected ocean tide files.
+        LOAD_TIDE_FILES (dict): Dictionary of expected load tide files.
+
     Returns:
-    - list: A list of missing files. If no files are missing, returns an empty list.
+        list: A list of missing files. If no files are missing, returns an empty list.
     """
     missing_files = []
     filename = os.path.basename(local_file)
@@ -1254,17 +1566,18 @@ def extract_tar_with_progress_bar(
     """
     Extract files from a tar object with a progress bar.
 
-    Parameters:
-    - fileobj (io.BytesIO): A file-like object containing the tar data.
-    - local_dir (str): Directory where the extracted files should be saved.
-    - missing_files (list): List of filenames that need to be extracted.
-    - GZIP (bool): Whether to gzip-compress the extracted files.
-    - MODE (int): Unix file permissions for the extracted files.
-    - tarmode (str): The mode in which the tar files should be processed, if applicable
-    - flatten (bool): A boolean indicating whether the downloaded files should be flattened or not
-    - logger (logging object): logger: A logging object used to log events and messages during the process
-    Note:
-    - The function uses tqdm to display a progress bar.
+    Args:
+        fileobj (io.BytesIO): A file-like object containing the tar data.
+        local_dir (str): Directory where the extracted files should be saved.
+        missing_files (list): List of filenames that need to be extracted.
+        GZIP (bool): Whether to gzip-compress the extracted files.
+        MODE (int): Unix file permissions for the extracted files.
+        tarmode (str): The mode in which the tar files should be processed, if applicable.
+        flatten (bool): Whether the extracted files should be flattened or not.
+        logger (logging.Logger): A logging object used to log events and messages during the process.
+
+    Returns:
+        None
     """
     fileobj.seek(0)  # reset file object pointer to beginning
     tar = tarfile.open(fileobj=fileobj, mode=tarmode)
@@ -1274,11 +1587,10 @@ def extract_tar_with_progress_bar(
     with progress_bar_context(
         True,
         total=total_size,
-        description=f"Extracting Tar files",
+        description="Extracting Tar Files",
         unit="B",
         unit_scale=True,
     ) as update:
-        # with tqdm(total=total_size, unit="B", unit_scale=True, ncols=100) as pbar:
         for m in member_files:
             logger.info(f"m : {m}")
             member = posixpath.basename(m.name) if flatten else m.name
@@ -1329,19 +1641,27 @@ def ftp_download_file(
     """
     The function performs the following tasks:
     1. Retrieves the remote file paths and constructs an FTP URL, logging this information.
-    2. If tar mode is specified: a. Reads binary data from the remote file and stores it in a bytesIO object. b. Opens the tar file and reads its content. c. Extracts all files in the tar file. d. Depending on the file extension and whether GZIP compression is enabled or not, the files are either compressed with gzip or simply copied to the local directory. e. Stores the last modified date of the remote file and applies it to the local file while retaining the local access time.
+    2. If tar mode is specified:
+        a. Reads binary data from the remote file and stores it in a bytesIO object.
+        b. Opens the tar file and reads its content.
+        c. Extracts all files in the tar file.
+        d. Depending on the file extension and whether GZIP compression is enabled or not, the files are either compressed with gzip or simply copied to the local directory.
+        e. Stores the last modified date of the remote file and applies it to the local file while retaining the local access time.
     3. If tar mode is not specified, the function copies readme and uncompressed files directly to the local directory, keeping the remote modification time and local access time.
 
     Args:
-        logger (logging object): logger: A logging object used to log events and messages during the process
-        ftp_client (ResilientFTP object): An active FTP connection to the AVISO server managed by the ResilientFTP class
-        remote_path (_type_): The path where the files are located on the FTP server
-        local_dir (str): The path where the files should be downloaded on the local machine
-        tarmode (_type_): The mode in which the tar files should be processed, if applicable
-        flatten (bool): A boolean indicating whether the downloaded files should be flattened or not
-        GZIP (bool): A boolean indicating whether gzip compression should be applied to the downloaded files
-        MODE (): Unix file permissions for downloaded files
+        logger (logging.Logger): A logging object used to log events and messages during the process.
+        ftp_client (ResilientFTP): An active FTP connection to the AVISO server managed by the ResilientFTP class.
+        remote_path (list): The path components where the files are located on the FTP server.
+        local_dir (str): The path where the files should be downloaded on the local machine.
+        tarmode (str): The mode in which the tar files should be processed, if applicable.
+        flatten (bool): Whether the downloaded files should be flattened or not.
+        GZIP (bool, optional): Whether gzip compression should be applied to the downloaded files. Defaults to False.
+        MODE (int, optional): Unix file permissions for downloaded files. Defaults to 0o775.
+        CHUNK (int, optional): Block size for downloading files from the ftp server. Defaults to 8192.
 
+    Returns:
+        None
     """
     try:
         remote_file = posixpath.join("auxiliary", "tide_model", *remote_path)
@@ -1411,22 +1731,29 @@ def download_fes_tides(
     gzip=True,
     log=True,
     mode=0o775,
+    extrapolated=False,
 ):
     """
     Downloads FES tide models from the AVISO FTP server and saves the tide model files to the specified directory under the tide model name.
 
-    Parameters:
-        user (str): Username for FTP server authentication.
-        password (str): Password for FTP server authentication.
-        directory (str): Directory where the tide models will be downloaded.
-        tide (list): List of tide model names to download. Default is ["FES2014"].
-        load (bool): If True, load the tide model after downloading. Default is True.
-        currents (bool): If True, download tidal currents. Default is False.
-        gzip (bool): If True, download gzip compressed files. Default is True.
-        log (bool): If True, log the download process. Default is True.
-        mode (int): Permissions mode for the downloaded files. Default is 0o775.
+    Args:
+        user (str, optional): Username for FTP server authentication. Defaults to "".
+        password (str, optional): Password for FTP server authentication. Defaults to "".
+        directory (str, optional): Directory where the tide models will be downloaded.
+            Defaults to the "tide_model" directory in the CoastSeg base directory.
+        tide (list, optional): List of tide model names to download. Defaults to ["FES2014"].
+        load (bool, optional): If True, also download the load tide files. Defaults to True.
+        currents (bool, optional): If True, download tidal currents. Defaults to False.
+        gzip (bool, optional): If True, download gzip compressed files. Defaults to True.
+        log (bool, optional): If True, log the download process to a file. Defaults to True.
+        mode (int, optional): Permissions mode for the downloaded files. Defaults to 0o775.
+        extrapolated (bool, optional): If True, also download the extrapolated ocean tide
+            constituents, which fill the coastal zone by nearest-neighbour
+            extrapolation. FES2022 only, and roughly doubles the download size.
+            Defaults to False.
+
     Returns:
-    None
+        None
     """
     # AVISO FTP Server hostname
     HOST = "ftp-access.aviso.altimetry.fr"
@@ -1446,8 +1773,56 @@ def download_fes_tides(
                 GZIP=gzip,
                 LOG=log,
                 MODE=mode,
+                EXTRAPOLATED=extrapolated,
             )
         print(f"Downloaded the {tide_model_name} to {directory}")
+
+
+def resolve_clip_source_dirs(tide_model_directory: str, MODEL: str) -> tuple:
+    """
+    Locate the downloaded ocean_tide and load_tide folders that clipping reads from.
+
+    AVISO ships the FES2022 constituents under dated release folders
+    ('ocean_tide_20241025') and gives every republished release a new date, so the
+    folders are resolved from disk rather than named directly. This reuses the same
+    resolver tide_correction uses when reading the model, so clipping and prediction
+    can never disagree about which release is installed.
+
+    Args:
+        tide_model_directory (str): The directory holding the downloaded tide model.
+        MODEL (str): The tide model, either 'FES2014' or 'FES2022'.
+
+    Returns:
+        tuple: (ocean_tide_dir, load_tide_dir, model_name). Either directory is ''
+            when that group was not downloaded.
+
+    Raises:
+        Exception: If MODEL is not a supported tide model.
+
+    Example:
+        >>> resolve_clip_source_dirs("tide_model", "FES2022")
+        ('tide_model/fes2022b/ocean_tide_20241025', 'tide_model/fes2022b/load_tide', 'fes2022b')
+    """
+    # imported here so opening the download notebook does not pay for
+    # tide_correction's import chain, and so the modules cannot become circular
+    from coastseg.tide_correction import _find_group_dir
+
+    if MODEL.upper() == "FES2014":
+        model_name = "fes2014"
+    elif MODEL.upper() == "FES2022":
+        model_name = "fes2022b"
+    else:
+        raise Exception(f"Model {MODEL} is not supported.\n{traceback.format_exc()}")
+
+    model_directory = pathlib.Path(tide_model_directory) / model_name
+
+    def resolve(group: str) -> str:
+        try:
+            return str(_find_group_dir(model_directory, group))
+        except FileNotFoundError:
+            return ""
+
+    return resolve("ocean_tide"), resolve("load_tide"), model_name
 
 
 def clip_model_to_regions(
@@ -1461,6 +1836,14 @@ def clip_model_to_regions(
     """
     Clips the selected tide model to each region found in the regions files to create a smaller clipped version of the tide model for each region.
     Each smaller tide model gets stored in its own directory within the region directory.
+
+    LEGACY THIS STEP IS NO LONGER REQUIRED, AND SUPPORT FOR THE CLIPPED LAYOUT MAY
+    BE REMOVED IN A FUTURE VERSION OF COASTSEG.
+
+    CoastSeg now reads the un-clipped model directly and does so by default (see
+    tide_model_layout="clipped" to opt back in). Not clipping is faster and takes up less space.
+
+    This function is kept so existing installs continue to function without re-downloading.
 
     Available options for the model parameter are "FES2014" and "FES2022".
 
@@ -1479,26 +1862,31 @@ def clip_model_to_regions(
         |       |__ ocean_tide
 
 
-    Parameters:
-        tide_model_directory (str): The directory where the tide model data is stored. Defaults to a subdirectory named "tide_model" in the base directory.
-        regions_file (str): The file path to the regions GeoJSON file. If not provided, the default internal tide regions map will be used.
-        model (str): The tide model to use. Supported models are "FES2014" and "FES2022". Defaults to "FES2014".
-        use_progess_bar (bool): Whether to display a progress bar during the operation. Defaults to True.
-    Raises:
-    Exception: If the tide model directory does not exist or if the specified model is not supported.
+    Args:
+        tide_model_directory (str, optional): The directory where the tide model data is stored.
+            Defaults to a subdirectory named "tide_model" in the base directory.
+        regions_file (str, optional): The file path to the regions GeoJSON file. If not provided,
+            the default internal tide regions map will be used. Defaults to "".
+        MODEL (str, optional): The tide model to use. Supported models are "FES2014" and
+            "FES2022". Defaults to "FES2014".
+        use_progess_bar (bool, optional): Whether to display a progress bar during the
+            operation. Defaults to True.
+
     Returns:
-    None
+        None
+
+    Raises:
+        Exception: If the tide model directory does not exist or if the specified model is not supported.
     """
     with progress_bar_context(
         use_progess_bar,
         total=6,
         description="Clipping the Tide Model",
     ) as update:
-        if not os.path.exists(tide_model_directory) and os.path.isdir(
-            tide_model_directory
-        ):
+        if not os.path.isdir(tide_model_directory):
             raise Exception(
-                f"The tide model directory does not exist at {tide_model_directory}.\n{traceback.format_exc()}"
+                f"The tide model directory does not exist at {tide_model_directory}. "
+                "Download the tide model before clipping it."
             )
 
         # use file_utilities load_package_resource to load the tide regions geojson from coastseg's internal data
@@ -1507,24 +1895,20 @@ def clip_model_to_regions(
                 "tide_model", "tide_regions_map.geojson"
             )
 
-        model_name = MODEL.lower()
-
-        if MODEL.upper() == "FES2014":
-            # create paths to tide models
-            fes2014_model_directory = os.path.join(tide_model_directory, "fes2014")
-            load_tide_dir = os.path.join(fes2014_model_directory, "load_tide")
-            ocean_tide_dir = os.path.join(fes2014_model_directory, "ocean_tide")
-        elif MODEL.upper() == "FES2022":
-            # create paths to tide models
-            fes2022_model_directory = os.path.join(tide_model_directory, "fes2022b")
-            ocean_tide_dir = os.path.join(
-                fes2022_model_directory, "ocean_tide_20241025"
-            )
-            load_tide_dir = os.path.join(fes2022_model_directory, "load_tide")
-            model_name = "fes2022b"
-        else:
+        # resolve the downloaded release folders, e.g. fes2022b/ocean_tide_20241025
+        ocean_tide_dir, load_tide_dir, model_name = resolve_clip_source_dirs(
+            tide_model_directory, MODEL
+        )
+        if not ocean_tide_dir:
             raise Exception(
-                f"Model {MODEL} is not supported.\n{traceback.format_exc()}"
+                f"No ocean tide files found for {MODEL} under {tide_model_directory}. "
+                "Download the tide model before clipping it."
+            )
+        if not load_tide_dir:
+            # the load tide is optional, so clip whatever was downloaded
+            print(
+                f"No load tide files found for {MODEL} under {tide_model_directory}, "
+                "clipping the ocean tide only."
             )
 
         # Geojson file with world regions to split tide model for faster loading
@@ -1533,14 +1917,17 @@ def clip_model_to_regions(
         update("Clipping the Tide Model: Unzipping load tide files")
 
         # unzip the compressed files in each directory
-        unzip_gzip_files(load_tide_dir)
+        if load_tide_dir:
+            unzip_gzip_files(load_tide_dir)
         update("Clipping the Tide Model: Unzipping ocean tide files")
         unzip_gzip_files(ocean_tide_dir)
 
         # create a list of all the nc files in both the load and ocean tide directories
-        load_tide_nc_files = [
-            f for f in glob(os.path.join(load_tide_dir, "*.nc")) if "clipped" not in f
-        ]
+        load_tide_nc_files = (
+            [f for f in glob(os.path.join(load_tide_dir, "*.nc")) if "clipped" not in f]
+            if load_tide_dir
+            else []
+        )
         ocean_tide_nc_files = [
             f for f in glob(os.path.join(ocean_tide_dir, "*.nc")) if "clipped" not in f
         ]

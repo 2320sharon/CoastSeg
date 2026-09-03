@@ -19,7 +19,7 @@ keywords = [
 ]
 name = "coastseg"
 readme = "README.md"
-version = "2.0.3"
+version = "2.1.0"
 #these dependencies are the core dependencies of the package necessary for the coastsat workflow and the core functionality. Pixi reads these as pypi dependencies
 classifiers = [
   "License :: OSI Approved :: MIT License",
@@ -46,7 +46,8 @@ dependencies = [
   "nest-asyncio",
   "pooch",
   "protobuf",
-  "pytmd<2.2.0",
+  "pytmd>=3.0.9,<4",
+  "timescale>=0.1.1",
   "xarray",
   "pytz",
   "netcdf4",
@@ -59,6 +60,20 @@ packages = ["src/coastseg"]
 
 [project.optional-dependencies]
 test = ["pytest"] # dependencies for testing
+
+[tool.pytest.ini_options]
+minversion = "7.0" # Minimum required pytest version
+testpaths = ["tests"]
+# -ra: show extra test summary info for all except passed
+# --strict-markers: raise errors for unregistered custom markers
+# --strict-config : aboirt the test run with error if there is a unrecognized configuration option
+addopts = "-ra --strict-markers --strict-config"
+# tide model : tags tests that require FES tide model to be present. Skip tests that require it with pytest -m "not tide_model" 
+# slow : tag tests that take more than a few seconds to run. Run pytest -m "not slow" to run all tests including slow ones.
+markers = [
+  "tide_model: needs the FES tide model on disk (CoastSeg/tide_model, or $COASTSEG_TIDE_MODEL)",
+  "slow: takes more than a few seconds to run",
+]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
@@ -89,6 +104,13 @@ pooch = "*"
 xarray = "*"
 pytz = "*"
 scikit-image = "*"
+# pyTMD 3 runtime dependencies. pytmd itself still comes from PyPI (see note above),
+# but these are better as conda-forge builds and pixi lets them satisfy pytmd's PyPI requirements.
+h5netcdf = "*"
+lxml = "*"
+pint = "*"
+platformdirs = "*"
+pyproj = ">=2.5.0"
 
 # tells setup tools to include the code in the coastseg directory within the src directory
 [tool.setuptools.packages.find]
@@ -112,6 +134,16 @@ test = {features = ["test"], solve-group = "default"}# Test environment with pyt
 
 [tool.pixi.feature.test.tasks]
 run_tests = "pytest tests"
+# everything except the tests that take more than a few seconds
+run_tests_fast = "pytest tests -m 'not slow'"
+# exactly what CI runs: $CI makes tests/conftest.py deselect every 'tide_model'
+# test and fail any other test that reads a real model off disk
+run_tests_as_ci = {cmd = "pytest tests", env = {COASTSEG_NO_TIDE_MODEL = "1"}}
+# the tide-correction suite; the pyTMD tests need the FES model under
+# CoastSeg/tide_model (or $COASTSEG_TIDE_MODEL) and skip themselves without it
+test_tides = "pytest tests/test_tide_*.py -v -s"
+# only the parts that need no tide model on disk
+test_tides_offline = "pytest tests/test_tide_*.py -m 'not tide_model' -v"
 
 [tool.hatch.build]
 exclude = [

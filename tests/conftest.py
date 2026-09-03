@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import tempfile
 from shutil import rmtree
 from tempfile import TemporaryDirectory
@@ -21,6 +22,218 @@ from coastseg import coastseg_map, roi
 nest_asyncio.apply()
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+# ---------------------------------------------------------------------------
+# tide-model isolation
+#
+# CI must not depend on the FES tide model being present on disk. When enabled
+# (automatically via $CI, or explicitly with $COASTSEG_NO_TIDE_MODEL):
+#
+#   1. ``tide_model`` tests are deselected;
+#   2. other tests fail if they read a real model directory;
+#   3. skips caused by a missing tide model are treated as errors.
+#
+# Fake model trees under tmp_path remain allowed for offline tests.
+# ---------------------------------------------------------------------------
+
+NO_TIDE_MODEL_ENV = "COASTSEG_NO_TIDE_MODEL"
+TIDE_MODEL_MARKER = "tide_model"
+
+# matches 'tide model', 'tide_model' and 'tide-model' in free text skip reasons
+_TIDE_SKIP_PATTERN = re.compile(r"tide[ _-]?model", re.IGNORECASE)
+_suspect_tide_skips = []
+
+
+def _truthy(value):
+    """Returns True unless the value is empty, "0", "false", "no" or "off"."""
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def tide_model_reads_forbidden():
+    """Returns True if this run must not read a real tide model.
+
+    $COASTSEG_NO_TIDE_MODEL forces this on or off. Without it, $CI decides, so
+    every workflow gets the guard without having to set anything.
+
+    Returns:
+        bool: True if reading a real tide model is forbidden.
+    """
+    override = os.environ.get(NO_TIDE_MODEL_ENV)
+    if override is not None:
+        return _truthy(override)
+    return _truthy(os.environ.get("CI", ""))
+
+
+def _real_tide_model_roots():
+    """Returns the directories that would hold a downloaded tide model.
+
+    These are $COASTSEG_TIDE_MODEL, tide_model next to this checkout, and
+    tide_model under CoastSeg's base directory. Fake models built under tmp_path
+    are not included.
+
+    Returns:
+        list: Absolute normalized paths.
+    """
+    candidates = [
+        os.environ.get("COASTSEG_TIDE_MODEL", ""),
+        os.path.join(os.path.dirname(script_dir), "tide_model"),
+    ]
+    try:
+        from coastseg import core_utilities
+
+        candidates.append(
+            os.path.join(os.path.abspath(core_utilities.get_base_dir()), "tide_model")
+        )
+    except Exception:
+        # this runs during collection, so losing one root beats failing the session
+        pass
+
+    roots = []
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            root = os.path.normcase(os.path.abspath(os.path.expanduser(candidate)))
+        except (OSError, ValueError):
+            continue
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _under_real_model(directory, roots):
+    """Returns True if directory is at or inside one of the roots.
+
+    Args:
+        directory: The path to check. May be None.
+        roots: Paths from _real_tide_model_roots.
+
+    Returns:
+        bool: True if the path is inside a real tide model.
+    """
+    if directory is None:
+        return False
+    try:
+        # normcase so Windows paths compare equal regardless of case or separator
+        path = os.path.normcase(os.path.abspath(os.path.expanduser(str(directory))))
+    except (OSError, ValueError, TypeError):
+        return False
+    # os.sep so a sibling like tide_model_backup does not match tide_model
+    return any(path == root or path.startswith(root + os.sep) for root in roots)
+
+
+def pytest_report_header(config):
+    """Prints the tide model status at the top of the run."""
+    if tide_model_reads_forbidden():
+        return f"tide model: reads forbidden ({NO_TIDE_MODEL_ENV}/CI); '{TIDE_MODEL_MARKER}' tests deselected"
+    return None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Deselects the tide_model tests when reads are forbidden.
+
+    Deselecting them instead of letting them skip themselves means the same tests
+    run on every machine, no matter what is on disk.
+    """
+    if not tide_model_reads_forbidden():
+        return
+    kept, deselected = [], []
+    for item in items:
+        (deselected if TIDE_MODEL_MARKER in item.keywords else kept).append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = kept
+
+
+@pytest.fixture(autouse=True)
+def _forbid_real_tide_model(request, monkeypatch):
+    """Fails any test that reads a real tide model off disk.
+
+    Patches the functions in tide_correction that read the model, so tests that
+    build fake models under tmp_path still work. Tests marked tide_model are
+    exempt, though they are normally deselected before they get here.
+    """
+    if not tide_model_reads_forbidden() or TIDE_MODEL_MARKER in request.keywords:
+        yield
+        return
+
+    from coastseg import tide_correction
+
+    roots = _real_tide_model_roots()
+
+    def guarded(original):
+        def wrapper(*args, **kwargs):
+            directory = (
+                args[0] if args else kwargs.get("directory", kwargs.get("location"))
+            )
+            if _under_real_model(directory, roots):
+                raise AssertionError(
+                    f"{request.node.nodeid} read the tide model at '{directory}'. "
+                    f"CI has no tide model, so this test can only pass by accident: "
+                    f"build a fake model tree under tmp_path, or mark the test "
+                    f"@pytest.mark.{TIDE_MODEL_MARKER} if it genuinely needs the "
+                    f"real FES files."
+                )
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    for name in (
+        "build_model_definition",
+        "resolve_tide_model",
+        "resolve_model_layout",
+        "require_model_layout",
+        "locate_tide_model",
+        "_open_tide_dataset",
+        "validate_tide_model_exists",
+        "get_tide_model_location",
+        "_find_group_dir",
+    ):
+        original = getattr(tide_correction, name, None)
+        if original is not None:
+            monkeypatch.setattr(tide_correction, name, guarded(original))
+    yield
+
+
+def pytest_runtest_logreport(report):
+    """Records unmarked tests that skip themselves over a missing tide model.
+
+    A test that skips itself looks the same as one that passed, so these are
+    turned into a failing run by pytest_sessionfinish.
+    """
+    if not tide_model_reads_forbidden() or report.when != "setup" or not report.skipped:
+        return
+    reason = ""
+    # skipif reasons arrive as the third item of (path, lineno, reason)
+    if isinstance(report.longrepr, tuple) and len(report.longrepr) == 3:
+        reason = str(report.longrepr[2])
+    if _TIDE_SKIP_PATTERN.search(reason):
+        _suspect_tide_skips.append((report.nodeid, reason))
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Lists the tests that skipped over a missing tide model."""
+    if not _suspect_tide_skips:
+        return
+    terminalreporter.section("tide model", red=True)
+    terminalreporter.write_line(
+        f"These tests skipped themselves over a missing tide model without a "
+        f"'{TIDE_MODEL_MARKER}' marker, so they silently do nothing in CI. Mark them, "
+        f"or rewrite them against a fixture:"
+    )
+    for nodeid, reason in _suspect_tide_skips:
+        terminalreporter.write_line(f"  {nodeid}: {reason}")
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fails the run if any test skipped over a missing tide model.
+
+    Note that this cannot be done in pytest_terminal_summary, which runs first
+    and cannot change the exit status.
+    """
+    if _suspect_tide_skips and session.exitstatus == 0:
+        session.exitstatus = 1
 
 
 # create a custom context manager to create a temporary directory & clean it up after use
@@ -1589,8 +1802,12 @@ def build_sar_bands(height=50, width=70, nodata_rows=6, nodata=-9999.0):
 
     rng = np.random.default_rng(0)
     columns = np.arange(width)[None, :]
-    vv = np.where(columns < width // 2, -22.0, -8.0) + rng.normal(0, 1.0, (height, width))
-    vh = np.where(columns < width // 2, -30.0, -15.0) + rng.normal(0, 1.0, (height, width))
+    vv = np.where(columns < width // 2, -22.0, -8.0) + rng.normal(
+        0, 1.0, (height, width)
+    )
+    vh = np.where(columns < width // 2, -30.0, -15.0) + rng.normal(
+        0, 1.0, (height, width)
+    )
     if nodata_rows:
         vv[-nodata_rows:, :] = nodata
     return vv.astype("float32"), vh.astype("float32")
@@ -1604,7 +1821,12 @@ def sar_scene_tifs(tmp_path):
     paths = {}
     for polarization, array in (("VV", vv), ("VH", vh)):
         paths[polarization] = write_sar_tif(
-            str(site / "S1" / polarization / f"{SAR_SCENE_DATE}_S1_test_{polarization}.tif"),
+            str(
+                site
+                / "S1"
+                / polarization
+                / f"{SAR_SCENE_DATE}_S1_test_{polarization}.tif"
+            ),
             array,
         )
     rgb = site / "jpg_files" / "preprocessed" / "RGB"
@@ -1711,7 +1933,7 @@ def sar_legacy_site_with_meta(tmp_path):
     already using that fixture are unaffected.
 
     The returned dict exposes ``add_vv()``, which writes the VV sibling the way a resumed
-    download would -- same sitename, same scene date, no ``_dup`` suffix.
+    download would same sitename, same scene date, no ``_dup`` suffix.
     """
     sitename = "ID_legacy_datetime01-01-20__00_00_00"
     site = tmp_path / sitename
