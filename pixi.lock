@@ -5,6 +5,8 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
+    options:
+      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -1646,6 +1648,8 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
+    options:
+      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
@@ -5911,8 +5915,8 @@ packages:
   requires_python: '>=3.10'
 - pypi: ./
   name: coastseg
-  version: 2.1.0
-  sha256: cfd90cbbc711616f7b68909a1fe6dd203a674d7a7a621cee9c31ce805968ae1f
+  version: 2.1.1
+  sha256: c4035382d211e4b36c200a1355413e5c01e4f417bb670eb617b6ec710615d2fd
   requires_dist:
   - aiohttp
   - onnxruntime
@@ -5934,7 +5938,6 @@ packages:
   - netcdf4
   - pytest ; extra == 'test'
   requires_python: '>=3.10,<3.13'
-  editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/colorama-0.4.6-pyhd8ed1ab_1.conda
   sha256: ab29d57dc70786c1269633ba3dff20288b81664d3ff8d21af995742e2bb03287
   md5: 962b9857ee8e7018c22f2776ffa0b2d7

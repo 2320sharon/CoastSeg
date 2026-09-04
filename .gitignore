@@ -35,14 +35,16 @@ src/*/downloaded_models/*
 src/*/saved_transects/*
 src/*/test_new_model/*
 src/*/working_new_downloaded_models/*
-*tide_models*
-*models*
+# Anchored to the repo root to avoid accidentally removing models_UI.py that matches *models* pattern
+/*tide_models*
+/*models*
 *Transects_grid_regions*
 *log_*.txt
 
 
 # ignore the shorelines downloaded
-*shorelines*
+#  Anchored to the repo root to avoid accidentally removing extract_shorelines_widget.py and the shoreline bounding boxes.
+/*shorelines*
 *downloaded_shorelines/*
 ./downloaded_shorelines/*
 
@@ -194,3 +196,18 @@ dmypy.json
 # pixi environments
 .pixi
 *.egg-info
+
+
+# Packaging guard keep this block LAST.
+# ---------------------------------------------------------------------------
+!src/coastseg/**
+
+# ...except these, which are generated or downloaded at runtime.
+src/coastseg/**/__pycache__/
+src/coastseg/**/.ruff_cache/
+src/coastseg/shorelines/
+src/coastseg/downloaded_models/
+src/coastseg/saved_transects/
+src/coastseg/test_new_model/
+src/coastseg/working_new_downloaded_models/
+src/coastseg/tide_model/*.nc
