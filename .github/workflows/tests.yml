@@ -138,7 +138,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12","3.13"]
     defaults:
       run:
         shell: bash -el {0}
@@ -173,14 +173,40 @@ jobs:
         timeout-minutes: 15
         run: micromamba install -y -n coastseg -c conda-forge coastseg pytest
 
+      - name: Verify the published install is self-consistent
+        run: |
+          micromamba list -n coastseg coastseg
+          out=$(python -m pip check 2>&1) && exit 0
+          echo "$out"
+          ours=$(echo "$out" | grep -iE '^(coastseg|coastsat[-_]package) ' || true)
+          theirs=$(echo "$out" | grep -viE '^(coastseg|coastsat[-_]package) ' || true)
+          if [ -n "$theirs" ]; then
+            echo "::warning title=Third-party conda-forge inconsistency::$(echo "$theirs" | tr '\n' ' ')"
+          fi
+          if [ -n "$ours" ]; then
+            echo "::error title=coastseg requirements not satisfied::$(echo "$ours" | tr '\n' ' ')"
+            exit 1
+          fi
+
       - name: Overlay the code from this checkout
         if: github.event.inputs.source != 'published'
         run: python -m pip install --no-deps .
 
+      # After the overlay, pip check compares this branch's pyproject.toml
+      # requirements against what the feedstock chose to install. The two are
+      # maintained separately and are allowed to drift, so a mismatch is surfaced
+      # as a warning annotation, not a failure: it means the feedstock recipe
+      # needs updating before the next release.
+      - name: Report pyproject vs feedstock drift
+        if: github.event.inputs.source != 'published'
+        run: |
+          if ! out=$(python -m pip check 2>&1); then
+            echo "$out"
+            echo "::warning title=pyproject/feedstock drift::conda-forge coastseg's dependencies do not satisfy this branch's pyproject.toml. Update the feedstock recipe before releasing. Details: $(echo "$out" | tr '\n' ' ')"
+          fi
+
       - name: Verify the install works
         run: |
-          python -m pip check
-          micromamba list -n coastseg coastseg
           python -c "
           import sys, numpy, geopandas
           from osgeo import gdal

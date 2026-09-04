@@ -2,11 +2,10 @@ name: Dev install (editable)
 
 # Tests the code on this branch, installed the way a contributor works on it:
 #   pip install -e ".[test]"
-# Purpose: Validate that the package is built properly
+This is the job to look at for "did my change break the package"
 # Every dependency is resolved from this branch's pyproject.toml, so a missing
 # requirement, a bad bound, or a conflict introduced by the commit under review
 # fails here.
-
 
 on:
   push:
@@ -31,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12","3.13"]
     defaults:
       run:
         shell: bash -el {0}
@@ -74,14 +73,16 @@ jobs:
       # coastseg.__file__ proves the editable install points at the checkout,
       # not at a copy in site-packages.
       - name: Verify the editable install
+        env:
+          REPO_ROOT: ${{ github.workspace }}
         run: |
           python -m pip check
           python -c "
-          import sys, pathlib, numpy, geopandas
+          import os, sys, pathlib, numpy, geopandas
           from osgeo import gdal
           import coastseg
           src = pathlib.Path(coastseg.__file__).resolve()
-          repo = pathlib.Path('${{ github.workspace }}').resolve()
+          repo = pathlib.Path(os.environ['REPO_ROOT']).resolve()
           assert repo in src.parents, f'coastseg imported from {src}, not from the checkout {repo}'
           print('python   ', sys.version.split()[0])
           print('gdal     ', gdal.__version__)
