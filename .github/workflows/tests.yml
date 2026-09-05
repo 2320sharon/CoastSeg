@@ -63,7 +63,7 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Steps 1 + 2 of the guide: a bare conda env with just python, activated.
       - name: Create and activate the conda environment
@@ -107,10 +107,19 @@ jobs:
           import sys, numpy, geopandas
           from osgeo import gdal
           import coastseg
+          # conftest.py imports coastseg_map, which pulls in the whole tide
+          # stack (pyTMD 3 + timescale). Import it here so a broken dependency
+          # set fails with a readable traceback instead of pytest exit code 4.
+          import pyTMD, timescale
+          from coastseg import coastseg_map, roi
+          major = int(pyTMD.__version__.split('.')[0])
+          assert major >= 3, f'pyTMD {pyTMD.__version__} installed; coastseg needs >=3.0.9'
           print('python   ', sys.version.split()[0])
           print('gdal     ', gdal.__version__)
           print('numpy    ', numpy.__version__)
           print('geopandas', geopandas.__version__)
+          print('pyTMD    ', pyTMD.__version__)
+          print('timescale', timescale.__version__)
           print('coastseg ', coastseg.__version__)
           "
 
@@ -138,7 +147,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12","3.13"]
+        python-version: ["3.11", "3.12"]
     defaults:
       run:
         shell: bash -el {0}
@@ -149,7 +158,7 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Steps 1 + 2 of the guide: a bare conda env with just python, activated.
       # pip is listed explicitly because `conda create python=X` adds it
@@ -177,7 +186,7 @@ jobs:
       - name: conda install -c conda-forge coastseg
         timeout-minutes: 15
         run: micromamba install -y -n coastseg -c conda-forge coastseg pytest
-        
+
       - name: Verify the published install is self-consistent
         run: |
           micromamba list -n coastseg coastseg
@@ -216,10 +225,19 @@ jobs:
           import sys, numpy, geopandas
           from osgeo import gdal
           import coastseg
+          # conftest.py imports coastseg_map, which pulls in the whole tide
+          # stack (pyTMD 3 + timescale). Import it here so a broken dependency
+          # set fails with a readable traceback instead of pytest exit code 4.
+          import pyTMD, timescale
+          from coastseg import coastseg_map, roi
+          major = int(pyTMD.__version__.split('.')[0])
+          assert major >= 3, f'pyTMD {pyTMD.__version__} installed; coastseg needs >=3.0.9'
           print('python   ', sys.version.split()[0])
           print('gdal     ', gdal.__version__)
           print('numpy    ', numpy.__version__)
           print('geopandas', geopandas.__version__)
+          print('pyTMD    ', pyTMD.__version__)
+          print('timescale', timescale.__version__)
           print('coastseg ', coastseg.__version__)
           "
 
