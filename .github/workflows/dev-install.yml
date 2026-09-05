@@ -1,8 +1,7 @@
 name: Dev install (editable)
 
 # Tests the code on this branch, installed the way a contributor works on it:
-#   pip install -e ".[test]"
-This is the job to look at for "did my change break the package"
+#  pip install -e ".[test]"
 # Every dependency is resolved from this branch's pyproject.toml, so a missing
 # requirement, a bad bound, or a conflict introduced by the commit under review
 # fails here.

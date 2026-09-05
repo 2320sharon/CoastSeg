@@ -152,6 +152,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # Steps 1 + 2 of the guide: a bare conda env with just python, activated.
+      # pip is listed explicitly because `conda create python=X` adds it
+      # automatically (add_pip_as_python_dependency) and micromamba does not;
+      # without it the env also lacks setuptools/pkg_resources, which leafmap's
+      # import chain needs, and pip check cannot run.
       - name: Create and activate the conda environment
         timeout-minutes: 5
         uses: mamba-org/setup-micromamba@v2
@@ -159,6 +163,7 @@ jobs:
           environment-name: coastseg
           create-args: >-
             python=${{ matrix.python-version }}
+            pip
           condarc: |
             channels:
               - conda-forge
@@ -172,7 +177,7 @@ jobs:
       - name: conda install -c conda-forge coastseg
         timeout-minutes: 15
         run: micromamba install -y -n coastseg -c conda-forge coastseg pytest
-
+        
       - name: Verify the published install is self-consistent
         run: |
           micromamba list -n coastseg coastseg
