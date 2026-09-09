@@ -478,6 +478,44 @@ def get_missing_roi_dirs(
     return missing_directories
 
 
+def relativize_sar_model_path(sar_model_path: str = "") -> str:
+    """Store a SAR model path relative to the CoastSeg base directory.
+
+    ``config.json`` and session folders get copied between machines. An absolute path
+    baked into one is dead everywhere else, and coastsat would then ``os.path.abspath``
+    a path that does not exist and fail to open the model. Storing it relative to the
+    CoastSeg directory keeps a session portable.
+
+    A path outside the CoastSeg tree cannot be made relative. It is kept verbatim rather
+    than rewritten silently changing a path the user typed is worse than an
+    unportable one  and a warning says so.
+
+    Args:
+        sar_model_path (str): Model path as supplied by the user. May be absolute,
+            relative, or empty.
+
+    Returns:
+        str: A path suitable for writing to ``config.json``, using POSIX separators so a
+        config written on Windows loads on Linux. Empty input returns empty, which means
+        "use coastsat's packaged model".
+    """
+    if not sar_model_path:
+        return ""
+
+    candidate = Path(sar_model_path)
+    if not candidate.is_absolute():
+        return candidate.as_posix()
+
+    try:
+        return candidate.relative_to(core_utilities.get_base_dir()).as_posix()
+    except ValueError:
+        logger.warning(
+            f"sar_model_path {sar_model_path} is outside the CoastSeg directory, so it "
+            "cannot be stored relatively. This session will not load on another machine."
+        )
+        return candidate.as_posix()
+
+
 def get_default_sentinel_1_properties() -> Dict[str, Any]:
     """Return the default Sentinel-1 acquisition properties.
 
